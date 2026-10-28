@@ -1,19 +1,6 @@
-## PR type
-- [ ] feat  - [ ] fix  - [ ] chore  - [ ] spec  - [ ] refactor
+## Checklist
 
-## Initiative
-<!-- e.g. INIT-SUCHANA-001 -->
-
-## Issue
-<!-- GitHub issue # this PR closes -->
-
-## Spec path
-<!-- docs/specification/product/INIT-*.md §WN -->
-
-## Verify command
-<!-- make verify-wN -->
-
-## As-built updated
-- [ ] docs/specification/as-built/implementation-status.md rows updated
-
-## Notes
+- [ ] **Meta / playbook** (`adh-meta` — PM or platform merges)
+- [ ] **App / service** (feature branch → `develop`)
+- [ ] Board fields: Initiative, Spec path, Smoke command updated
+- [ ] As-built / feature map updated when behavior changes
