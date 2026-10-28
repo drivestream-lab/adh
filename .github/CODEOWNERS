@@ -1,0 +1,50 @@
+# Backend profile — copy to .github/CODEOWNERS in each app repo
+# Replace @drivestream-lab/... with actual GitHub org/team names.
+#
+# Branch protection required:
+#   Settings → Branches → develop → "Require review from Code Owners" ON
+#
+# Sign-off workflow: launchpad/playbook/ship/delivery-workflow.md § Sign-off workflow
+
+# ── Spec pipeline reports (skill gates) ──────────────────────────────────────
+
+# TDD requires PE sign-off before /spec-implementation-plan runs
+/docs/specification/reports/Technical-Review-*       @drivestream-lab/pe-team
+
+# Implementation plan requires dev lead review before /create-board-tickets (gh issue create per wave)
+/docs/specification/reports/Implementation-Plan-*    @drivestream-lab/backend-devs
+
+# Ground reports gate the next wave — tech lead must approve
+/docs/specification/reports/Ground-Report-*          @drivestream-lab/backend-devs
+
+# Feasibility reports — dev-owned; product Q&A on meta PRD PR
+/docs/specification/reports/Feasibility-Report-*     @drivestream-lab/backend-devs
+
+# ── Product specs ─────────────────────────────────────────────────────────────
+
+# Spec changes need PM awareness + dev merge authority
+/docs/specification/product/                         @drivestream-lab/pm-team @drivestream-lab/backend-devs
+
+# ── ADRs ──────────────────────────────────────────────────────────────────────
+
+# Architecture decisions require PE
+/docs/specification/adr/                             @drivestream-lab/pe-team
+
+# ── As-built ──────────────────────────────────────────────────────────────────
+
+# Dev-owned — PM cannot modify implementation status
+/docs/specification/as-built/                        @drivestream-lab/backend-devs
+
+# ── Constitution and rules ────────────────────────────────────────────────────
+
+.cursor/rules/                                       @drivestream-lab/pe-team
+.agents/skills/                                      @drivestream-lab/backend-devs
+
+# ── Source and tests ──────────────────────────────────────────────────────────
+
+/src/                                                @drivestream-lab/backend-devs
+/tests/                                              @drivestream-lab/backend-devs
+
+# ── Default ───────────────────────────────────────────────────────────────────
+
+*                                                    @drivestream-lab/backend-devs
