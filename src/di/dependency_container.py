@@ -6,6 +6,7 @@ from injector import Injector
 
 from src.business_services.buzz_service import BuzzService
 from src.business_services.hermes_service import HermesService
+from src.business_services.orchestrator_service import OrchestratorService
 from src.infra_services.hermes_store_service import HermesStoreService
 from src.infra_services.litellm_service import LiteLLMService
 from src.configs.app_settings import AppSettings
@@ -27,7 +28,7 @@ _INFRA_SERVICE_TYPES: tuple[type, ...] = (
     TelemetryService,
 )
 
-_BUSINESS_SERVICE_TYPES: tuple[type, ...] = (BuzzService, HermesService)
+_BUSINESS_SERVICE_TYPES: tuple[type, ...] = (BuzzService, HermesService, OrchestratorService)
 
 
 def configure_container() -> Injector:

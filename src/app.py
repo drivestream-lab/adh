@@ -79,6 +79,7 @@ def create_app() -> FastAPI:
             "/buzz",
             "/api/v1/buzz",
             "/api/v1/hermes",
+            "/api/v1/orchestrator",
             "/docs",
             "/redoc",
             "/openapi.json",

@@ -4,8 +4,12 @@ from injector import Module, singleton
 
 from src.database.postgres.connection_manager import PostgresConnectionManager
 from src.database.redis.connection_manager import RedisConnectionManager
+from src.infra_services.buzz_http_service import BuzzHttpService
+from src.infra_services.cursor_cli_service import CursorCliService
+from src.infra_services.github_app_service import GitHubAppService
 from src.infra_services.hermes_store_service import HermesStoreService
 from src.infra_services.litellm_service import LiteLLMService
+from src.infra_services.pin_walker_service import PinWalkerService
 from src.infra_services.postgres_service import PostgresService
 from src.infra_services.redis_service import RedisService
 from src.infra_services.telemetry_service import TelemetryService
@@ -25,5 +29,9 @@ class InfraModule(Module):
         binder.bind(RedisService, to=RedisService, scope=singleton)
         binder.bind(LiteLLMService, to=LiteLLMService, scope=singleton)
         binder.bind(HermesStoreService, to=HermesStoreService, scope=singleton)
+        binder.bind(PinWalkerService, to=PinWalkerService, scope=singleton)
+        binder.bind(GitHubAppService, to=GitHubAppService, scope=singleton)
+        binder.bind(CursorCliService, to=CursorCliService, scope=singleton)
+        binder.bind(BuzzHttpService, to=BuzzHttpService, scope=singleton)
         binder.bind(TelemetryService, scope=singleton)
         logger.debug("Infrastructure services module configured")

@@ -1,4 +1,4 @@
-.PHONY: setup check check-ci format format-check lint lint-check types layers test run desktop-dev desktop-install
+.PHONY: setup check check-ci format format-check lint lint-check types layers test run desktop-dev desktop-install orch-spawn orch-merge
 
 setup:
 	@bash scripts/setup_dev.sh
@@ -30,6 +30,12 @@ test:
 
 run:
 	.venv/bin/python -m src.main
+
+orch-spawn:
+	ORCH_ENABLE_SPAWN=true .venv/bin/python -m src.orchestrator spawn
+
+orch-merge:
+	.venv/bin/python -m src.orchestrator merge
 
 desktop-dev:
 	cd apps/buzz-desktop && npm install && npm run dev

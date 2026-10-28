@@ -2,6 +2,7 @@
 
 from src.business_services.buzz_service import BuzzService
 from src.business_services.hermes_service import HermesService
+from src.business_services.orchestrator_service import OrchestratorService
 from src.infra_services.postgres_service import PostgresService
 from src.infra_services.redis_service import RedisService
 
@@ -28,3 +29,9 @@ def get_hermes_service() -> HermesService:
     from src.di.dependency_container import provide_service
 
     return provide_service(HermesService)
+
+
+def get_orchestrator_service() -> OrchestratorService:
+    from src.di.dependency_container import provide_service
+
+    return provide_service(OrchestratorService)

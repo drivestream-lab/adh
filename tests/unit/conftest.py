@@ -27,6 +27,7 @@ def reset_settings() -> None:
         "TelemetrySettings",
         "BuzzSettings",
         "HermesSettings",
+        "OrchestratorSettings",
     ):
         BaseSettings._instances.pop(name, None)
 
