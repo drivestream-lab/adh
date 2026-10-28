@@ -26,7 +26,7 @@ layers:
 	.venv/bin/lint-imports
 
 test:
-	.venv/bin/pytest tests/unit/ -v
+	env -u PYTHONPATH PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest tests/unit/ -v
 
 run:
 	.venv/bin/python -m src.main

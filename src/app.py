@@ -3,10 +3,12 @@
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.api.health.health_router import router as health_router
 from src.api.internal import internal_router
@@ -70,7 +72,16 @@ def create_app() -> FastAPI:
         secret_key=jwt_settings.secret_key,
         issuer=jwt_settings.issuer,
         audience=jwt_settings.audience,
-        public_paths=["/health", "/internal"],
+        public_paths=[
+            "/",
+            "/health",
+            "/internal",
+            "/buzz",
+            "/api/v1/buzz",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+        ],
         algorithm=jwt_settings.algorithm,
         private_key_path=jwt_settings.private_key_path,
         public_key_path=jwt_settings.public_key_path,
@@ -108,5 +119,14 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(internal_router)
     app.include_router(api_router, prefix="/api/v1")
+
+    ui_dir = Path(__file__).resolve().parent / "api" / "buzz_ui"
+    if ui_dir.is_dir():
+        app.mount("/buzz", StaticFiles(directory=str(ui_dir), html=True), name="buzz_ui")
+
+    @app.get("/", include_in_schema=False)
+    async def root_redirect() -> RedirectResponse:
+        return RedirectResponse(url="/buzz/")
+
     logger.info("FastAPI application configured")
     return app

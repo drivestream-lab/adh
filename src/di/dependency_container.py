@@ -4,6 +4,7 @@ from typing import Any, Optional, Type, TypeVar
 
 from injector import Injector
 
+from src.business_services.buzz_service import BuzzService
 from src.configs.app_settings import AppSettings
 from src.infra_services.postgres_service import PostgresService
 from src.infra_services.redis_service import RedisService
@@ -21,7 +22,7 @@ _INFRA_SERVICE_TYPES: tuple[type, ...] = (
     TelemetryService,
 )
 
-_BUSINESS_SERVICE_TYPES: tuple[type, ...] = ()
+_BUSINESS_SERVICE_TYPES: tuple[type, ...] = (BuzzService,)
 
 
 def configure_container() -> Injector:

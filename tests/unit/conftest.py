@@ -25,6 +25,7 @@ def reset_settings() -> None:
         "PostgresSettings",
         "RedisSettings",
         "TelemetrySettings",
+        "BuzzSettings",
     ):
         BaseSettings._instances.pop(name, None)
 
@@ -62,6 +63,8 @@ def client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> TestClient:
     reset_container()
+    monkeypatch.setattr("src.app.initialize_all_services", AsyncMock())
+    monkeypatch.setattr("src.app.close_all_services", AsyncMock())
     configure_container()
     monkeypatch.setattr(
         "src.api.dependencies.get_postgres_service",

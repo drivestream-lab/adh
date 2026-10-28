@@ -15,10 +15,10 @@ class PostgresSettings(BaseSettings):
 
     host: str = Field(default="localhost", description="PostgreSQL host")
     port: int = Field(default=5432, description="PostgreSQL port")
-    user: str = Field(default="postgres", description="PostgreSQL user")
-    password: SecretStr = Field(default=SecretStr("postgres"), description="PostgreSQL password")
+    user: str = Field(default="adh", description="PostgreSQL user")
+    password: SecretStr = Field(default=SecretStr("adh"), description="PostgreSQL password")
     db: str = Field(
-        default="ds_adh_db",
+        default="buzz",
         description="PostgreSQL database name",
     )
     min_pool_size: int = Field(default=5, description="Minimum connection pool size")

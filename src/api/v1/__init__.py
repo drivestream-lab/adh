@@ -2,8 +2,7 @@
 
 from fastapi import APIRouter
 
-api_router = APIRouter()
+from src.api.v1.buzz_router import router as buzz_router
 
-# Example:
-# from src.api.v1.example_routes import router as example_router
-# api_router.include_router(example_router, prefix="/example", tags=["Example"])
+api_router = APIRouter()
+api_router.include_router(buzz_router)

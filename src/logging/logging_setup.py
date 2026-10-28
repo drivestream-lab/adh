@@ -173,9 +173,7 @@ def setup_logging(settings: Optional[Any] = None) -> None:
 
         if use_json:
             service = _SERVICE_NAME
-            log_file_path = os.path.join(
-                log_dir, f"adh_{datetime.now(UTC).strftime('%Y%m%d')}.log"
-            )
+            log_file_path = os.path.join(log_dir, f"adh_{datetime.now(UTC).strftime('%Y%m%d')}.log")
 
             def _append_json_line(line: str) -> None:
                 with open(log_file_path, "a", encoding="utf-8") as log_file:
@@ -198,9 +196,7 @@ def setup_logging(settings: Optional[Any] = None) -> None:
                     enqueue=True,
                 )
         else:
-            log_file_path = os.path.join(
-                log_dir, f"adh_{datetime.now(UTC).strftime('%Y%m%d')}.log"
-            )
+            log_file_path = os.path.join(log_dir, f"adh_{datetime.now(UTC).strftime('%Y%m%d')}.log")
             logger.add(
                 log_file_path,
                 rotation="00:00",
