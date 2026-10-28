@@ -59,6 +59,12 @@ _SEED_IDENTITIES: tuple[IdentityCreate, ...] = (
         role=IdentityRole.CODER,
     ),
     IdentityCreate(
+        handle="adh.coder.realworld-api",
+        display_name="Backend coder (realworld-api)",
+        kind=IdentityKind.AGENT,
+        role=IdentityRole.CODER,
+    ),
+    IdentityCreate(
         handle="adh.reviewer",
         display_name="Reviewer",
         kind=IdentityKind.AGENT,

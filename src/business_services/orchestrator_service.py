@@ -1,5 +1,6 @@
 """Pin-driven spawn. No model on the control path. Never merges."""
 
+import asyncio
 from typing import Any, Optional
 from uuid import UUID
 
@@ -68,7 +69,9 @@ class OrchestratorService(BaseBusinessService):
             ids,
             {"wave_id": wave.id, "repo": wave.repo, "role": wave.role},
         )
-        token, granted = await self._github.installation_token(app, write=wave.write)
+        token, granted = await self._github.installation_token(
+            app, write=wave.write, repositories=[wave.repo]
+        )
         cannot_merge = self._github.merge_forbidden(pin.allow_merge, granted)
         if not cannot_merge:
             raise ValidationError("checkpoint stop: merge is not allowed on this pin")
@@ -96,6 +99,9 @@ class OrchestratorService(BaseBusinessService):
                 prompt=wave.prompt,
                 mode=wave.mode,
                 github_token=token,
+                git_name=f"{slug}[bot]",
+                git_email=f"{app.app_id}+{slug}[bot]@users.noreply.github.com",
+                write=wave.write,
                 on_progress=_progress,
             )
         except Exception as exc:
@@ -137,6 +143,109 @@ class OrchestratorService(BaseBusinessService):
             buzz_message_ids=ids,
             output_preview=preview,
         )
+
+    async def g0_kill(self) -> SpawnResult:
+        """H1–H5: PR on api, cannot push web, cannot merge, checkpoint, Buzz+verify."""
+        await self._ensure()
+        wave = self._walker.next_wave()
+        handle = f"adh.coder.{wave.repo}"
+        try:
+            await self._buzz.ensure_identity(handle, f"Coder ({wave.repo})", "coder")
+        except Exception:
+            self.logger.exception("Buzz identity ensure failed", handle=handle)
+        result = await self.spawn_next()
+        slug, app = self._walker.app_for_wave(wave)
+        token, _granted = await self._github.installation_token(
+            app, write=wave.write, repositories=[wave.repo]
+        )
+        web_status = await self._github.probe_push(token, "realworld-web")
+        cannot_push_web = web_status not in {200, 201}
+        await self._event(
+            "adh.orchestrator",
+            f"H2 probe realworld-web status={web_status} cannot_push={cannot_push_web}",
+            EventType.PROGRESS,
+            result.buzz_message_ids,
+            {"status": web_status, "cannot_push_web": cannot_push_web},
+        )
+        pr_number = await self._github.latest_pr_number(token, wave.repo)
+        org = self._walker.github_org()
+        pr_url: Optional[str] = None
+        if pr_number is None:
+            pr_number, pr_url = await self._github.ensure_kill_pr(
+                token,
+                wave.repo,
+                branch="feature/g0-kill-backend",
+                path="G0_KILL.md",
+                contents=(
+                    f"G0 kill marker for {wave.repo}. Opened by {slug}[bot]. "
+                    "Do not merge. Do not touch realworld-web.\n"
+                ),
+                title="chore: G0 kill — backend App PR (do not merge)",
+            )
+        if pr_number is not None and not pr_url:
+            pr_url = f"https://github.com/{org}/{wave.repo}/pull/{pr_number}"
+        merge_status: Optional[int] = None
+        if pr_number is not None:
+            merge_status = await self._github.probe_merge(token, wave.repo, pr_number)
+        merge_blocked = merge_status is None or merge_status in {401, 403, 405, 409, 422}
+        await self._event(
+            "adh.orchestrator",
+            f"H3 merge probe pr={pr_number} status={merge_status} blocked={merge_blocked}",
+            EventType.PROGRESS if merge_blocked else EventType.STALL,
+            result.buzz_message_ids,
+            {"pr": pr_number, "status": merge_status, "blocked": merge_blocked},
+        )
+        verify_exit = await self._run_verify()
+        await self._event(
+            "adh.reviewer",
+            f"H5 make verify exit={verify_exit} against realworld-local",
+            EventType.DONE if verify_exit == 0 else EventType.STALL,
+            result.buzz_message_ids,
+            {"verify_exit": verify_exit},
+        )
+        try:
+            await self._buzz.post_hermes_grade(
+                pr_ref=pr_url or f"{wave.repo}#{pr_number or 'none'}",
+                verify_exit=verify_exit,
+            )
+        except Exception:
+            self.logger.exception("Hermes grade failed")
+        checkpoint = "honored"
+        try:
+            await self.merge_wave(MergeRequest(pr_url=pr_url or ""))
+            checkpoint = "BROKEN: merge succeeded"
+        except ValidationError as exc:
+            checkpoint = str(exc)
+        await self._event(
+            "adh.orchestrator",
+            f"H4 checkpoint {checkpoint}",
+            EventType.DONE,
+            result.buzz_message_ids,
+            {"checkpoint": checkpoint},
+        )
+        result.cannot_push_web = cannot_push_web
+        result.verify_exit = verify_exit
+        result.pr_url = pr_url
+        result.checkpoint = checkpoint
+        result.web_probe_status = web_status
+        result.merge_probe_status = merge_status
+        result.cannot_merge = merge_blocked and "checkpoint stop" in checkpoint
+        result.merged = merge_status == 200
+        return result
+
+    async def _run_verify(self) -> int:
+        root = self._walker.workspace_root() / "realworld-local"
+        process = await asyncio.create_subprocess_exec(
+            "make",
+            "verify",
+            cwd=str(root),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        stdout, _ = await process.communicate()
+        preview = (stdout or b"").decode("utf-8", errors="replace")[-800:]
+        self.logger.info("G0 verify finished", exit_code=process.returncode, preview=preview)
+        return int(process.returncode or 0)
 
     async def _ensure(self) -> None:
         await self._walker.initialize()

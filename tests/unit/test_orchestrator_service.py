@@ -44,6 +44,8 @@ def _walker(tmp_path: Path) -> MagicMock:
     walker.next_wave.return_value = wave
     walker.app_for_wave.return_value = ("adh-dev-backend", app)
     walker.repo_path.return_value = tmp_path
+    walker.github_org.return_value = "drivestream-lab"
+    walker.workspace_root.return_value = tmp_path
     walker.roles.return_value = RolesDocument(
         apps={"adh-dev-backend": app},
         spawn=SpawnPolicy(),
@@ -81,7 +83,8 @@ def test_spawn_broadcasts_and_does_not_merge(tmp_path: Path) -> None:
     buzz.close = AsyncMock()
     buzz.post_event = AsyncMock(return_value=uuid4())
     buzz.heartbeat = AsyncMock()
-    orch = OrchestratorService(_walker(tmp_path), github, cursor, buzz)
+    walker = _walker(tmp_path)
+    orch = OrchestratorService(walker, github, cursor, buzz)
     result = asyncio.run(orch.spawn_next())
     assert result.merged is False
     assert result.cannot_merge is True
@@ -91,3 +94,47 @@ def test_spawn_broadcasts_and_does_not_merge(tmp_path: Path) -> None:
     assert github.installation_token.await_count == 1
     assert cursor.run.await_count == 1
     assert buzz.post_event.await_count >= 4
+    github.installation_token.assert_awaited_with(
+        walker.app_for_wave.return_value[1],
+        write=False,
+        repositories=["adh"],
+    )
+
+
+def test_g0_kill_probes_and_checkpoint(tmp_path: Path) -> None:
+    github = MagicMock()
+    github.initialize = AsyncMock()
+    github.close = AsyncMock()
+    github.installation_token = AsyncMock(return_value=("tok", {"contents": "write"}))
+    github.merge_forbidden.return_value = True
+    github.probe_push = AsyncMock(return_value=403)
+    github.latest_pr_number = AsyncMock(return_value=12)
+    github.probe_merge = AsyncMock(return_value=403)
+    github.ensure_kill_pr = AsyncMock()
+    cursor = MagicMock()
+    cursor.initialize = AsyncMock()
+    cursor.close = AsyncMock()
+    cursor.run = AsyncMock(return_value=(0, "opened pr\n", "composer-2.5"))
+    buzz = MagicMock()
+    buzz.initialize = AsyncMock()
+    buzz.close = AsyncMock()
+    buzz.post_event = AsyncMock(return_value=uuid4())
+    buzz.heartbeat = AsyncMock()
+    buzz.ensure_identity = AsyncMock()
+    buzz.post_hermes_grade = AsyncMock()
+    orch = OrchestratorService(_walker(tmp_path), github, cursor, buzz)
+    orch._run_verify = AsyncMock(return_value=0)  # noqa: SLF001
+    result = asyncio.run(orch.g0_kill())
+    assert result.cannot_push_web is True
+    assert result.web_probe_status == 403
+    assert result.merge_probe_status == 403
+    assert result.verify_exit == 0
+    assert result.pr_url == "https://github.com/drivestream-lab/adh/pull/12"
+    assert result.merged is False
+    assert result.cannot_merge is True
+    assert result.checkpoint is not None
+    assert "checkpoint stop" in result.checkpoint
+    github.ensure_kill_pr.assert_not_called()
+    github.probe_push.assert_awaited_once()
+    github.probe_merge.assert_awaited_once()
+    buzz.post_hermes_grade.assert_awaited()

@@ -49,6 +49,9 @@ class PinWalkerService(BaseInfraService):
         self._roles: Optional[RolesDocument] = None
         self._initialized = False
 
+    def github_org(self) -> str:
+        return self._settings.github_org
+
     def workspace_root(self) -> Path:
         if self._settings.workspace_root:
             return Path(self._settings.workspace_root).expanduser().resolve()

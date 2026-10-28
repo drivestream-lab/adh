@@ -36,6 +36,29 @@ async def _spawn() -> int:
         await orch.close()
 
 
+async def _kill() -> int:
+    walker = PinWalkerService()
+    github = GitHubAppService()
+    cursor = CursorCliService()
+    buzz = BuzzHttpService()
+    orch = OrchestratorService(walker, github, cursor, buzz)
+    try:
+        result = await orch.g0_kill()
+        print(result.model_dump_json(indent=2))
+        passed = (
+            bool(result.pr_url)
+            and result.cannot_push_web is True
+            and result.cannot_merge is True
+            and result.merged is False
+            and result.verify_exit == 0
+            and bool(result.checkpoint)
+            and "checkpoint stop" in (result.checkpoint or "")
+        )
+        return 0 if passed else 1
+    finally:
+        await orch.close()
+
+
 async def _merge() -> int:
     walker = PinWalkerService()
     github = GitHubAppService()
@@ -54,7 +77,7 @@ async def _merge() -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ADH host orchestrator")
-    parser.add_argument("command", choices=["spawn", "merge"], nargs="?", default="spawn")
+    parser.add_argument("command", choices=["spawn", "merge", "kill"], nargs="?", default="spawn")
     args = parser.parse_args()
     settings = AppSettings.get_instance()
     setup_logging(settings)
@@ -64,6 +87,8 @@ def main() -> None:
         logger.info("Host orchestrator starting", command=args.command)
         if args.command == "merge":
             raise SystemExit(asyncio.run(_merge()))
+        if args.command == "kill":
+            raise SystemExit(asyncio.run(_kill()))
         raise SystemExit(asyncio.run(_spawn()))
 
 

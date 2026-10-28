@@ -1,6 +1,7 @@
 """Spawn one Cursor CLI process in a single repo worktree."""
 
 import asyncio
+import base64
 import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -41,6 +42,9 @@ class CursorCliService(BaseInfraService):
         prompt: str,
         mode: str,
         github_token: str,
+        git_name: str = "adh-dev-backend[bot]",
+        git_email: str = "5508912+adh-dev-backend[bot]@users.noreply.github.com",
+        write: bool = False,
         on_progress: Optional[ProgressCallback] = None,
     ) -> tuple[int, str, Optional[str]]:
         """Return (exit_code, combined_output, resolved_model)."""
@@ -59,10 +63,22 @@ class CursorCliService(BaseInfraService):
         ]
         if mode in {"ask", "plan"}:
             command.extend(["--mode", mode])
+        elif write:
+            command.append("--force")
         command.append(prompt)
         env = dict(os.environ)
         env["GH_TOKEN"] = github_token
         env["GITHUB_TOKEN"] = github_token
+        env["GH_PROMPT_DISABLED"] = "1"
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_AUTHOR_NAME"] = git_name
+        env["GIT_AUTHOR_EMAIL"] = git_email
+        env["GIT_COMMITTER_NAME"] = git_name
+        env["GIT_COMMITTER_EMAIL"] = git_email
+        basic = base64.b64encode(f"x-access-token:{github_token}".encode()).decode()
+        env["GIT_CONFIG_COUNT"] = "1"
+        env["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader"
+        env["GIT_CONFIG_VALUE_0"] = f"AUTHORIZATION: basic {basic}"
         env.pop("HERMES_LITELLM_API_KEY", None)
         env.pop("OPENROUTER_API_KEY", None)
         self._in_flight += 1

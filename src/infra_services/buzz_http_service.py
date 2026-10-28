@@ -64,6 +64,52 @@ class BuzzHttpService(BaseInfraService):
         raw_id = response.json().get("id")
         return UUID(str(raw_id)) if raw_id else None
 
+    async def ensure_identity(self, handle: str, display_name: str, role: str) -> None:
+        if self._client is None:
+            raise RuntimeError("Buzz HTTP client has not been initialized")
+        url = f"{self._settings.buzz_base_url.rstrip('/')}/api/v1/buzz/identities"
+        response = await self._client.post(
+            url,
+            json={
+                "handle": handle,
+                "display_name": display_name,
+                "kind": "agent",
+                "role": role,
+            },
+        )
+        if response.status_code in {200, 201}:
+            logger.info("Ensured Buzz identity", handle=handle)
+            return
+        if response.status_code in {400, 409, 422}:
+            logger.info("Buzz identity already present", handle=handle, status=response.status_code)
+            return
+        response.raise_for_status()
+
+    async def post_hermes_grade(self, *, pr_ref: str, verify_exit: int) -> None:
+        if self._client is None:
+            raise RuntimeError("Buzz HTTP client has not been initialized")
+        url = f"{self._settings.buzz_base_url.rstrip('/')}/api/v1/hermes/eng/grade"
+        try:
+            response = await self._client.post(
+                url,
+                json={
+                    "pr_ref": pr_ref,
+                    "verify_exit": verify_exit,
+                    "notes": "Phase H G0 kill — grade after black-box verify.",
+                },
+                timeout=90.0,
+            )
+            if response.status_code >= 400:
+                logger.info(
+                    "Hermes grade returned error",
+                    status=response.status_code,
+                    body=response.text[:300],
+                )
+                return
+            logger.info("Posted Hermes eng grade", pr_ref=pr_ref, status=response.status_code)
+        except Exception:
+            logger.exception("Hermes grade failed", pr_ref=pr_ref)
+
     async def heartbeat(self, handle: str, body: str) -> None:
         if self._client is None:
             raise RuntimeError("Buzz HTTP client has not been initialized")

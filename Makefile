@@ -1,4 +1,4 @@
-.PHONY: setup check check-ci format format-check lint lint-check types layers test run desktop-dev desktop-install orch-spawn orch-merge
+.PHONY: setup check check-ci format format-check lint lint-check types layers test run desktop-dev desktop-install orch-spawn orch-merge orch-kill
 
 setup:
 	@bash scripts/setup_dev.sh
@@ -36,6 +36,9 @@ orch-spawn:
 
 orch-merge:
 	.venv/bin/python -m src.orchestrator merge
+
+orch-kill:
+	ORCH_ENABLE_SPAWN=true ORCH_CURSOR_TIMEOUT_SECONDS=420 .venv/bin/python -m src.orchestrator kill
 
 desktop-dev:
 	cd apps/buzz-desktop && npm install && npm run dev

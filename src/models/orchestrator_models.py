@@ -95,3 +95,9 @@ class SpawnResult(BaseCreateModel):
     token_permissions: dict[str, Any] = Field(default_factory=dict)
     buzz_message_ids: list[str] = Field(default_factory=list)
     output_preview: str = ""
+    cannot_push_web: Optional[bool] = None
+    verify_exit: Optional[int] = None
+    pr_url: Optional[str] = None
+    checkpoint: Optional[str] = None
+    web_probe_status: Optional[int] = None
+    merge_probe_status: Optional[int] = None
