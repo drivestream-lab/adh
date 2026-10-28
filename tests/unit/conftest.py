@@ -26,6 +26,7 @@ def reset_settings() -> None:
         "RedisSettings",
         "TelemetrySettings",
         "BuzzSettings",
+        "HermesSettings",
     ):
         BaseSettings._instances.pop(name, None)
 

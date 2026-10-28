@@ -5,6 +5,9 @@ from typing import Any, Optional, Type, TypeVar
 from injector import Injector
 
 from src.business_services.buzz_service import BuzzService
+from src.business_services.hermes_service import HermesService
+from src.infra_services.hermes_store_service import HermesStoreService
+from src.infra_services.litellm_service import LiteLLMService
 from src.configs.app_settings import AppSettings
 from src.infra_services.postgres_service import PostgresService
 from src.infra_services.redis_service import RedisService
@@ -19,10 +22,12 @@ logger = get_logger()
 _INFRA_SERVICE_TYPES: tuple[type, ...] = (
     PostgresService,
     RedisService,
+    LiteLLMService,
+    HermesStoreService,
     TelemetryService,
 )
 
-_BUSINESS_SERVICE_TYPES: tuple[type, ...] = (BuzzService,)
+_BUSINESS_SERVICE_TYPES: tuple[type, ...] = (BuzzService, HermesService)
 
 
 def configure_container() -> Injector:
