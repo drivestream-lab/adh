@@ -29,7 +29,7 @@ if __name__ == "__main__":
         "src.main:get_application",
         host=settings.host,
         port=settings.port,
-        reload=settings.is_development,
+        reload=settings.reload,
         log_level=settings.log_level.lower(),
         factory=True,
     )

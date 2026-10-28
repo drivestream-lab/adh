@@ -153,6 +153,18 @@ class RedisService(BaseInfraService):
 
         return await self._require_connection_manager().health_check()
 
+    async def publish(self, channel: str, message: str) -> int:
+        """Publish a payload to a Redis Pub/Sub channel."""
+        if not self._initialized:
+            raise RuntimeError("Redis service has not been initialized")
+        return int(await self.get_client().publish(channel, message))
+
+    def pubsub(self) -> Any:
+        """Return a Redis Pub/Sub object for live Buzz streams."""
+        if not self._initialized:
+            raise RuntimeError("Redis service has not been initialized")
+        return self.get_client().pubsub()
+
     def _require_connection_manager(self) -> RedisConnectionManager:
         if not self._initialized:
             raise RuntimeError("Redis service has not been initialized")

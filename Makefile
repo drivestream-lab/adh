@@ -1,4 +1,4 @@
-.PHONY: setup check check-ci format format-check lint lint-check types layers test run
+.PHONY: setup check check-ci format format-check lint lint-check types layers test run desktop-dev desktop-install
 
 setup:
 	@bash scripts/setup_dev.sh
@@ -30,3 +30,9 @@ test:
 
 run:
 	.venv/bin/python -m src.main
+
+desktop-dev:
+	cd apps/buzz-desktop && npm install && npm run dev
+
+desktop-install:
+	bash apps/buzz-desktop/macos/install.sh

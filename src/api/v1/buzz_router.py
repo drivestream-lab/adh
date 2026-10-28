@@ -1,6 +1,9 @@
 """HTTP API for the Buzz conversation plane."""
 
+from collections.abc import AsyncIterator
+
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 
 from src.api.dependencies import get_buzz_service
 from src.business_services.buzz_service import BuzzService
@@ -82,6 +85,29 @@ async def post_message(
     buzz: BuzzService = Depends(get_buzz_service),
 ) -> MessageRead:
     return await buzz.post_message(slug, payload)
+
+
+@router.get("/rooms/{slug}/stream")
+@handle_api_errors("stream room", "Buzz")
+async def stream_room(
+    slug: str,
+    buzz: BuzzService = Depends(get_buzz_service),
+) -> StreamingResponse:
+    await buzz.get_room(slug)
+
+    async def events() -> AsyncIterator[str]:
+        async for payload in buzz.stream_room(slug):
+            yield f"data: {payload}\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/heartbeats", response_model=MessageRead, status_code=201)

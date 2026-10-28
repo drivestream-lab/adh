@@ -28,6 +28,10 @@ class AppSettings(BaseSettings):
     log_format: str = Field(default="text", description="'json' in production, 'text' locally")
     log_to_console: bool = Field(default=True)
     log_dir: str = Field(default="logs")
+    reload: bool = Field(
+        default=False,
+        description="Uvicorn --reload. Leave false in Docker so Buzz SSE stays connected.",
+    )
 
     @field_validator("log_format")
     @classmethod

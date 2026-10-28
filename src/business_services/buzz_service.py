@@ -1,6 +1,8 @@
 """Buzz conversation plane: rooms, identities, messages, heartbeats."""
 
 import asyncio
+import json
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Optional
 
@@ -222,7 +224,38 @@ class BuzzService(BaseBusinessService):
 
     async def post_message(self, slug: str, payload: MessageCreate) -> MessageRead:
         async with self._postgres.get_session() as session:
-            return await self._post_message(session, slug, payload)
+            posted = await self._post_message(session, slug, payload)
+        await self._publish_room(slug, posted)
+        return posted
+
+    async def stream_room(self, slug: str) -> AsyncIterator[str]:
+        """Yield JSON MessageRead payloads for one room (Redis Pub/Sub)."""
+        await self.get_room(slug)
+        pubsub = self._redis.pubsub()
+        channel = self._room_channel(slug)
+        await pubsub.subscribe(channel)
+        self.logger.info("Buzz SSE subscribed", room=slug, channel=channel)
+        last_ping = asyncio.get_event_loop().time()
+        try:
+            yield json.dumps({"type": "subscribed", "slug": slug})
+            while True:
+                raw = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if raw is not None and raw.get("type") == "message":
+                    data = raw.get("data")
+                    if isinstance(data, (bytes, bytearray)):
+                        data = data.decode("utf-8")
+                    if isinstance(data, str) and data:
+                        yield data
+                now = asyncio.get_event_loop().time()
+                if now - last_ping >= 25:
+                    yield json.dumps({"type": "ping"})
+                    last_ping = now
+        finally:
+            try:
+                await pubsub.unsubscribe(channel)
+                await pubsub.aclose()
+            except Exception:
+                self.logger.exception("Failed to close Buzz pubsub", room=slug)
 
     async def ingest_heartbeat(self, payload: HeartbeatIngest) -> MessageRead:
         create = MessageCreate(
@@ -239,6 +272,7 @@ class BuzzService(BaseBusinessService):
             posted.created_at.isoformat() if posted.created_at else "1",
             ttl=self._settings.heartbeat_seconds * 2,
         )
+        await self._publish_room(payload.room_slug, posted)
         return posted
 
     async def list_stale_identities(self) -> list[StaleIdentity]:
@@ -305,6 +339,18 @@ class BuzzService(BaseBusinessService):
             message_id=str(row.id),
         )
         return self._to_message_read(row, identity)
+
+    def _room_channel(self, slug: str) -> str:
+        return f"buzz:room:{slug}"
+
+    async def _publish_room(self, slug: str, posted: MessageRead) -> None:
+        try:
+            await self._redis.publish(
+                self._room_channel(slug),
+                posted.model_dump_json(),
+            )
+        except Exception:
+            self.logger.exception("Buzz room publish failed", room=slug)
 
     async def _get_identity_by_handle(self, session, handle: str) -> Optional[BuzzIdentitySchema]:
         stmt = select(BuzzIdentitySchema).where(BuzzIdentitySchema.handle == handle)

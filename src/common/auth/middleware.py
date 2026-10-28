@@ -1,12 +1,11 @@
 """JWT verification middleware. Validates Bearer token and sets request.state.auth."""
 
-from typing import Callable, Optional
+import json
+from typing import Optional
 from uuid import UUID
 
 from jose import JWTError, jwt
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from src.common.auth.config import AuthConfig
 from src.models.auth_models import AuthContext
@@ -14,15 +13,11 @@ from src.models.auth_models import AuthContext
 _OWNER_ROLES = frozenset({"owner", "tenant_owner"})
 
 
-class AuthMiddleware(BaseHTTPMiddleware):
-    """Validates Authorization Bearer JWT (HS256 or RS256) and sets request.state.auth."""
+class AuthMiddleware:
+    """ASGI JWT gate. Public paths pass through unbuffered so Buzz SSE can stream."""
 
-    def __init__(
-        self,
-        app,
-        config: AuthConfig,
-    ) -> None:
-        super().__init__(app)
+    def __init__(self, app: ASGIApp, config: AuthConfig) -> None:
+        self.app = app
         self._config = config
         if config.algorithm.upper() == "RS256" and config.public_key_path:
             with open(config.public_key_path) as f:
@@ -41,39 +36,31 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 return True
         return False
 
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        """Validate Bearer JWT; set request.state.auth or return 401."""
-        path = request.scope.get("path") or request.url.path
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
+        path = str(scope.get("path") or "")
+        scope.setdefault("state", {})
         if self._is_public_path(path):
-            setattr(request.state, "auth", None)
-            return await call_next(request)
+            scope["state"]["auth"] = None
+            await self.app(scope, receive, send)
+            return
 
-        auth_header = request.headers.get("Authorization")
+        headers = {
+            key.decode("latin-1").lower(): value.decode("latin-1")
+            for key, value in scope.get("headers", [])
+        }
+        auth_header = headers.get("authorization")
         if not auth_header or not auth_header.startswith("Bearer "):
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "status": "error",
-                    "error": {
-                        "code": "UNAUTHORIZED",
-                        "message": "Missing or invalid Authorization header",
-                    },
-                },
-            )
+            await self._unauthorized(send, "Missing or invalid Authorization header")
+            return
 
         token = auth_header[7:].strip()
         if not token:
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "status": "error",
-                    "error": {
-                        "code": "UNAUTHORIZED",
-                        "message": "Missing Bearer token",
-                    },
-                },
-            )
+            await self._unauthorized(send, "Missing Bearer token")
+            return
 
         try:
             payload = jwt.decode(
@@ -84,45 +71,26 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 issuer=self._config.issuer,
             )
         except JWTError as e:
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "status": "error",
-                    "error": {
-                        "code": "UNAUTHORIZED",
-                        "message": "Invalid or expired token",
-                        "details": str(e),
-                    },
-                },
-            )
+            await self._unauthorized(send, "Invalid or expired token", details=str(e))
+            return
 
         sub = payload.get("sub")
         tenant_id_raw = payload.get("tenant_id")
         role = payload.get("role")
         if not sub:
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "status": "error",
-                    "error": {"code": "UNAUTHORIZED", "message": "Token missing sub"},
-                },
-            )
+            await self._unauthorized(send, "Token missing sub")
+            return
 
         try:
             user_id = UUID(sub)
         except (ValueError, TypeError):
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "status": "error",
-                    "error": {"code": "UNAUTHORIZED", "message": "Invalid sub in token"},
-                },
-            )
+            await self._unauthorized(send, "Invalid sub in token")
+            return
 
         tenant_id: Optional[UUID] = None
         if tenant_id_raw is not None:
             try:
-                tenant_id = UUID(tenant_id_raw)
+                tenant_id = UUID(str(tenant_id_raw))
             except (ValueError, TypeError):
                 pass
 
@@ -130,11 +98,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if (role or "").strip().lower() in _OWNER_ROLES:
             owner_id_raw = payload.get("owner_id") or sub
             try:
-                owner_id = UUID(owner_id_raw)
+                owner_id = UUID(str(owner_id_raw))
             except (ValueError, TypeError):
                 owner_id = user_id
 
-        auth_context = AuthContext.model_validate(
+        scope["state"]["auth"] = AuthContext.model_validate(
             {
                 "user_id": user_id,
                 "tenant_id": tenant_id,
@@ -142,5 +110,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 "owner_id": owner_id,
             }
         )
-        setattr(request.state, "auth", auth_context)
-        return await call_next(request)
+        await self.app(scope, receive, send)
+
+    async def _unauthorized(self, send: Send, message: str, details: Optional[str] = None) -> None:
+        error: dict[str, object] = {"code": "UNAUTHORIZED", "message": message}
+        if details:
+            error["details"] = details
+        body = json.dumps({"status": "error", "error": error}).encode("utf-8")
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"content-length", str(len(body)).encode("ascii")),
+                ],
+            }
+        )
+        await send({"type": "http.response.body", "body": body})

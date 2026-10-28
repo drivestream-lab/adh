@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Buzz</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside>
+        <div class="brand">
+          <div class="mark">B</div>
+          <div>
+            <div class="brand-name">Buzz</div>
+            <div id="status" class="status off">connecting</div>
+          </div>
+        </div>
+        <div class="side-label">Rooms</div>
+        <div id="rooms" class="rooms"></div>
+        <form id="new-room" class="new-room">
+          <input id="new-slug" type="text" placeholder="new-room" maxlength="128" />
+          <button type="submit">+</button>
+        </form>
+        <div class="you">
+          <label>
+            You
+            <select id="identity"></select>
+          </label>
+          <label class="toggle">
+            <input id="hide-hb" type="checkbox" />
+            Hide heartbeats
+          </label>
+        </div>
+      </aside>
+      <main>
+        <header>
+          <div>
+            <div id="title">Select a room</div>
+            <div id="subtitle" class="slug"></div>
+          </div>
+        </header>
+        <div id="thread"></div>
+        <form id="composer">
+          <input id="body" type="text" placeholder="Message #adh-ops" autocomplete="off" />
+          <button type="submit">Send</button>
+        </form>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

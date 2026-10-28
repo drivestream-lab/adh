@@ -1,0 +1,47 @@
+{
+  "name": "buzz-desktop",
+  "productName": "Buzz",
+  "version": "0.1.0",
+  "description": "Buzz conversation plane for ADH",
+  "private": true,
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "dev:desktop": "concurrently -k \"vite --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && electron . --dev\"",
+    "build:ui": "vite build",
+    "build:mac": "vite build && electron-builder --mac dir -c.mac.identity=null",
+    "install:mac": "npm run build:mac && node electron/install-mac.cjs"
+  },
+  "dependencies": {
+    "typescript": "^5.8.3",
+    "vite": "^7.1.7"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12",
+    "wait-on": "^8.0.4"
+  },
+  "build": {
+    "appId": "lab.drivestream.buzz",
+    "productName": "Buzz",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**"
+    ],
+    "mac": {
+      "category": "public.app-category.social-networking",
+      "target": [
+        "dir"
+      ],
+      "identity": null
+    }
+  },
+  "allowScripts": {
+    "electron@37.10.3": true,
+    "esbuild@0.28.2": true
+  }
+}
