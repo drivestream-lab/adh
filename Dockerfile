@@ -13,7 +13,10 @@ RUN poetry config virtualenvs.create false && \
 FROM python:3.12-slim AS runtime
 
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
-RUN groupadd -r app && useradd -r -g app app
+RUN groupadd -r app && useradd -m -r -g app app \
+    && mkdir -p /home/app/.config/adh/apps /workspace /tmp/adh-home \
+    && chmod 777 /tmp/adh-home \
+    && chown -R app:app /home/app /workspace
 
 WORKDIR /app
 
@@ -24,7 +27,7 @@ COPY --chown=app:app postgres_migrations/ ./postgres_migrations/
 COPY --chown=app:app scripts/ ./scripts/
 COPY docker/adh/entrypoint.sh ./entrypoint.sh
 RUN chmod +x entrypoint.sh && chmod +x scripts/*.sh
-RUN mkdir -p logs && chown app:app logs
+RUN mkdir -p logs && chmod 777 logs && chown app:app logs
 
 USER app
 EXPOSE 8080

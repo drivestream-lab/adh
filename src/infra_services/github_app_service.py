@@ -4,6 +4,7 @@ import base64
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
 import httpx
 from jose import jwt
@@ -244,6 +245,95 @@ class GitHubAppService(BaseInfraService):
         url = str(body.get("html_url") or f"https://github.com/{org}/{repo}/pull/{number}")
         logger.info("Opened kill PR", repo=repo, pr=number, url=url)
         return number, url
+
+    async def put_text_file(
+        self,
+        token: str,
+        repo: str,
+        *,
+        path: str,
+        contents: str,
+        branch: str,
+        message: str,
+    ) -> dict[str, Any]:
+        """Create or update a file on `branch`. Never merges."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        headers = _token_headers(token)
+        repo_url = f"{api}/repos/{org}/{repo}"
+        await self._ensure_branch(repo_url, headers, branch)
+        encoded = base64.b64encode(contents.encode("utf-8")).decode("ascii")
+        api_path = "/".join(quote(part, safe="") for part in path.split("/") if part)
+        file_url = f"{repo_url}/contents/{api_path}"
+        existing = await self._client.get(file_url, headers=headers, params={"ref": branch})
+        payload: dict[str, Any] = {
+            "message": message,
+            "content": encoded,
+            "branch": branch,
+        }
+        if existing.status_code == 200:
+            payload["sha"] = existing.json()["sha"]
+        response = await self._client.put(file_url, headers=headers, json=payload)
+        if response.status_code >= 400:
+            logger.info(
+                "GitHub content put failed",
+                repo=repo,
+                path=path,
+                branch=branch,
+                status=response.status_code,
+                body=response.text[:300],
+            )
+            response.raise_for_status()
+        body = response.json()
+        content = body.get("content") or {}
+        commit = body.get("commit") or {}
+        sha = str(content.get("sha") or "")
+        commit_sha = str(commit.get("sha") or "")
+        html_url = str(content.get("html_url") or "")
+        logger.info(
+            "GitHub content put",
+            repo=repo,
+            path=path,
+            branch=branch,
+            sha=sha,
+            commit=commit_sha,
+        )
+        return {
+            "sha": sha,
+            "commit_sha": commit_sha,
+            "html_url": html_url,
+            "path": path,
+            "branch": branch,
+        }
+
+    async def _ensure_branch(self, repo_url: str, headers: dict[str, str], branch: str) -> None:
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        ref = await self._client.get(f"{repo_url}/git/ref/heads/{branch}", headers=headers)
+        if ref.status_code == 200:
+            return
+        info = await self._client.get(repo_url, headers=headers)
+        info.raise_for_status()
+        default = str(info.json()["default_branch"])
+        base = await self._client.get(f"{repo_url}/git/ref/heads/{default}", headers=headers)
+        base.raise_for_status()
+        sha = str(base.json()["object"]["sha"])
+        created = await self._client.post(
+            f"{repo_url}/git/refs",
+            headers=headers,
+            json={"ref": f"refs/heads/{branch}", "sha": sha},
+        )
+        if created.status_code >= 400 and created.status_code != 422:
+            logger.info(
+                "GitHub ensure branch failed",
+                branch=branch,
+                status=created.status_code,
+                body=created.text[:300],
+            )
+            created.raise_for_status()
+        logger.info("Ensured GitHub branch", branch=branch, status=created.status_code)
 
     async def probe_merge(self, token: str, repo: str, pr_number: int) -> int:
         """Attempt merge. Must not succeed. 403/405/422 is the G0 pass."""

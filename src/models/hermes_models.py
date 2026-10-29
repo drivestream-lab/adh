@@ -10,6 +10,8 @@ from src.models.base_models import BaseCreateModel, BasePostgresModel
 
 class HermesBriefRequest(BaseCreateModel):
     initiative: str = Field(default="INIT-ADH-000", min_length=3, max_length=128)
+    outline: str = Field(default="", max_length=8000)
+    source_message_id: Optional[UUID] = None
 
 
 class HermesGradeRequest(BaseCreateModel):

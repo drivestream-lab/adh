@@ -4,10 +4,12 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+from injector import inject
 
 from src.configs.orchestrator_settings import OrchestratorSettings
 from src.exceptions.app_exceptions import NotFoundError, ValidationError
 from src.infra_services.base_infra_service import BaseInfraService
+from src.infra_services.tenant_registry_service import TenantRegistryService
 from src.logging import get_logger
 from src.models.orchestrator_models import AppRole, PinDocument, PinWave, RolesDocument
 
@@ -43,8 +45,10 @@ def app_slug_for_role(role: str) -> str:
 class PinWalkerService(BaseInfraService):
     """Reads adh-meta pin.yaml and roles.yaml. Never calls a model."""
 
-    def __init__(self) -> None:
+    @inject
+    def __init__(self, tenants: Optional[TenantRegistryService] = None) -> None:
         self._settings = OrchestratorSettings.get_instance()
+        self._tenants = tenants
         self._pin: Optional[PinDocument] = None
         self._roles: Optional[RolesDocument] = None
         self._initialized = False
@@ -118,6 +122,12 @@ class PinWalkerService(BaseInfraService):
             raise ValidationError(
                 f"spawn refused: repo {wave.repo} is not on identity {slug}",
             )
+        if self._tenants is not None:
+            allowed = self._tenants.allowed_repos()
+            if wave.repo not in allowed:
+                raise ValidationError(
+                    f"spawn refused: repo {wave.repo} is not in an active tenant topology"
+                )
         if policy.cannot_merge and app.merge:
             raise ValidationError(f"spawn refused: identity {slug} has merge=true")
         return slug, app

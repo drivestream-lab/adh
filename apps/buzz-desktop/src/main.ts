@@ -115,12 +115,26 @@ async function loadMessages() {
   thread.scrollTop = thread.scrollHeight;
 }
 
+let reconnectTimer: number | null = null;
+
 function connectStream() {
   source?.close();
+  if (reconnectTimer !== null) {
+    window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   source = new EventSource(`${api}/rooms/${encodeURIComponent(currentSlug)}/stream`);
   source.onopen = () => setStatus("live", true);
-  source.onerror = () => setStatus("reconnecting", false);
+  source.onerror = () => {
+    setStatus("reconnecting", false);
+    source?.close();
+    reconnectTimer = window.setTimeout(() => {
+      reconnectTimer = null;
+      connectStream();
+    }, 1500);
+  };
   source.onmessage = (ev) => {
+    setStatus("live", true);
     try {
       const data = JSON.parse(ev.data) as Message & { type?: string };
       if (data.type === "ping" || data.type === "subscribed") return;

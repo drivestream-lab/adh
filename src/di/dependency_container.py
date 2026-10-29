@@ -7,8 +7,12 @@ from injector import Injector
 from src.business_services.buzz_service import BuzzService
 from src.business_services.hermes_service import HermesService
 from src.business_services.orchestrator_service import OrchestratorService
+from src.infra_services.github_app_service import GitHubAppService
 from src.infra_services.hermes_store_service import HermesStoreService
 from src.infra_services.litellm_service import LiteLLMService
+from src.infra_services.pm_workspace_service import PmWorkspaceService
+from src.infra_services.prompt_service import PromptService
+from src.infra_services.tenant_registry_service import TenantRegistryService
 from src.configs.app_settings import AppSettings
 from src.infra_services.postgres_service import PostgresService
 from src.infra_services.redis_service import RedisService
@@ -24,7 +28,11 @@ _INFRA_SERVICE_TYPES: tuple[type, ...] = (
     PostgresService,
     RedisService,
     LiteLLMService,
+    PromptService,
     HermesStoreService,
+    GitHubAppService,
+    TenantRegistryService,
+    PmWorkspaceService,
     TelemetryService,
 )
 

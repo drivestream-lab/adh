@@ -56,6 +56,15 @@ class RedisService(BaseInfraService):
 
         return self._require_connection_manager().get_client()
 
+    async def set_if_absent(self, key: str, value: Any, ttl: int) -> bool:
+        """SET NX. True if this caller won the key."""
+        if not self._initialized:
+            raise RuntimeError("Redis service has not been initialized")
+        if not isinstance(value, str):
+            value = json.dumps(value)
+        result = await self.get_client().set(key, value, nx=True, ex=ttl)
+        return bool(result)
+
     async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
         """Set a value in Redis.
 

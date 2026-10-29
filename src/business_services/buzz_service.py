@@ -20,6 +20,8 @@ from src.database.postgres.schema.buzz_schema import (
 from src.exceptions.app_exceptions import NotFoundError, ValidationError
 from src.infra_services.postgres_service import PostgresService
 from src.infra_services.redis_service import RedisService
+from src.infra_services.tenant_registry_service import TenantRegistryService
+from src.models.tenant_models import memory_room_for_repo
 from src.logging import get_logger
 from src.models.buzz_models import (
     EventType,
@@ -86,7 +88,7 @@ _SEED_IDENTITIES: tuple[IdentityCreate, ...] = (
 
 _SEED_ROOMS: tuple[RoomCreate, ...] = (
     RoomCreate(slug="adh-ops", title="ADH ops", kind=RoomKind.OPS),
-    RoomCreate(slug="adh-memory", title="Lead memory", kind=RoomKind.MEMORY),
+    RoomCreate(slug="adh-memory", title="ADH global memory", kind=RoomKind.MEMORY),
 )
 
 
@@ -98,10 +100,12 @@ class BuzzService(BaseBusinessService):
         self,
         postgres_service: PostgresService,
         redis_service: RedisService,
+        tenants: TenantRegistryService,
     ) -> None:
         super().__init__()
         self._postgres = postgres_service
         self._redis = redis_service
+        self._tenants = tenants
         self._settings = BuzzSettings.get_instance()
         self._identity_repo: Optional[BasePostgresRepository[BuzzIdentitySchema]] = None
         self._room_repo: Optional[BasePostgresRepository[BuzzRoomSchema]] = None
@@ -165,7 +169,7 @@ class BuzzService(BaseBusinessService):
                 if existing is None:
                     await self._identities().create(session, ident)
                     self.logger.info("Seeded Buzz identity", handle=ident.handle)
-            for room in _SEED_ROOMS:
+            for room in (*_SEED_ROOMS, *_tenant_rooms(self._tenants)):
                 existing = await self._get_room_by_slug(session, room.slug)
                 if existing is None:
                     await self._rooms().create(session, room)
@@ -222,11 +226,13 @@ class BuzzService(BaseBusinessService):
                     BuzzMessageSchema.identity_id == BuzzIdentitySchema.id,
                 )
                 .where(BuzzMessageSchema.room_id == room.id)
-                .order_by(BuzzMessageSchema.created_at.asc())
+                .order_by(BuzzMessageSchema.created_at.desc())
                 .limit(limit)
             )
             result = await session.execute(stmt)
-            return [self._to_message_read(message, identity) for message, identity in result.all()]
+            rows = list(result.all())
+            rows.reverse()
+            return [self._to_message_read(message, identity) for message, identity in rows]
 
     async def post_message(self, slug: str, payload: MessageCreate) -> MessageRead:
         async with self._postgres.get_session() as session:
@@ -382,3 +388,31 @@ class BuzzService(BaseBusinessService):
             except Exception:
                 self.logger.exception("System heartbeat ingest failed")
             await asyncio.sleep(interval)
+
+
+def _tenant_rooms(tenants: TenantRegistryService) -> tuple[RoomCreate, ...]:
+    rooms: list[RoomCreate] = []
+    seen: set[str] = {"adh-ops", "adh-memory"}
+    for tenant in tenants.active():
+        if tenant.ops_room not in seen:
+            rooms.append(
+                RoomCreate(
+                    slug=tenant.ops_room,
+                    title=f"{tenant.slug} ops",
+                    kind=RoomKind.OPS,
+                )
+            )
+            seen.add(tenant.ops_room)
+    for repo in sorted(tenants.allowed_repos()):
+        slug = memory_room_for_repo(repo)
+        if slug in seen:
+            continue
+        rooms.append(
+            RoomCreate(
+                slug=slug,
+                title=f"{repo} memory",
+                kind=RoomKind.MEMORY,
+            )
+        )
+        seen.add(slug)
+    return tuple(rooms)

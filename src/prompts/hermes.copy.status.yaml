@@ -1,0 +1,85 @@
+kind: copy-catalog
+id: hermes.copy.status
+version: "1"
+templates:
+  hermes.pm.status.duplicate:
+    body: |-
+      Rejected: the same outline is already in progress. I received it earlier and will post status on that work. Do not paste it again.
+  hermes.pm.status.outline-ack:
+    body: |-
+      Received your outline. Work is in progress — I will walk /prd-think C1 then C2, then /prd-quality, write those files on {{ branch }} in {{ meta_repo }} as adh-dev-pm, and post each hop's status and logical output here. This outline is a hypothesis, not a PRD. I will not merge. Do not resend.
+  hermes.pm.status.need-init:
+    body: |-
+      T0: cannot allocate INIT from {{ meta_repo }}. Occupied: {{ occupied_inits }}. Prefix from programme.yaml is {{ prefix }}. Harness shape is INIT-COMPONENT-NUMBER. Reply with that id only. I will not invent a job slug. Do not resend the outline.
+  hermes.pm.status.t0-using-init:
+    body: |-
+      T0: allocated {{ initiative }} from {{ meta_repo }} (programme.yaml slug + next free NUMBER in occupied INITs; harness INIT-COMPONENT-NUMBER). Occupied: {{ occupied_inits }}. C1 will write `{{ path_c1 }}`; C2 will write `{{ path_c2 }}`. Think budget {{ max_think }}; ready passes {{ max_ready }}. I will not invent a job-shaped INIT or overwrite a prior think file.
+  hermes.pm.status.think-next:
+    body: |-
+      Next hop: /prd-think {{ label }} for {{ initiative }} at `{{ claimed_path }}`. Remaining think runs after this hop: {{ remaining_thinks }}. INIT was allocated from meta inventory and harness convention, not from the outline.
+  hermes.pm.status.calling-model:
+    body: |-
+      Calling the model for {{ hop }}. I will keep posting while it runs.
+  hermes.pm.status.think-returned:
+    body: |-
+      Think {{ label }} returned {{ initiative }}. Posting the {{ label }} logical hop on this room. Prior think files stay as written.
+  hermes.pm.status.quality-next:
+    body: |-
+      Next hop: /prd-quality ready pass {{ pass_number }}/{{ max_passes }} for {{ initiative }}. Scoring the think files, not skill JSON. Engineering-ready = spec-draft without guessing. Ci-wins is rank only.
+  hermes.pm.status.quality-returned:
+    body: |-
+      Ready pass {{ pass_number }}/{{ max_passes }} returned. Posting the scorecard on this room.
+  hermes.pm.status.loop-continue:
+    body: |-
+      Ready pass {{ pass_number }}/{{ max_passes }}: no handover yes. Loop continues to /prd-think {{ label }} at `{{ claimed_path }}`. FAILs: {{ fail_list }}. Think {{ think_runs }}/{{ max_think }}.
+  hermes.pm.status.loop-stop:
+    body: |-
+      Ready loop stop ({{ reason }}). Think runs {{ think_runs }}/{{ max_think }}. Ready passes {{ ready_passes }}/{{ max_ready }}. Promote is still you — name the file. Low score still gets a draft PR later. I will not merge.
+  hermes.pm.status.promote-is-you:
+    body: |-
+      Think candidates and quality for {{ initiative }} are on this room. Promote is still you — name the file when you want it promoted. Forge does not draft until you promote. I will not merge.
+  hermes.pm.status.failed:
+    body: |-
+      Failed: {{ error }}. Resend the outline to try again.
+  hermes.pm.status.still-working:
+    body: |-
+      Still working ({{ step }}/{{ steps }}, {{ elapsed }}s). Waiting another {{ interval }}s. Do not resend.
+  hermes.pm.status.wrote-file:
+    body: |-
+      Wrote `{{ path }}` on {{ branch }} as adh-dev-pm. workspace={{ local }}; github={{ github_state }}.
+  hermes.pm.heartbeat.think:
+    body: |-
+      PM walking think {{ label }}
+  hermes.pm.heartbeat.quality:
+    body: |-
+      PM walking prd-quality
+  hermes.pm.heartbeat.still-working:
+    body: |-
+      PM still working on outline ({{ step }}/{{ steps }}, {{ elapsed }}s)
+  hermes.pm.heartbeat.brief-start:
+    body: |-
+      PM brief start
+  hermes.pm.heartbeat.brief-done:
+    body: |-
+      PM brief done
+  hermes.eng.heartbeat.grade-start:
+    body: |-
+      after-PR grade start
+  hermes.eng.heartbeat.grade-done:
+    body: |-
+      after-PR grade done
+  hermes.pm.error.stub-hop:
+    body: |-
+      {{ hop }} did not produce a valid candidate ({{ reason }}). I will not post a stub hop.
+  hermes.pm.error.ready-no-bars:
+    body: |-
+      Ready pass {{ pass_number }} returned no B-bar for {{ initiative }}. I will not post a fake zero.
+  hermes.pm.error.pending-init:
+    body: |-
+      {{ hop }} did not allocate a programme INIT. I will not post a stub hop.
+  hermes.pm.error.model-timeout:
+    body: |-
+      Model did not finish after {{ steps }} waits of {{ interval }}s ({{ elapsed }}s). Failing.
+  hermes.pm.error.model-timeout-plain:
+    body: |-
+      Model did not finish after {{ steps }} waits of {{ interval }}s. Failing.

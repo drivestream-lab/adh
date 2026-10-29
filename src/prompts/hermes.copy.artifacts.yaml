@@ -1,0 +1,152 @@
+kind: copy-catalog
+id: hermes.copy.artifacts
+version: "1"
+templates:
+  hermes.pm.hop.think:
+    body: |
+      Think {{ label }}  {{ initiative }}
+      path: {{ path }}
+      model={{ model }}  ·  not scored  ·  Hermes will not merge
+
+      ## Job
+      {{ job }}
+
+      ## Why now
+      {{ why_now }}
+
+      ## If we do nothing
+      {{ if_we_do_nothing }}
+
+      ## Kill assumption
+      {{ kill_assumption }}
+
+      ## Locked decisions
+      {{ locked_decisions }}
+
+      ## In scope
+      {{ in_scope }}
+
+      ## Non-goals
+      {{ non_goals }}
+
+      ## Capabilities
+      {{ capabilities }}
+
+      ## Requirements
+      {{ requirements }}
+
+      ## Journeys
+      {{ journeys }}
+
+      ## Open questions
+      {{ open_questions }}
+
+      ## Whole-product delta
+      {{ whole_product_delta }}
+
+      ## Equivalent-product notes
+      {{ equivalent_product_notes }}
+
+      ## Summary
+      {{ summary }}
+
+      This is the logical output of /prd-think {{ label }}. I will not promote, open a GitHub PR, or merge.
+  hermes.pm.file.think:
+    body: |
+      # {{ initiative }}: {{ short }} (prd-think candidate)
+
+      | Field | Value |
+      |-------|-------|
+      | Initiative | {{ initiative }} |
+      | Status | candidate {{ label }} |
+      | Brief | conversation |
+      | Existing PRD | none — not modified |
+      | Candidate path | `{{ path }}` |
+      | Score | `/prd-quality` — not written by this skill |
+
+      ## 1. Job and outcome
+
+      - **Job:** {{ job }}
+      - **Why now:** {{ why_now }}
+      - **If we do nothing:** {{ if_we_do_nothing }}
+      - **Kill assumption:** {{ kill_assumption }}
+
+      ## 2. Locked decisions
+
+      {{ locked_decisions }}
+
+      ## 3. In scope / non-goals
+
+      ### In scope
+
+      {{ in_scope }}
+
+      ### Non-goals (load-bearing)
+
+      {{ non_goals }}
+
+      ## 5. Capabilities
+
+      {{ capabilities }}
+
+      ## 6. Requirements
+
+      {{ requirements }}
+
+      ## 10. Journeys
+
+      {{ journeys }}
+
+      ## 11. Open questions
+
+      {{ open_questions }}
+
+      ## Whole-product delta
+
+      {{ whole_product_delta }}
+
+      ## Equivalent-product notes
+
+      {{ equivalent_product_notes }}
+
+      ## Summary
+
+      {{ summary }}
+  hermes.pm.hop.quality:
+    body: |
+      Quality  {{ initiative }}
+      model={{ model }}  ·  X={{ threshold_x }}  ·  rank={{ rank }}  ·  ready pass {{ pass_number }}/{{ max_passes }}
+      {{ candidate_block }}
+      recommend_promote={{ recommend_promote }}
+
+      ## Notes
+      {{ notes }}
+
+      ## Harness proposal (Lead bakes in; Hermes does not edit X)
+      {{ harness_proposal }}
+
+      Engineering-ready = spec-draft without guessing. Ci-wins is rank only. You name the file to promote. Forge does not draft until you promote. I will not merge.
+  hermes.pm.file.quality:
+    body: |
+      # {{ initiative }}-prd-quality
+
+      | Field | Value |
+      |-------|-------|
+      | Initiative | {{ initiative }} |
+      | Files | {{ files_row }} |
+      | Candidate path | `{{ path }}` |
+      | **Handover** | {{ handover_row }} |
+      | Rank | {{ rank }} — **not** the validate signal |
+      | Ready pass | {{ pass_number }}/{{ max_passes }} |
+
+      {{ hop_body }}
+  hermes.pm.hop.brief:
+    body: |-
+      PM brief {{ initiative }} (rubric-pm overall {{ overall }}/3, model={{ model }})
+
+      {{ summary }}
+  hermes.eng.hop.grade:
+    body: |-
+      ENG grade {{ pr_ref }} verify_exit={{ verify_exit }} overall={{ overall }}/3 X={{ threshold_x }} {{ merge }} (model={{ model }})
+
+      {{ notes }}
