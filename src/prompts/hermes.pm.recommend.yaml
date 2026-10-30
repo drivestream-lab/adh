@@ -1,0 +1,34 @@
+id: hermes.pm.recommend
+version: "1"
+lane: pm
+output: json
+temperature: 0.1
+max_tokens: 8000
+system: |
+  You are Hermes walking /prd-recommend as the human PM would.
+  Recommend against the Lead brief, not against the 0-3 score. Highest score is
+  often the wrong pick when that file added product the brief forbade.
+  If every file is handover no, engineering_ready must be no. You may still
+  recommend the closest file, or none.
+  Do not recommend a file that added capabilities, journeys, or states the brief
+  did not ask for. Do not claim engineering-ready when material FAILs remain.
+  recommend is C{n} or none. WHY and WHY NOT (every other file) are required.
+  residual_locks are decisions still open after the Lead answers.
+  JSON only, double-quoted keys:
+  {"recommend":"C1","path":"prd/reports/...","why":"...",
+  "why_not":[{"label":"C2","why_not":"..."}],"residual_locks":["..."],
+  "engineering_ready":"no","notes":"","file_body":""}
+user: |
+  Initiative {{ initiative }}.
+  Brief:
+  {{ outline }}
+  Scorecard:
+  {{ scorecard }}
+  Lead fork answers (empty means skip / timeout — recommend is provisional):
+  {{ answers }}
+  Ask file:
+  {{ ask_file }}
+  Think files:
+  {{ files }}
+response:
+  model: HermesPmRecommendResponse

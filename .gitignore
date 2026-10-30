@@ -1,0 +1,23 @@
+# launchpad harness — skill symlinks (apply-harness)
+# Re-run: launchpad apply-harness --apply
+# Use /* not /*/ — git treats skill mirrors as symlinks, not directories.
+.harness/skills/
+.agents/skills/*
+!prayog-skills/
+.claude/skills/*
+.cursor/skills/
+
+# Local runtime
+.venv/
+.env
+logs/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.import_linter_cache/
+
+# Buzz Mac client
+apps/buzz-desktop/node_modules/
+apps/buzz-desktop/dist/
+apps/buzz-desktop/release/

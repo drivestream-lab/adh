@@ -1,0 +1,47 @@
+name: Feature / story
+description: New capability tied to an initiative
+title: "[feature] "
+labels:
+  - initiative
+  - spec
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use for **product work** after INIT manifest exists. Mirror **Engineering** board fields.
+
+  - type: input
+    id: initiative
+    attributes:
+      label: Initiative
+      placeholder: INIT-API-001
+    validations:
+      required: true
+
+  - type: input
+    id: cr
+    attributes:
+      label: CR
+      placeholder: N/A
+    validations:
+      required: true
+
+  - type: input
+    id: spec_path
+    attributes:
+      label: Spec path
+      placeholder: docs/specification/product/02-api-contract.md
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        **Branch:** `feature/INIT-{COMPONENT}-{NUMBER}-{slug}` → `develop`

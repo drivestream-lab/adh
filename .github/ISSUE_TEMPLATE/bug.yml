@@ -1,0 +1,51 @@
+name: Bug
+description: Defect or regression
+title: "[bug] "
+labels:
+  - verify
+  - qa
+body:
+  - type: input
+    id: initiative
+    attributes:
+      label: Initiative
+      placeholder: INIT-API-001 or N/A
+    validations:
+      required: true
+
+  - type: input
+    id: cr
+    attributes:
+      label: CR
+      placeholder: N/A
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+
+  - type: input
+    id: verify_command
+    attributes:
+      label: Smoke command (if known)
+      placeholder: make check / poetry run python -m tests.verify.verify_all
+    validations:
+      required: false

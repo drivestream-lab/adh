@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Buzz</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --line: #2a3548;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --accent: #5b8def;
+      --hb: #3d5a40;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; font-family: ui-sans-serif, system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    .app { display: grid; grid-template-columns: 240px 1fr; height: 100%; }
+    aside { background: var(--panel); border-right: 1px solid var(--line); padding: 16px; overflow: auto; }
+    h1 { font-size: 16px; margin: 0 0 12px; letter-spacing: 0.04em; }
+    .room { padding: 8px 10px; border-radius: 6px; cursor: pointer; color: var(--muted); }
+    .room.active, .room:hover { background: #243044; color: var(--text); }
+    main { display: flex; flex-direction: column; min-width: 0; }
+    header { padding: 14px 20px; border-bottom: 1px solid var(--line); }
+    header .slug { color: var(--muted); font-size: 13px; }
+    #thread { flex: 1; overflow: auto; padding: 16px 20px; }
+    .msg { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--panel); }
+    .msg.heartbeat { background: var(--hb); }
+    .meta { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+    .kind { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); margin-left: 8px; }
+    form { display: flex; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line); }
+    input, select, button { font: inherit; }
+    input[type=text] { flex: 1; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
+    select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+    button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 8px 14px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <h1>Buzz</h1>
+      <div id="rooms"></div>
+    </aside>
+    <main>
+      <header>
+        <div id="title">Select a room</div>
+        <div class="slug" id="subtitle"></div>
+      </header>
+      <div id="thread"></div>
+      <form id="composer">
+        <select id="identity"></select>
+        <input id="body" type="text" placeholder="Message…" autocomplete="off" />
+        <button type="submit">Send</button>
+      </form>
+    </main>
+  </div>
+  <script>
+    const api = "/api/v1/buzz";
+    let currentSlug = "adh-ops";
+    let identities = [];
+
+    async function j(path, opts) {
+      const res = await fetch(api + path, opts);
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    function esc(s) {
+      return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+    }
+
+    async function loadRooms() {
+      const rooms = await j("/rooms");
+      const el = document.getElementById("rooms");
+      el.innerHTML = rooms.map(r =>
+        `<div class="room ${r.slug === currentSlug ? "active" : ""}" data-slug="${esc(r.slug)}"># ${esc(r.slug)}</div>`
+      ).join("");
+      el.querySelectorAll(".room").forEach(n => n.addEventListener("click", () => {
+        currentSlug = n.dataset.slug;
+        loadRooms();
+        loadMessages();
+      }));
+    }
+
+    async function loadIdentities() {
+      identities = await j("/identities");
+      const sel = document.getElementById("identity");
+      const keep = sel.value;
+      sel.innerHTML = identities.map(i =>
+        `<option value="${esc(i.handle)}">${esc(i.handle)}</option>`
+      ).join("");
+      if (keep) sel.value = keep;
+      else if (identities.find(i => i.handle === "nikd10x")) sel.value = "nikd10x";
+    }
+
+    async function loadMessages() {
+      const room = await j("/rooms/" + encodeURIComponent(currentSlug));
+      document.getElementById("title").textContent = room.title;
+      document.getElementById("subtitle").textContent = "#" + room.slug;
+      const msgs = await j("/rooms/" + encodeURIComponent(currentSlug) + "/messages");
+      const thread = document.getElementById("thread");
+      thread.innerHTML = msgs.map(m => {
+        const when = m.created_at ? new Date(m.created_at).toLocaleTimeString() : "";
+        const cls = m.kind === "heartbeat" ? "msg heartbeat" : "msg";
+        const extra = m.event_type ? " · " + m.event_type : "";
+        return `<div class="${cls}">
+          <div class="meta">${esc(m.identity_handle)} <span class="kind">${esc(m.kind)}${esc(extra)}</span> · ${esc(when)}</div>
+          <div>${esc(m.body)}</div>
+        </div>`;
+      }).join("");
+      thread.scrollTop = thread.scrollHeight;
+    }
+
+    document.getElementById("composer").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const body = document.getElementById("body").value.trim();
+      if (!body) return;
+      await j("/rooms/" + encodeURIComponent(currentSlug) + "/messages", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          identity_handle: document.getElementById("identity").value,
+          body,
+        }),
+      });
+      document.getElementById("body").value = "";
+      await loadMessages();
+    });
+
+    async function tick() {
+      try { await loadRooms(); await loadIdentities(); await loadMessages(); }
+      catch (err) { console.error(err); }
+    }
+    tick();
+    setInterval(tick, 4000);
+  </script>
+</body>
+</html>

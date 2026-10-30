@@ -1,0 +1,30 @@
+name: Chore / platform
+description: Process, tooling, templates, CI — no product feature
+title: "[chore] "
+labels:
+  - bootstrap
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use for **tooling, templates, CI** — not product feature work.
+
+  - type: input
+    id: initiative
+    attributes:
+      label: Initiative
+      placeholder: BOOTSTRAP-DS-001 or N/A
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What needs doing?
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        **Branch:** `chore/<short-slug>` → `develop`.

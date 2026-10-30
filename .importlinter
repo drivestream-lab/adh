@@ -1,0 +1,12 @@
+[importlinter]
+root_packages =
+    src
+
+[importlinter:contract:layer-architecture]
+name = Layered architecture — no cross-layer imports
+type = layers
+layers =
+    src.api
+    src.business_services
+    src.database.postgres.repository
+    src.database.postgres.schema
