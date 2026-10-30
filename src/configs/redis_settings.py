@@ -44,7 +44,14 @@ class RedisSettings(BaseSettings):
 
     # Connection pool settings
     pool_min_size: int = Field(default=1, description="Minimum connection pool size")
-    pool_max_size: int = Field(default=10, description="Maximum connection pool size")
+    pool_max_size: int = Field(
+        default=50,
+        description="Maximum connections for cache/commands. Pub/Sub uses a separate pool.",
+    )
+    pubsub_pool_max_size: int = Field(
+        default=64,
+        description="Maximum Redis connections reserved for Buzz SSE and Hermes listeners",
+    )
 
     # Cache settings
     default_ttl: int = Field(default=3600, description="Default TTL for cache items in seconds")

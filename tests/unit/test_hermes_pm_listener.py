@@ -10,9 +10,13 @@ from src.business_services.hermes_service import (
     _coerce_init,
     _lock_token,
     apply_ready_gate,
+    apply_recommend_gate,
     outline_fingerprint,
+    parse_ask_answers,
+    parse_promote_pick,
 )
 from src.infra_services.pm_workspace_service import MetaInventory, think_path
+from src.models.prompt_models import cap_ask_forks
 from src.infra_services.prompt_service import PromptService
 from src.models.buzz_models import EventType, MessageKind, MessageRead
 from src.models.hermes_models import HermesArtifactRead
@@ -81,6 +85,62 @@ def _think_artifact(label: str = "C1") -> HermesArtifactRead:
                 "candidate_label": label,
                 "job": job,
                 "summary": "Empty home then one article.",
+            },
+        },
+    )
+
+
+def _ask_artifact() -> HermesArtifactRead:
+    return HermesArtifactRead(
+        id=uuid4(),
+        kind="pm_ask",
+        initiative=_INIT,
+        rubric_id="rubric-pm",
+        body=f"Ask  {_INIT}",
+        payload={
+            "lane": "pm",
+            "hop": "ask",
+            "path": f"prd/reports/{_INIT}-prd-ask.md",
+            "file_body": f"# {_INIT}-prd-ask\n",
+            "artifact": {
+                "forks": [
+                    {
+                        "id": "F1",
+                        "question": "If two people publish, does home show both?",
+                        "choices": [
+                            "all published, newest first, no pagination",
+                            "only proving one article",
+                        ],
+                        "why_it_changes_the_pick": "C1 leaves this open; C2 locks all-on-home.",
+                        "quote": "OQ-03",
+                    }
+                ],
+                "notes": "",
+            },
+        },
+    )
+
+
+def _recommend_artifact() -> HermesArtifactRead:
+    return HermesArtifactRead(
+        id=uuid4(),
+        kind="pm_recommend",
+        initiative=_INIT,
+        rubric_id="rubric-pm",
+        body=f"Recommend  {_INIT}",
+        payload={
+            "lane": "pm",
+            "hop": "recommend",
+            "path": f"prd/reports/{_INIT}-prd-recommend.md",
+            "file_body": f"# {_INIT}-prd-recommend\n",
+            "artifact": {
+                "recommend": "C1",
+                "path": think_path(_INIT, 1),
+                "why": "Closest to the empty-home then one-article brief.",
+                "why_not": [{"label": "C2", "why_not": "Added unpublish."}],
+                "residual_locks": ["multi-article home"],
+                "engineering_ready": "no",
+                "notes": "",
             },
         },
     )
@@ -167,10 +227,12 @@ def _service(
         return_value={"local_path": "/tmp/prd/reports/x.md", "github": {"commit_sha": "abc1234"}}
     )
     workspace.inventory = MagicMock(return_value=MetaInventory())
+    workspace.read_local = MagicMock(return_value="")
     redis.set = AsyncMock(return_value=True)
     prompts = PromptService(MagicMock())
     asyncio.run(prompts.initialize())
     hermes = HermesService(MagicMock(), buzz, redis, prompts, workspace, _registry(*tenants))
+    hermes._settings = hermes._settings.model_copy(update={"pm_ask_wait_seconds": 0})
 
     async def _think_side_effect(request: object, **kwargs: object) -> HermesArtifactRead:
         run_raw = kwargs.get("run", 1)
@@ -189,6 +251,8 @@ def _service(
     quality = AsyncMock(return_value=_quality_artifact())
     hermes.run_pm_think = think
     hermes.run_pm_quality = quality
+    hermes.run_pm_ask = AsyncMock(return_value=_ask_artifact())
+    hermes.run_pm_recommend = AsyncMock(return_value=_recommend_artifact())
     return hermes, buzz, redis, think, quality
 
 
@@ -431,7 +495,7 @@ def test_stub_model_is_not_posted_as_prd() -> None:
 
     asyncio.run(_run())
     posts = [call.args[1] for call in buzz.post_message.await_args_list]
-    assert any("stub hop" in post.body for post in posts)
+    assert any("fake hop" in post.body for post in posts)
     assert EventType.STALL in [post.event_type for post in posts]
     assert not any(post.kind == MessageKind.MESSAGE and "Think C1" in post.body for post in posts)
     assert not any(
@@ -464,6 +528,31 @@ def test_ignores_agents_and_short_chatter() -> None:
     buzz.post_message.assert_not_awaited()
     think.assert_not_awaited()
     quality.assert_not_awaited()
+
+
+def test_lead_stop_halts_inflight_think() -> None:
+    hermes, buzz, _redis, think, quality = _service()
+    started = asyncio.Event()
+
+    async def _hang(*_a: object, **_k: object) -> HermesArtifactRead:
+        started.set()
+        await asyncio.Event().wait()
+        return _think_artifact("C1")
+
+    think.side_effect = _hang
+
+    async def _run() -> None:
+        await hermes.on_room_message(_OPS, _message(_OUTLINE))
+        await asyncio.wait_for(started.wait(), timeout=2)
+        await hermes.on_room_message(_OPS, _message("stop"))
+        if hermes._work_tasks:
+            await asyncio.gather(*list(hermes._work_tasks), return_exceptions=True)
+
+    asyncio.run(_run())
+    bodies = [call.args[1].body for call in buzz.post_message.await_args_list]
+    assert any("Stopped" in body and "Lead `stop`" in body for body in bodies)
+    quality.assert_not_awaited()
+    assert think.await_count == 1
 
 
 def test_factory_ops_outline_is_ignored() -> None:
@@ -580,3 +669,126 @@ def test_skeleton_gate_blocks_handover_yes() -> None:
     assert parsed["recommend_promote"] == ""
     assert any("B1" in item for item in cand["material_fails"])
     assert cand["bars"]
+
+
+def test_after_quality_runs_ask_then_recommend() -> None:
+    hermes, buzz, _redis, _think, quality = _service()
+
+    async def _run() -> None:
+        await hermes.on_room_message(_OPS, _message(_OUTLINE))
+        if hermes._work_tasks:
+            await asyncio.gather(*hermes._work_tasks)
+
+    asyncio.run(_run())
+    bodies = [call.args[1].body for call in buzz.post_message.await_args_list]
+    payloads = [call.args[1].payload or {} for call in buzz.post_message.await_args_list]
+    assert quality.await_count == 1
+    assert cast(AsyncMock, hermes.run_pm_ask).await_count == 1
+    assert cast(AsyncMock, hermes.run_pm_recommend).await_count == 1
+    assert any("Next hop: /prd-ask" in body for body in bodies)
+    assert any("Next hop: /prd-recommend" in body for body in bodies)
+    assert any(payload.get("status") == "need_ask" for payload in payloads)
+    assert any(payload.get("choices") for payload in payloads if payload.get("hop") == "ask")
+    assert any("Promote is still you" in body for body in bodies)
+
+
+def test_chatter_during_ask_is_ignored() -> None:
+    hermes, buzz, _redis, think, _quality = _service()
+    hermes._settings = hermes._settings.model_copy(update={"pm_ask_wait_seconds": 2})
+    chatter = (
+        "please proceed with the highest score file and also add comments "
+        "and favorites while you are at it so we can ship faster"
+    )
+
+    async def _run() -> None:
+        await hermes.on_room_message(_OPS, _message(_OUTLINE))
+        for _ in range(80):
+            bodies = [call.args[1].body for call in buzz.post_message.await_args_list]
+            if any("Forks for" in body for body in bodies):
+                break
+            await asyncio.sleep(0.05)
+        await hermes.on_room_message(_OPS, _message(chatter))
+        await hermes.on_room_message(
+            _OPS,
+            _message(
+                "F1: all published, newest first, no pagination\n" "F2: write=publish\n" "F3: skip"
+            ),
+        )
+        if hermes._work_tasks:
+            await asyncio.gather(*hermes._work_tasks)
+
+    asyncio.run(_run())
+    assert think.await_count == 2
+    assert cast(AsyncMock, hermes.run_pm_recommend).await_count == 1
+    called = cast(AsyncMock, hermes.run_pm_recommend).await_args
+    assert called is not None
+    assert "all published" in called.kwargs["answers"]
+    bodies = [call.args[1].body for call in buzz.post_message.await_args_list]
+    assert not any("Received your outline" in body for body in bodies[1:] if "already" in body)
+    assert not any("allocated INIT-REALWORLD-002" in body for body in bodies)
+
+
+def test_ask_forks_capped_at_three() -> None:
+    forks = cap_ask_forks(
+        [
+            {
+                "question": "Multi-article home?",
+                "choices": ["all published", "one article"],
+                "why_it_changes_the_pick": "C1 vs C2",
+            },
+            {
+                "question": "Write equals publish?",
+                "choices": ["yes", "draft then publish"],
+                "why": "C2 adds draft",
+            },
+            {
+                "question": "Unpublish in scope?",
+                "choices": ["no", "yes"],
+                "why_it_changes_the_pick": "C2/C4 added it",
+            },
+            {
+                "question": "Should we add comments?",
+                "choices": ["no", "yes"],
+                "why_it_changes_the_pick": "would create C5",
+            },
+            {"question": "Open essay?", "choices": ["tell me more"], "why": "open"},
+        ],
+        max_forks=3,
+    )
+    assert [item["id"] for item in forks] == ["F1", "F2", "F3"]
+    assert all(len(item["choices"]) >= 2 for item in forks)
+
+
+def test_recommend_gate_forces_none_and_not_ready() -> None:
+    quality = _quality_artifact(handover_c2="no")
+    files = [
+        {"label": "C1", "path": think_path(_INIT, 1), "file_body": "c1"},
+        {"label": "C2", "path": think_path(_INIT, 2), "file_body": "c2"},
+    ]
+    parsed = apply_recommend_gate(
+        {
+            "recommend": "C2",
+            "path": think_path(_INIT, 2),
+            "engineering_ready": "yes",
+            "why": "highest score",
+        },
+        files,
+        quality,
+    )
+    assert parsed["recommend"] == "C2"
+    assert parsed["engineering_ready"] == "no"
+    missing = apply_recommend_gate({"recommend": "C9", "engineering_ready": "yes"}, files, quality)
+    assert missing["recommend"] == "none"
+    assert missing["engineering_ready"] == "no"
+
+
+def test_parse_ask_answers_and_promote_pick() -> None:
+    assert parse_ask_answers("skip") == {"_skip": "skip"}
+    assert parse_ask_answers("F1: all published\nF2: write=publish") == {
+        "F1": "all published",
+        "F2": "write=publish",
+    }
+    assert parse_ask_answers("okay proceed with C2") is None
+    assert parse_promote_pick("C1") == "C1"
+    assert parse_promote_pick("none") == "none"
+    assert parse_promote_pick("please merge it") is None

@@ -8,10 +8,17 @@ import pytest
 
 from src.configs.base_settings import BaseSettings
 from src.exceptions.app_exceptions import ValidationError
-from src.infra_services.prompt_service import PromptService
 from src.infra_services.litellm_service import _parse_json_object
-from src.infra_services.prompt_service import extract_markdown
-from src.models.prompt_models import HermesPmOutlineResponse, HermesPmThinkResponse
+from src.infra_services.prompt_service import PromptService, extract_markdown
+from src.models.prompt_models import (
+    HermesPmAskResponse,
+    HermesPmOutlineResponse,
+    HermesPmQualityResponse,
+    HermesPmRecommendResponse,
+    HermesPmThinkResponse,
+    cap_ask_forks,
+    quality_from_markdown,
+)
 
 
 def test_packaged_templates_load_and_render() -> None:
@@ -135,6 +142,20 @@ def test_think_and_quality_templates_load() -> None:
     assert "spec-draft" in quality.system
     assert "think JSON" in quality.system
     assert quality.response_model == "HermesPmQualityResponse"
+    card = service.render(
+        "hermes.pm.quality.card",
+        {
+            "initiative": "INIT-REALWORLD-001",
+            "outline": "Home is empty.",
+            "scorecard": '{"rank":"C4-wins"}',
+            "files": "### C1\nJob text",
+            "max_questions": 3,
+        },
+    )
+    assert "human PM" in card.system
+    assert "Do not change them" in card.system
+    assert "Never emit the tokens" in card.system
+    assert card.response_model == "HermesPmQualityCardResponse"
     parsed = service.parse_response(
         "hermes.pm.think.c1",
         {
@@ -144,6 +165,46 @@ def test_think_and_quality_templates_load() -> None:
         },
     )
     assert parsed["proposed_init"] == "INIT-REALWORLD-HOME-PUBLISH-001"
+    ask = service.render(
+        "hermes.pm.ask",
+        {
+            "initiative": "INIT-REALWORLD-001",
+            "outline": "Home is empty.",
+            "files": "### C1\nJob text",
+            "scorecard": "C1 handover=no",
+            "answers": "(none)",
+            "max_forks": 3,
+        },
+    )
+    assert "/prd-ask" in ask.system
+    assert "handover no" in ask.system
+    assert "real-life example" in ask.system
+    assert ask.response_model == "HermesPmAskResponse"
+    ask_card = service.render(
+        "hermes.pm.ask.card",
+        {
+            "initiative": "INIT-REALWORLD-001",
+            "outline": "Home is empty.",
+            "forks": '[{"id":"F1"}]',
+            "files": "### C1\nJob text",
+        },
+    )
+    assert "Do not change id" in ask_card.system
+    assert ask_card.response_model == "HermesPmAskCardResponse"
+    recommend = service.render(
+        "hermes.pm.recommend",
+        {
+            "initiative": "INIT-REALWORLD-001",
+            "outline": "Home is empty.",
+            "files": "### C1\nJob text",
+            "scorecard": "C2 3.0",
+            "answers": "(none)",
+            "ask_file": "(none)",
+        },
+    )
+    assert "/prd-recommend" in recommend.system
+    assert "not against the 0-3" in recommend.system
+    assert recommend.response_model == "HermesPmRecommendResponse"
 
 
 def test_think_response_coerces_locked_decision_objects() -> None:
@@ -183,45 +244,129 @@ def test_missing_variable_fails_closed() -> None:
         service.render("hermes.pm.outline", {"source_message_id": "x"})
 
 
-def test_complete_uses_stub_when_llm_fails() -> None:
+def test_complete_raises_when_llm_fails() -> None:
     litellm = MagicMock()
-    litellm.complete_json = AsyncMock(side_effect=RuntimeError("no model"))
+    litellm.complete = AsyncMock(side_effect=RuntimeError("no model"))
     service = PromptService(litellm)
     asyncio.run(service.initialize())
-    result = asyncio.run(
-        service.complete(
-            "hermes.eng.grade",
-            {
-                "pr_ref": "demo/x",
-                "verify_exit": 0,
-                "notes": "n",
-                "threshold_x": 2.7,
-                "rubric_dimensions": "verify",
-            },
+    with pytest.raises(RuntimeError, match="no model"):
+        asyncio.run(
+            service.complete(
+                "hermes.eng.grade",
+                {
+                    "pr_ref": "demo/x",
+                    "verify_exit": 0,
+                    "notes": "n",
+                    "threshold_x": 2.7,
+                    "rubric_dimensions": "verify",
+                },
+            )
         )
-    )
-    assert result.stub is True
-    assert result.model == "stub"
-    assert "process_integrity" in result.parsed["scores"]
 
 
-def test_outline_stub_keeps_timeout_reason() -> None:
+def test_complete_raises_on_timeout() -> None:
     litellm = MagicMock()
-    litellm.complete_json = AsyncMock(side_effect=TimeoutError())
+    litellm.complete = AsyncMock(side_effect=TimeoutError())
     service = PromptService(litellm)
     asyncio.run(service.initialize())
-    result = asyncio.run(
-        service.complete(
-            "hermes.pm.outline",
-            {
-                "source_message_id": "abc",
-                "rubric_dimensions": "citation",
-                "outline": "Home is empty. Publish one article after register.",
-            },
+    with pytest.raises(TimeoutError):
+        asyncio.run(
+            service.complete(
+                "hermes.pm.outline",
+                {
+                    "source_message_id": "abc",
+                    "rubric_dimensions": "citation",
+                    "outline": "Home is empty. Publish one article after register.",
+                },
+            )
         )
+
+
+def test_quality_coerces_files_alias_and_markdown_bars() -> None:
+    parsed = HermesPmQualityResponse.model_validate(
+        {
+            "files": [
+                {
+                    "path": "prd/reports/INIT-REALWORLD-001-prd-think.md",
+                    "handover_ready": False,
+                    "rubric_pm_scores": {"citation": 3, "journeys": 3},
+                    "material_fails": [
+                        {
+                            "criterion": "B2",
+                            "finding": "FAIL",
+                            "evidence": "CAP-03 collapses draft and publish.",
+                        }
+                    ],
+                }
+            ]
+        }
     )
-    texts = [item.get("text", "") for item in result.parsed.get("findings") or []]
-    assert any("TimeoutError: TimeoutError" in text for text in texts)
+    assert parsed.candidates[0].label == "C1"
+    assert parsed.candidates[0].scores["citation"] == 3
+    assert parsed.candidates[0].bars[0].bar == "B2"
+    md = quality_from_markdown(
+        "## C1: `prd/reports/INIT-REALWORLD-001-prd-think.md`\n\n"
+        "**B1 (Job-to-be-done):** PASS  \n"
+        '*"Visitor sees empty home."*\n'
+        "**B9:** FAIL  \n"
+        "OQ-03 is contradictory.\n"
+    )
+    scored = HermesPmQualityResponse.model_validate(md)
+    assert scored.candidates[0].label == "C1"
+    assert {row.bar: row.result for row in scored.candidates[0].bars}["B1"] == "PASS"
+    assert {row.bar: row.result for row in scored.candidates[0].bars}["B9"] == "FAIL"
+
+
+def test_ask_and_recommend_coerce() -> None:
+    asked = HermesPmAskResponse.model_validate(
+        {
+            "questions": [
+                {
+                    "prompt": "Home list?",
+                    "options": ["all published", "one article"],
+                    "why": "C1 vs C2",
+                    "quote": "OQ-03",
+                },
+                {"prompt": "open?", "options": ["essay"]},
+            ]
+        }
+    )
+    assert len(asked.forks) == 1
+    assert asked.forks[0].id == "F1"
+    assert asked.forks[0].choices[0] == "all published"
+    assert cap_ask_forks(asked.model_dump()["forks"], max_forks=3)
+    picked = HermesPmRecommendResponse.model_validate(
+        {
+            "pick": "C2-wins",
+            "reason": "highest score",
+            "rejected": [{"label": "C1", "text": "OQ still open"}],
+            "locks": ["multi-article"],
+            "engineering_ready": "READY",
+        }
+    )
+    assert picked.recommend == "C2"
+    assert picked.engineering_ready == "no"
+    assert picked.why_not[0].label == "C1"
+    assert picked.residual_locks == ["multi-article"]
+    from src.models.prompt_models import recommend_from_markdown
+
+    memo = recommend_from_markdown(
+        "# INIT-REALWORLD-001 Recommendation\n\n"
+        "## Recommend: **none**\n\n"
+        "**Path:** N/A\n\n"
+        "## Why\n\n"
+        "None of the four candidates are engineering-ready.\n\n"
+        "## Why not\n\n"
+        "- C1: still has OQ-03\n"
+        "- C2: added unpublish\n\n"
+        "## Residual locks\n\n"
+        "- multi-article home\n"
+    )
+    scored = HermesPmRecommendResponse.model_validate(memo)
+    assert scored.recommend == "none"
+    assert scored.engineering_ready == "no"
+    assert "engineering-ready" in scored.why
+    assert scored.why_not[0].label == "C1"
 
 
 def test_llm_error_text_survives_empty_timeout() -> None:

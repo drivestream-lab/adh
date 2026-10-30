@@ -1,7 +1,6 @@
 """Load YAML prompt templates, render variables, validate structured responses."""
 
 import asyncio
-import copy
 import json
 import re
 from pathlib import Path
@@ -22,6 +21,12 @@ from src.models.prompt_models import (
     PromptRunResult,
     PromptTemplateDocument,
     RenderedPrompt,
+    coerce_quality_payload,
+    quality_from_markdown,
+    quality_has_signal,
+    coerce_recommend_payload,
+    recommend_from_markdown,
+    recommend_has_signal,
 )
 
 logger = get_logger()
@@ -118,57 +123,64 @@ class PromptService(BaseInfraService):
             spec.output.strip().lower() != "markdown" if json_object is None else json_object
         )
         raw = ""
-        try:
-            async with self._complete_gate:
-                if want_json:
-                    parsed, raw = await self._litellm.complete_json(
-                        rendered.system,
-                        rendered.user,
-                        max_tokens=rendered.max_tokens,
-                        model=alias,
-                        temperature=spec.temperature,
-                    )
-                    validated = self.parse_response(template_id, parsed)
-                else:
-                    raw = await self._litellm.complete(
-                        rendered.system,
-                        rendered.user,
-                        max_tokens=rendered.max_tokens,
-                        model=alias,
-                        temperature=spec.temperature,
-                        json_object=False,
-                    )
-                    validated = _parse_markdown_or_json(self, template_id, raw, variables)
-            return PromptRunResult(
-                template_id=spec.id,
-                version=spec.version,
-                parsed=validated,
-                raw=raw,
+        async with self._complete_gate:
+            raw = await self._litellm.complete(
+                rendered.system,
+                rendered.user,
+                max_tokens=rendered.max_tokens,
                 model=alias,
-                stub=False,
+                temperature=spec.temperature,
+                json_object=want_json,
             )
-        except asyncio.CancelledError:
-            raise
+        if want_json:
+            validated = self._parse_json_response(template_id, raw)
+        else:
+            validated = _parse_markdown_or_json(self, template_id, raw, variables)
+        return PromptRunResult(
+            template_id=spec.id,
+            version=spec.version,
+            parsed=validated,
+            raw=raw,
+            model=alias,
+            stub=False,
+        )
+
+    def _parse_json_response(self, template_id: str, raw: str) -> dict[str, Any]:
+        spec = self.get(template_id)
+        parsed: Optional[dict[str, Any]] = None
+        parse_error: Optional[Exception] = None
+        try:
+            parsed = _parse_json_object(raw)
         except Exception as exc:
-            logger.warning(
-                "Prompt complete fell back to stub",
-                template_id=template_id,
-                error=str(exc),
-                preview=(raw or str(exc))[:400],
-            )
-            stub = copy.deepcopy(spec.stub)
-            findings = stub.get("findings")
-            if isinstance(findings, list):
-                findings.append({"lane": "eng", "text": _llm_error_text(exc)})
-            validated = self.parse_response(template_id, stub)
-            return PromptRunResult(
-                template_id=spec.id,
-                version=spec.version,
-                parsed=validated,
-                raw=(raw or str(exc))[:8000],
-                model="stub",
-                stub=True,
-            )
+            parse_error = exc
+        if spec.response.model == "HermesPmQualityResponse":
+            coerced = coerce_quality_payload(parsed or {})
+            if not quality_has_signal(coerced):
+                markdown = quality_from_markdown(raw)
+                if quality_has_signal(markdown):
+                    coerced = markdown
+            if not quality_has_signal(coerced):
+                preview = (raw or "")[:240]
+                raise ValidationError(
+                    f"quality returned no B-bar and no scores: {preview!r}"
+                ) from parse_error
+            return self.parse_response(template_id, coerced)
+        if spec.response.model == "HermesPmRecommendResponse":
+            coerced = coerce_recommend_payload(parsed or {})
+            if parsed is None or not recommend_has_signal(coerced):
+                markdown = recommend_from_markdown(raw)
+                if recommend_has_signal(markdown):
+                    coerced = markdown
+            if not recommend_has_signal(coerced):
+                preview = (raw or "")[:240]
+                raise ValidationError(f"recommend returned no pick: {preview!r}") from parse_error
+            return self.parse_response(template_id, coerced)
+        if parsed is None:
+            preview = (raw or "")[:240]
+            raise ValidationError(
+                f"prompt {template_id} did not return JSON: {preview!r}"
+            ) from parse_error
+        return self.parse_response(template_id, parsed)
 
 
 def _load_prompt_root(

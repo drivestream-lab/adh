@@ -26,21 +26,3 @@ user: |
   {{ outline }}
 response:
   model: HermesPmThinkResponse
-stub:
-  proposed_init: INIT-PENDING
-  candidate_label: C1
-  job: stub
-  why_now: stub
-  if_we_do_nothing: stub
-  kill_assumption: Fails if LiteLLM does not return a candidate
-  locked_decisions: []
-  in_scope: []
-  non_goals: []
-  capabilities: []
-  requirements: []
-  journeys: []
-  open_questions: []
-  whole_product_delta: stub
-  equivalent_product_notes: stub
-  summary: LiteLLM unavailable; think C1 stub. Do not promote.
-  file_body: ""

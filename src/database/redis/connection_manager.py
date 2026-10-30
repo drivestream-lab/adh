@@ -15,8 +15,25 @@ class RedisConnectionManager:
 
     def __init__(self) -> None:
         self._client: Optional[Redis] = None
+        self._pubsub_client: Optional[Redis] = None
         self._initialized: bool = False
         self._settings = RedisSettings.get_instance()
+
+    def _new_client(self, *, max_connections: int, socket_timeout: Optional[int]) -> Redis:
+        return Redis(
+            host=self._settings.host,
+            port=self._settings.port,
+            db=self._settings.db,
+            password=(
+                self._settings.password.get_secret_value() if self._settings.password else None
+            ),
+            ssl=self._settings.use_ssl,
+            socket_timeout=socket_timeout,
+            socket_connect_timeout=self._settings.connection_timeout,
+            retry_on_timeout=self._settings.retry_on_timeout,
+            max_connections=max_connections,
+            decode_responses=True,
+        )
 
     def initialize(self) -> None:
         """Initialize Redis connection."""
@@ -27,27 +44,20 @@ class RedisConnectionManager:
         logger.info("Initializing Redis connection manager")
 
         try:
-            self._client = Redis(
-                host=self._settings.host,
-                port=self._settings.port,
-                db=self._settings.db,
-                password=(
-                    self._settings.password.get_secret_value() if self._settings.password else None
-                ),
-                ssl=self._settings.use_ssl,
-                socket_timeout=self._settings.socket_timeout,
-                socket_connect_timeout=self._settings.connection_timeout,
-                retry_on_timeout=self._settings.retry_on_timeout,
+            self._client = self._new_client(
                 max_connections=self._settings.pool_max_size,
-                decode_responses=True,
+                socket_timeout=self._settings.socket_timeout,
             )
-
+            self._pubsub_client = self._new_client(
+                max_connections=max(int(self._settings.pubsub_pool_max_size), 16),
+                socket_timeout=None,
+            )
             self._initialized = True
             logger.info("Redis connection manager initialized successfully")
         except Exception as e:
             logger.error("Failed to initialize Redis connection", error=str(e))
-            if self._client:
-                self._client = None
+            self._client = None
+            self._pubsub_client = None
             raise
 
     async def close(self) -> None:
@@ -58,6 +68,9 @@ class RedisConnectionManager:
 
         logger.info("Closing Redis connection manager")
 
+        if self._pubsub_client:
+            await self._pubsub_client.aclose()
+            self._pubsub_client = None
         if self._client:
             await self._client.aclose()
             self._client = None
@@ -79,6 +92,13 @@ class RedisConnectionManager:
             raise RuntimeError("Redis connection manager not initialized")
 
         return self._client
+
+    def get_pubsub_client(self) -> Redis:
+        """Long-lived Redis client for Pub/Sub. Separate pool from cache commands."""
+        if not self._initialized or self._pubsub_client is None:
+            logger.error("Redis connection manager not initialized")
+            raise RuntimeError("Redis connection manager not initialized")
+        return self._pubsub_client
 
     async def set(self, key: str, value: str, ttl: Optional[int] = None) -> bool:
         """Set value in Redis.

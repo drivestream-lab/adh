@@ -21,23 +21,3 @@ user: |
   {{ outline }}
 response:
   model: HermesPmOutlineResponse
-stub:
-  proposed_init: INIT-PENDING
-  branch_policy: feature/* PR on meta; Lead promotes; Hermes does not merge.
-  summary: LiteLLM unavailable; stub outline proposal so Buzz still lands.
-  journeys:
-    - Lead posts outline on Buzz
-    - Hermes acks and allocates INIT from convention
-  reqs_covered:
-    - R-2 Buzz plane
-    - R-9 PM lane
-  findings:
-    - lane: pm
-      text: LiteLLM did not return JSON; stub recorded so Buzz/ledger still land.
-  citations:
-    - "#adh-ops"
-  scores:
-    citation: 2.0
-    journeys: 2.0
-    req_coverage: 2.0
-    findings_quality: 1.0

@@ -13,6 +13,8 @@
     "install:mac": "npm run build:mac && node electron/install-mac.cjs"
   },
   "dependencies": {
+    "dompurify": "^3.4.17",
+    "marked": "^18.1.2",
     "typescript": "^5.8.3",
     "vite": "^7.1.7"
   },

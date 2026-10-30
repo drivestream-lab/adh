@@ -140,6 +140,8 @@ def test_inventory_reads_init_ids_from_meta(tmp_path: Path) -> None:
     (meta / "prd" / "README.md").write_text("# PRDs\n", encoding="utf-8")
     (meta / "prd" / "INIT-REALWORLD-HOME.md").write_text("# prd\n", encoding="utf-8")
     (reports / "INIT-REALWORLD-HOME-prd-think.md").write_text("# c1\n", encoding="utf-8")
+    (reports / "INIT-REALWORLD-HOME-prd-ask.md").write_text("# ask\n", encoding="utf-8")
+    (reports / "INIT-REALWORLD-HOME-prd-recommend.md").write_text("# rec\n", encoding="utf-8")
     (reports / "INIT-REALWORLD-PENDING-prd-think.md").write_text("# skip\n", encoding="utf-8")
     service = PmWorkspaceService(MagicMock())
     listing = service.inventory(_tenant(meta))

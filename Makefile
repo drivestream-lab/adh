@@ -1,5 +1,7 @@
 .PHONY: setup check check-ci format format-check lint lint-check types layers test run desktop-dev desktop-install orch-spawn orch-merge orch-kill
 
+# Quality ingress is Makefile-only: `make check` then `make test`.
+
 setup:
 	@bash scripts/setup_dev.sh
 
@@ -26,7 +28,7 @@ layers:
 	.venv/bin/lint-imports
 
 test:
-	env -u PYTHONPATH PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest tests/unit/ -v
+	env -u PYTHONPATH PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest tests/unit/ -v -p pytest_asyncio.plugin
 
 run:
 	.venv/bin/python -m src.main

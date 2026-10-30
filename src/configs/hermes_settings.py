@@ -89,6 +89,17 @@ class HermesSettings(BaseSettings):
         le=4,
         description="Max file-backed ready/quality passes per outline.",
     )
+    pm_max_ask_forks: int = Field(
+        default=3,
+        ge=1,
+        le=3,
+        description="Max closed forks /prd-ask may pose. Zero valid forks skips to recommend.",
+    )
+    pm_ask_wait_seconds: float = Field(
+        default=3600.0,
+        ge=0,
+        description="How long the walker waits for Lead fork answers. 0 skips to provisional recommend.",
+    )
     litellm_concurrency: int = Field(
         default=2,
         ge=1,

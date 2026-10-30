@@ -19,7 +19,9 @@ from src.models.tenant_models import TenantContext
 logger = get_logger()
 
 _PM_APP_SLUG = "adh-dev-pm"
-_INIT_STEM = re.compile(r"^(INIT-[A-Z0-9-]+?)(?:-PRD-THINK(?:-\d+)?|-PRD-QUALITY)?$")
+_INIT_STEM = re.compile(
+    r"^(INIT-[A-Z0-9-]+?)(?:-PRD-THINK(?:-\d+)?|-PRD-QUALITY|-PRD-ASK|-PRD-RECOMMEND)?$"
+)
 
 
 @dataclass
@@ -35,6 +37,18 @@ def think_path(initiative: str, run: int) -> str:
     if run <= 1:
         return f"prd/reports/{initiative}-prd-think.md"
     return f"prd/reports/{initiative}-prd-think-{run}.md"
+
+
+def quality_path(initiative: str) -> str:
+    return f"prd/reports/{initiative}-prd-quality.md"
+
+
+def ask_path(initiative: str) -> str:
+    return f"prd/reports/{initiative}-prd-ask.md"
+
+
+def recommend_path(initiative: str) -> str:
+    return f"prd/reports/{initiative}-prd-recommend.md"
 
 
 def next_free_think_runs(initiative: str, existing: list[str]) -> tuple[int, int]:
@@ -209,6 +223,12 @@ class PmWorkspaceService(BaseInfraService):
         dest.write_text(contents, encoding="utf-8")
         logger.info("Wrote PM artifact to workspace", path=str(dest), slug=tenant.slug)
         return dest
+
+    def read_local(self, tenant: TenantContext, relative_path: str) -> str:
+        dest = Path(tenant.meta_root).expanduser() / relative_path
+        if not dest.is_file():
+            return ""
+        return dest.read_text(encoding="utf-8")
 
     async def _put_github(
         self,

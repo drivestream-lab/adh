@@ -16,8 +16,11 @@ from src.configs.rubrics import RUBRIC_ENG, RUBRIC_PM, weighted_overall
 from src.infra_services.hermes_store_service import HermesStoreService
 from src.infra_services.pm_workspace_service import (
     PmWorkspaceService,
+    ask_path,
     next_free_think_runs,
     next_programme_init,
+    quality_path,
+    recommend_path,
     skeleton_material_fails,
     think_path,
 )
@@ -41,6 +44,13 @@ from src.models.buzz_models import (
     MessageRead,
 )
 from src.models.hermes_models import HermesArtifactRead, HermesBriefRequest, HermesGradeRequest
+from src.models.prompt_models import (
+    ask_card_has_signal,
+    cap_ask_forks,
+    cap_lead_questions,
+    quality_card_has_signal,
+    quality_has_signal,
+)
 
 
 class HermesService(BaseBusinessService):
@@ -69,6 +79,12 @@ class HermesService(BaseBusinessService):
         self._work_tasks: set[asyncio.Task[None]] = set()
         self._inflight: dict[str, str] = {}
         self._awaiting_init: dict[str, dict[str, Any]] = {}
+        self._awaiting_ask: dict[str, dict[str, Any]] = {}
+        self._awaiting_recommend: dict[str, dict[str, Any]] = {}
+        self._ask_events: dict[str, asyncio.Event] = {}
+        self._ask_answers: dict[str, dict[str, str]] = {}
+        self._outline_tasks: dict[str, asyncio.Task[None]] = {}
+        self._open_initiative: dict[str, str] = {}
 
     async def initialize(self) -> None:
         await super().initialize()
@@ -153,7 +169,7 @@ class HermesService(BaseBusinessService):
             "model": model,
             "stub": result.stub,
             "artifact": parsed,
-            "raw": raw[:4000],
+            "raw": raw[:32000],
         }
         posted = await self._post(
             GLOBAL_MEMORY_ROOM,
@@ -230,7 +246,7 @@ class HermesService(BaseBusinessService):
             "rca": parsed.get("rca"),
             "harness_proposal": parsed.get("harness_proposal"),
             "artifact": parsed,
-            "raw": raw[:4000],
+            "raw": raw[:32000],
         }
         posted = await self._post(self._settings.ops_room, "adh.reviewer", body, payload)
         artifact = await self._persist(
@@ -310,7 +326,7 @@ class HermesService(BaseBusinessService):
             "stub": result.stub,
             "artifact": parsed,
             "file_body": file_body,
-            "raw": result.raw[:4000],
+            "raw": result.raw[:32000],
         }
         posted = await self._post(
             tenant.memory_room,
@@ -366,20 +382,23 @@ class HermesService(BaseBusinessService):
             },
         )
         parsed = apply_ready_gate(dict(result.parsed), files)
-        if not parsed.get("candidates"):
+        if not quality_has_signal(parsed):
             raise TimeoutError(
                 self._copy(
                     "hermes.pm.error.ready-no-bars",
                     {"pass_number": pass_number, "initiative": initiative},
                 )
             )
+        parsed = await self._apply_quality_card(
+            initiative, parsed, files, outline or "", result.model
+        )
         overall = max(
             (float(cand.get("overall") or 0) for cand in parsed["candidates"]),
             default=0.0,
         )
         path = f"prd/reports/{initiative}-prd-quality.md"
         body = self._render_quality_hop_body(
-            initiative, parsed, result.model, pass_number, max_passes
+            initiative, parsed, result.model, pass_number, max_passes, path
         )
         file_body = self._render_quality_file(
             initiative, parsed, path, result.model, pass_number, max_passes
@@ -399,7 +418,7 @@ class HermesService(BaseBusinessService):
             "stub": result.stub,
             "artifact": parsed,
             "file_body": file_body,
-            "raw": result.raw[:4000],
+            "raw": result.raw[:32000],
         }
         posted = await self._post(tenant.memory_room, "adh.pm", body, payload)
         artifact = await self._persist(
@@ -424,6 +443,205 @@ class HermesService(BaseBusinessService):
         )
         return artifact
 
+    async def run_pm_ask(
+        self,
+        *,
+        initiative: str,
+        files: list[dict[str, str]],
+        tenant: TenantContext,
+        outline: str = "",
+        scorecard: str = "",
+        answers: str = "(none)",
+        source_message_id: Optional[UUID] = None,
+    ) -> HermesArtifactRead:
+        """Pose closed forks that change the pick. Does not recommend or promote."""
+        max_forks = int(self._settings.pm_max_ask_forks)
+        result = await self._prompts.complete(
+            "hermes.pm.ask",
+            {
+                "initiative": initiative,
+                "source_message_id": str(source_message_id or "none"),
+                "outline": (outline or "").strip() or "(none)",
+                "files": _format_ready_files(files),
+                "scorecard": (scorecard or "").strip() or "(none)",
+                "answers": answers,
+                "max_forks": max_forks,
+            },
+        )
+        parsed = dict(result.parsed)
+        parsed["forks"] = cap_ask_forks(parsed.get("forks"), max_forks=max_forks)
+        parsed = await self._apply_ask_card(initiative, parsed, files, outline or "", result.model)
+        path = ask_path(initiative)
+        body = self._render_ask_hop_body(initiative, parsed, result.model)
+        file_body = self._render_ask_file(initiative, parsed, path)
+        payload = {
+            "lane": "pm",
+            "hop": "ask",
+            "initiative": initiative,
+            "programme_slug": tenant.slug,
+            "path": path,
+            "model": result.model,
+            "stub": result.stub,
+            "artifact": parsed,
+            "file_body": file_body,
+            "raw": result.raw[:32000],
+        }
+        posted = await self._post(tenant.memory_room, "adh.pm", body, payload)
+        artifact = await self._persist(
+            kind="pm_ask",
+            lane="pm",
+            initiative=initiative,
+            rubric_id=RUBRIC_PM["id"],
+            overall=None,
+            recommend_merge=None,
+            body=body,
+            payload=payload,
+            buzz_id=posted.id,
+            dimension="findings_quality",
+            repo=tenant.meta_repo,
+            scope=MEMORY_SCOPE_REPO,
+        )
+        self.logger.info(
+            "Hermes ask hop persisted",
+            initiative=initiative,
+            forks=len(parsed.get("forks") or []),
+            stub=result.stub,
+        )
+        return artifact
+
+    async def run_pm_recommend(
+        self,
+        *,
+        initiative: str,
+        files: list[dict[str, str]],
+        tenant: TenantContext,
+        quality: HermesArtifactRead,
+        outline: str = "",
+        scorecard: str = "",
+        answers: str = "(none)",
+        ask_file: str = "(none)",
+        source_message_id: Optional[UUID] = None,
+    ) -> HermesArtifactRead:
+        """Recommend a think file vs the brief. Does not promote, draft, or merge."""
+        result = await self._prompts.complete(
+            "hermes.pm.recommend",
+            {
+                "initiative": initiative,
+                "source_message_id": str(source_message_id or "none"),
+                "outline": (outline or "").strip() or "(none)",
+                "files": _format_ready_files(files),
+                "scorecard": (scorecard or "").strip() or "(none)",
+                "answers": answers,
+                "ask_file": ask_file,
+            },
+        )
+        parsed = apply_recommend_gate(dict(result.parsed), files, quality)
+        path = recommend_path(initiative)
+        body = self._render_recommend_hop_body(initiative, parsed, result.model)
+        file_body = str(parsed.get("file_body") or "").strip()
+        if not file_body.startswith("#"):
+            file_body = self._render_recommend_file(initiative, parsed, path)
+        parsed["file_body"] = file_body
+        payload = {
+            "lane": "pm",
+            "hop": "recommend",
+            "initiative": initiative,
+            "programme_slug": tenant.slug,
+            "path": path,
+            "model": result.model,
+            "stub": result.stub,
+            "artifact": parsed,
+            "file_body": file_body,
+            "raw": result.raw[:32000],
+        }
+        posted = await self._post(tenant.memory_room, "adh.pm", body, payload)
+        artifact = await self._persist(
+            kind="pm_recommend",
+            lane="pm",
+            initiative=initiative,
+            rubric_id=RUBRIC_PM["id"],
+            overall=None,
+            recommend_merge=None,
+            body=body,
+            payload=payload,
+            buzz_id=posted.id,
+            dimension="findings_quality",
+            repo=tenant.meta_repo,
+            scope=MEMORY_SCOPE_REPO,
+        )
+        self.logger.info(
+            "Hermes recommend hop persisted",
+            initiative=initiative,
+            recommend=parsed.get("recommend"),
+            stub=result.stub,
+        )
+        return artifact
+
+    async def replay_pm_ask_recommend(
+        self,
+        tenant: TenantContext,
+        initiative: str,
+        outline: str,
+        *,
+        wait_seconds: Optional[float] = 0,
+    ) -> None:
+        """Run ask then recommend on existing think/quality files. Does not allocate INIT."""
+        thinks: list[HermesArtifactRead] = []
+        for run in range(1, 9):
+            path = think_path(initiative, run)
+            body = self._workspace.read_local(tenant, path)
+            if not body.strip():
+                continue
+            thinks.append(
+                HermesArtifactRead(
+                    kind=f"pm_think_c{run}",
+                    initiative=initiative,
+                    rubric_id=RUBRIC_PM["id"],
+                    body=body[:500],
+                    payload={
+                        "path": path,
+                        "file_body": body,
+                        "artifact": {"candidate_label": f"C{run}"},
+                        "hop": f"think-c{run}",
+                    },
+                )
+            )
+        qpath = quality_path(initiative)
+        qbody = self._workspace.read_local(tenant, qpath)
+        if not thinks or not qbody.strip():
+            raise TimeoutError("replay needs think and quality files on the meta repo")
+        quality = HermesArtifactRead(
+            kind="pm_quality",
+            initiative=initiative,
+            rubric_id=RUBRIC_PM["id"],
+            body=qbody,
+            payload={"path": qpath, "file_body": qbody, "artifact": {}, "hop": "quality"},
+        )
+        meta = {
+            "initiative": initiative,
+            "programme_slug": tenant.slug,
+            "status": "in_progress",
+            "hop": "ask",
+        }
+        previous = float(self._settings.pm_ask_wait_seconds)
+        if wait_seconds is not None:
+            self._settings = self._settings.model_copy(
+                update={"pm_ask_wait_seconds": float(wait_seconds)}
+            )
+        try:
+            await self._ask_then_recommend(
+                tenant,
+                tenant.ops_room,
+                outline,
+                initiative,
+                None,
+                meta,
+                thinks,
+                quality,
+            )
+        finally:
+            self._settings = self._settings.model_copy(update={"pm_ask_wait_seconds": previous})
+
     async def list_ledger(self) -> list[HermesArtifactRead]:
         return await self._store.list_ledger()
 
@@ -432,12 +650,54 @@ class HermesService(BaseBusinessService):
         tenant = self._tenants.by_ops_room(room)
         if tenant is None:
             return
+        if await self._try_lead_stop(tenant, room, message):
+            return
+        if await self._try_ask_answer(tenant, room, message):
+            return
+        if await self._try_promote_pick(tenant, room, message):
+            return
         if self._is_lead_init_name(message, tenant):
             await self._on_named_init(tenant, room, message)
             return
         if not self._is_lead_outline(message):
             return
         fingerprint = outline_fingerprint(message.body)
+        if self._tenant_has_open_work(tenant.slug):
+            token = _lock_token(tenant.slug, fingerprint)
+            if token in self._inflight:
+                owner = self._inflight.get(token) or await self._redis.get(
+                    self._lock_key(tenant.slug, fingerprint)
+                )
+                await self._status(
+                    room,
+                    self._copy("hermes.pm.status.duplicate"),
+                    EventType.STALL,
+                    {
+                        "status": "duplicate",
+                        "outline_fingerprint": fingerprint,
+                        "programme_slug": tenant.slug,
+                        "source_message_id": str(message.id) if message.id else "",
+                        "in_progress_source": owner,
+                    },
+                )
+                return
+            await self._status(
+                room,
+                self._copy("hermes.pm.status.busy"),
+                EventType.STALL,
+                {
+                    "status": "busy",
+                    "outline_fingerprint": fingerprint,
+                    "programme_slug": tenant.slug,
+                    "source_message_id": str(message.id) if message.id else "",
+                },
+            )
+            self.logger.info(
+                "Ignored Lead outline while programme work is open",
+                slug=tenant.slug,
+                fingerprint=fingerprint,
+            )
+            return
         source_id = str(message.id) if message.id else ""
         claimed = await self._claim_outline(tenant.slug, fingerprint, source_id)
         if not claimed:
@@ -481,11 +741,14 @@ class HermesService(BaseBusinessService):
                 "source_message_id": source_id,
             },
         )
-        task = asyncio.create_task(
-            self._run_outline_work(tenant, room, message.body, fingerprint, source_id, message.id)
+        self._track_outline_task(
+            tenant.slug,
+            asyncio.create_task(
+                self._run_outline_work(
+                    tenant, room, message.body, fingerprint, source_id, message.id
+                )
+            ),
         )
-        self._work_tasks.add(task)
-        task.add_done_callback(self._work_tasks.discard)
 
     async def _run_outline_work(
         self,
@@ -515,6 +778,7 @@ class HermesService(BaseBusinessService):
                 await self._ask_for_init(tenant, room, outline, fingerprint, source_id)
                 return
             await self._clear_pending_init(tenant.slug)
+            self._open_initiative[tenant.slug] = resolved
             max_think = int(self._settings.pm_max_think_runs)
             max_ready = int(self._settings.pm_max_ready_passes)
             first_run, second_run = next_free_think_runs(resolved, listing.think_paths)
@@ -576,6 +840,9 @@ class HermesService(BaseBusinessService):
             )
         finally:
             await self._release_outline(tenant.slug, fingerprint)
+            self._open_initiative.pop(tenant.slug, None)
+            if self._outline_tasks.get(tenant.slug) is asyncio.current_task():
+                self._outline_tasks.pop(tenant.slug, None)
             if not awaiting_init:
                 await self._clear_pending_init(tenant.slug)
 
@@ -701,17 +968,15 @@ class HermesService(BaseBusinessService):
             EventType.PROGRESS,
             {**meta, "hop": "loop", "stop_reason": stop_reason},
         )
-        await self._status(
+        await self._ask_then_recommend(
+            tenant,
             room,
-            self._copy("hermes.pm.status.promote-is-you", {"initiative": initiative}),
-            EventType.DONE,
-            {
-                **meta,
-                "status": "done",
-                "hop": "quality",
-                "overall": quality.overall,
-                "stop_reason": stop_reason,
-            },
+            outline,
+            initiative,
+            source_message_id,
+            {**meta, "stop_reason": stop_reason, "overall": quality.overall},
+            thinks,
+            quality,
         )
 
     async def _author_think_hop(
@@ -872,22 +1137,308 @@ class HermesService(BaseBusinessService):
         )
         return quality
 
+    async def _ask_then_recommend(
+        self,
+        tenant: TenantContext,
+        room: str,
+        outline: str,
+        initiative: str,
+        source_message_id: Optional[UUID],
+        meta: dict[str, Any],
+        thinks: list[HermesArtifactRead],
+        quality: HermesArtifactRead,
+    ) -> None:
+        ask, answers = await self._ask_pass(
+            tenant,
+            room,
+            outline,
+            initiative,
+            source_message_id,
+            meta,
+            thinks,
+            quality,
+        )
+        if answers.get("_skip") == "stop":
+            await self._clear_pending_ask(tenant.slug)
+            await self._status(
+                room,
+                self._copy("hermes.pm.status.ask-stopped", {"initiative": initiative}),
+                EventType.STALL,
+                {**meta, "status": "stopped", "hop": "ask"},
+            )
+            await self._status(
+                room,
+                self._copy("hermes.pm.status.promote-is-you", {"initiative": initiative}),
+                EventType.DONE,
+                {**meta, "status": "done", "hop": "ask"},
+            )
+            return
+        if not answers or answers.get("_skip"):
+            await self._status(
+                room,
+                self._copy(
+                    "hermes.pm.status.ask-timeout-provisional",
+                    {"initiative": initiative},
+                ),
+                EventType.PROGRESS,
+                {**meta, "hop": "ask", "status": "provisional"},
+            )
+        await self._recommend_pass(
+            tenant,
+            room,
+            outline,
+            initiative,
+            source_message_id,
+            meta,
+            thinks,
+            quality,
+            ask,
+            answers,
+        )
+        await self._status(
+            room,
+            self._copy("hermes.pm.status.promote-is-you", {"initiative": initiative}),
+            EventType.DONE,
+            {
+                **meta,
+                "status": "done",
+                "hop": "recommend",
+                "overall": quality.overall,
+            },
+        )
+
+    async def _ask_pass(
+        self,
+        tenant: TenantContext,
+        room: str,
+        outline: str,
+        initiative: str,
+        source_message_id: Optional[UUID],
+        meta: dict[str, Any],
+        thinks: list[HermesArtifactRead],
+        quality: HermesArtifactRead,
+    ) -> tuple[HermesArtifactRead, dict[str, str]]:
+        meta = {**meta, "hop": "ask"}
+        files = [_think_file_ref(item) for item in thinks]
+        qpath = str(quality.payload.get("path") or quality_path(initiative))
+        files.append(
+            {
+                "label": "quality",
+                "path": qpath,
+                "file_body": str(quality.payload.get("file_body") or quality.body),
+            }
+        )
+        scorecard = self._render_quality_hop(quality)
+        max_forks = int(self._settings.pm_max_ask_forks)
+        await self._heartbeat(
+            "adh.pm",
+            self._copy("hermes.pm.heartbeat.ask"),
+            EventType.PROGRESS,
+            tenant.ops_room,
+        )
+        await self._status(
+            room,
+            self._copy(
+                "hermes.pm.status.ask-next",
+                {"initiative": initiative, "max_forks": max_forks},
+            ),
+            EventType.PROGRESS,
+            meta,
+        )
+        await self._status(
+            room,
+            self._copy("hermes.pm.status.calling-model", {"hop": "ask"}),
+            EventType.PROGRESS,
+            meta,
+        )
+        artifact = await self._with_pm_progress(
+            room,
+            meta,
+            self.run_pm_ask(
+                initiative=initiative,
+                files=files,
+                tenant=tenant,
+                outline=outline,
+                scorecard=scorecard,
+                source_message_id=source_message_id,
+            ),
+        )
+        self._raise_if_stub(artifact, "ask")
+        await self._publish_hop(
+            tenant,
+            room,
+            artifact,
+            f"docs({initiative}): prd-ask",
+            meta,
+        )
+        forks = list((artifact.payload.get("artifact") or {}).get("forks") or [])
+        await self._status(
+            room,
+            self._copy(
+                "hermes.pm.status.ask-returned",
+                {"initiative": initiative, "fork_count": len(forks)},
+            ),
+            EventType.PROGRESS,
+            meta,
+        )
+        await self._post_logical(room, self._render_ask_hop(artifact), {**meta, "hop": "ask"})
+        await self._status(
+            room,
+            self._copy(
+                "hermes.pm.status.ask-card",
+                {
+                    "initiative": initiative,
+                    "fork_block": _format_fork_block(forks),
+                },
+            ),
+            EventType.PROGRESS,
+            {**meta, "hop": "ask", "status": "need_ask", "choices": forks},
+        )
+        timeout = float(self._settings.pm_ask_wait_seconds)
+        if not forks or timeout <= 0:
+            return artifact, {}
+        await self._store_pending_ask(
+            tenant,
+            room,
+            outline,
+            initiative,
+            thinks,
+            quality,
+            forks,
+        )
+        answers = await self._wait_ask_answers(tenant.slug, timeout)
+        await self._clear_pending_ask(tenant.slug)
+        return artifact, answers
+
+    async def _recommend_pass(
+        self,
+        tenant: TenantContext,
+        room: str,
+        outline: str,
+        initiative: str,
+        source_message_id: Optional[UUID],
+        meta: dict[str, Any],
+        thinks: list[HermesArtifactRead],
+        quality: HermesArtifactRead,
+        ask: HermesArtifactRead,
+        answers: dict[str, str],
+    ) -> HermesArtifactRead:
+        meta = {**meta, "hop": "recommend"}
+        files = [_think_file_ref(item) for item in thinks]
+        scorecard = self._render_quality_hop(quality)
+        ask_file = str(ask.payload.get("file_body") or ask.body)
+        await self._heartbeat(
+            "adh.pm",
+            self._copy("hermes.pm.heartbeat.recommend"),
+            EventType.PROGRESS,
+            tenant.ops_room,
+        )
+        await self._status(
+            room,
+            self._copy("hermes.pm.status.recommend-next", {"initiative": initiative}),
+            EventType.PROGRESS,
+            meta,
+        )
+        await self._status(
+            room,
+            self._copy("hermes.pm.status.calling-model", {"hop": "recommend"}),
+            EventType.PROGRESS,
+            meta,
+        )
+        artifact = await self._with_pm_progress(
+            room,
+            meta,
+            self.run_pm_recommend(
+                initiative=initiative,
+                files=files,
+                tenant=tenant,
+                quality=quality,
+                outline=outline,
+                scorecard=scorecard,
+                answers=_format_answers(answers),
+                ask_file=ask_file,
+                source_message_id=source_message_id,
+            ),
+        )
+        self._raise_if_stub(artifact, "recommend")
+        await self._publish_hop(
+            tenant,
+            room,
+            artifact,
+            f"docs({initiative}): prd-recommend",
+            meta,
+        )
+        parsed = dict(artifact.payload.get("artifact") or {})
+        pick = str(parsed.get("recommend") or "none")
+        path = str(parsed.get("path") or artifact.payload.get("path") or "")
+        ready = str(parsed.get("engineering_ready") or "no")
+        await self._status(
+            room,
+            self._copy(
+                "hermes.pm.status.recommend-returned",
+                {
+                    "initiative": initiative,
+                    "recommend": pick,
+                    "engineering_ready": ready,
+                },
+            ),
+            EventType.PROGRESS,
+            meta,
+        )
+        await self._post_logical(
+            room,
+            self._render_recommend_hop(artifact),
+            {**meta, "hop": "recommend"},
+        )
+        await self._status(
+            room,
+            self._copy(
+                "hermes.pm.status.recommend-card",
+                {
+                    "initiative": initiative,
+                    "recommend": pick,
+                    "path": path or "(none)",
+                    "engineering_ready": ready,
+                    "why": str(parsed.get("why") or "(none)"),
+                },
+            ),
+            EventType.PROGRESS,
+            {
+                **meta,
+                "hop": "recommend",
+                "status": "need_promote",
+                "choices": [pick, "none", "iterate"],
+            },
+        )
+        await self._store_pending_recommend(tenant, room, initiative, pick, path)
+        return artifact
+
     async def _listen_ops(self, room: str) -> None:
-        stream = self._buzz.stream_room(room)
-        try:
-            await anext(stream)
-            self.logger.info("Hermes PM listener subscribed", room=room)
-            catch = asyncio.create_task(self._catch_up_ops(room))
-            self._work_tasks.add(catch)
-            catch.add_done_callback(self._work_tasks.discard)
-            async for raw in stream:
-                message = _parse_stream_message(raw)
-                if message is not None:
-                    await self.on_room_message(room, message)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            self.logger.exception("PM outline listener stopped", room=room)
+        delay = 1.0
+        while True:
+            stream = self._buzz.stream_room(room)
+            try:
+                await anext(stream)
+                delay = 1.0
+                self.logger.info("Hermes PM listener subscribed", room=room)
+                catch = asyncio.create_task(self._catch_up_ops(room))
+                self._work_tasks.add(catch)
+                catch.add_done_callback(self._work_tasks.discard)
+                async for raw in stream:
+                    message = _parse_stream_message(raw)
+                    if message is not None:
+                        await self.on_room_message(room, message)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.logger.exception("PM outline listener stopped", room=room)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 30.0)
+            finally:
+                try:
+                    await stream.aclose()
+                except Exception:
+                    self.logger.exception("PM outline listener stream close failed", room=room)
 
     async def _catch_up_ops(self, room: str) -> None:
         rows = await self._buzz.list_messages(room, limit=200)
@@ -908,6 +1459,365 @@ class HermesService(BaseBusinessService):
         tenant = self._tenants.by_ops_room(room)
         if tenant is not None:
             await self._resume_pending_outline(tenant)
+            await self._resume_pending_ask(tenant)
+
+    def _is_lead_text(self, message: MessageRead) -> bool:
+        if message.kind != MessageKind.MESSAGE:
+            return False
+        return (message.identity_handle or "") == self._settings.lead_handle
+
+    def _is_lead_stop(self, message: MessageRead) -> bool:
+        return self._is_lead_text(message) and (message.body or "").strip().lower() == "stop"
+
+    async def _try_lead_stop(self, tenant: TenantContext, room: str, message: MessageRead) -> bool:
+        """Lead `stop` cancels think/quality/ask, not only an open /prd-ask wait."""
+        if not self._is_lead_stop(message):
+            return False
+        if not self._tenant_has_open_work(tenant.slug) and tenant.slug not in self._outline_tasks:
+            return False
+        await self._halt_programme(tenant, room)
+        return True
+
+    async def _halt_programme(self, tenant: TenantContext, room: str) -> None:
+        initiative = self._open_initiative.get(tenant.slug) or "(none)"
+        task = self._outline_tasks.pop(tenant.slug, None)
+        if task is not None and not task.done():
+            task.cancel()
+        event = self._ask_events.get(tenant.slug)
+        if event is not None:
+            self._ask_answers[tenant.slug] = {"_skip": "stop"}
+            event.set()
+        prefix = f"{tenant.slug}:"
+        for token in list(self._inflight):
+            if token.startswith(prefix):
+                fingerprint = token[len(prefix) :]
+                await self._release_outline(tenant.slug, fingerprint)
+        await self._clear_pending_init(tenant.slug)
+        await self._clear_pending_ask(tenant.slug)
+        await self._clear_pending_recommend(tenant.slug)
+        await self._status(
+            room,
+            self._copy("hermes.pm.status.lead-stopped", {"initiative": initiative}),
+            EventType.STALL,
+            {
+                "lane": "pm",
+                "hop": "loop",
+                "status": "stopped",
+                "initiative": initiative,
+                "programme_slug": tenant.slug,
+            },
+        )
+        self.logger.info("PM walk stopped by Lead", slug=tenant.slug, initiative=initiative)
+
+    def _tenant_has_open_work(self, slug: str) -> bool:
+        if any(token.startswith(f"{slug}:") for token in self._inflight):
+            return True
+        return (
+            slug in self._awaiting_init
+            or slug in self._awaiting_ask
+            or slug in self._awaiting_recommend
+        )
+
+    def _pending_ask_key(self, slug: str) -> str:
+        return f"adh:pm:awaiting-ask:{slug}"
+
+    def _pending_recommend_key(self, slug: str) -> str:
+        return f"adh:pm:awaiting-recommend:{slug}"
+
+    async def _store_pending_ask(
+        self,
+        tenant: TenantContext,
+        room: str,
+        outline: str,
+        initiative: str,
+        thinks: list[HermesArtifactRead],
+        quality: HermesArtifactRead,
+        forks: list[Any],
+    ) -> None:
+        pending = {
+            "room": room,
+            "outline": outline,
+            "initiative": initiative,
+            "forks": forks,
+            "think_paths": [str(_think_file_ref(item)["path"]) for item in thinks],
+            "quality_path": str(quality.payload.get("path") or quality_path(initiative)),
+        }
+        self._awaiting_ask[tenant.slug] = pending
+        try:
+            await self._redis.set(
+                self._pending_ask_key(tenant.slug),
+                pending,
+                int(self._settings.outline_lock_seconds),
+            )
+        except Exception:
+            self.logger.exception("PM pending ask store failed", slug=tenant.slug)
+
+    async def _load_pending_ask(self, slug: str) -> Optional[dict[str, Any]]:
+        local = self._awaiting_ask.get(slug)
+        if local:
+            return local
+        try:
+            raw = await self._redis.get(self._pending_ask_key(slug), as_json=True)
+        except Exception:
+            self.logger.exception("PM pending ask load failed", slug=slug)
+            return None
+        if isinstance(raw, dict):
+            self._awaiting_ask[slug] = raw
+            return raw
+        return None
+
+    async def _clear_pending_ask(self, slug: str) -> None:
+        self._awaiting_ask.pop(slug, None)
+        self._ask_answers.pop(slug, None)
+        try:
+            await self._redis.delete(self._pending_ask_key(slug))
+        except Exception:
+            self.logger.exception("PM pending ask clear failed", slug=slug)
+
+    async def _store_pending_recommend(
+        self,
+        tenant: TenantContext,
+        room: str,
+        initiative: str,
+        pick: str,
+        path: str,
+    ) -> None:
+        pending = {
+            "room": room,
+            "initiative": initiative,
+            "recommend": pick,
+            "path": path,
+        }
+        self._awaiting_recommend[tenant.slug] = pending
+        try:
+            await self._redis.set(
+                self._pending_recommend_key(tenant.slug),
+                pending,
+                int(self._settings.outline_lock_seconds),
+            )
+        except Exception:
+            self.logger.exception("PM pending recommend store failed", slug=tenant.slug)
+
+    async def _load_pending_recommend(self, slug: str) -> Optional[dict[str, Any]]:
+        local = self._awaiting_recommend.get(slug)
+        if local:
+            return local
+        try:
+            raw = await self._redis.get(self._pending_recommend_key(slug), as_json=True)
+        except Exception:
+            self.logger.exception("PM pending recommend load failed", slug=slug)
+            return None
+        if isinstance(raw, dict):
+            self._awaiting_recommend[slug] = raw
+            return raw
+        return None
+
+    async def _clear_pending_recommend(self, slug: str) -> None:
+        self._awaiting_recommend.pop(slug, None)
+        try:
+            await self._redis.delete(self._pending_recommend_key(slug))
+        except Exception:
+            self.logger.exception("PM pending recommend clear failed", slug=slug)
+
+    async def _wait_ask_answers(self, slug: str, timeout: float) -> dict[str, str]:
+        event = asyncio.Event()
+        self._ask_events[slug] = event
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+            return dict(self._ask_answers.get(slug) or {})
+        except asyncio.TimeoutError:
+            return {}
+        finally:
+            self._ask_events.pop(slug, None)
+
+    async def _try_ask_answer(self, tenant: TenantContext, room: str, message: MessageRead) -> bool:
+        if not self._is_lead_text(message):
+            return False
+        pending = await self._load_pending_ask(tenant.slug)
+        if pending is None:
+            return False
+        if str(pending.get("room") or room) != room:
+            return False
+        answers = parse_ask_answers(message.body)
+        if answers is None:
+            self.logger.info(
+                "Ignored Lead chatter while /prd-ask is open",
+                slug=tenant.slug,
+            )
+            return True
+        self._ask_answers[tenant.slug] = answers
+        event = self._ask_events.get(tenant.slug)
+        if event is not None:
+            event.set()
+            return True
+        task = asyncio.create_task(self._continue_from_pending_ask(tenant, pending, answers))
+        self._work_tasks.add(task)
+        task.add_done_callback(self._work_tasks.discard)
+        return True
+
+    async def _try_promote_pick(
+        self, tenant: TenantContext, room: str, message: MessageRead
+    ) -> bool:
+        if not self._is_lead_text(message):
+            return False
+        pending = await self._load_pending_recommend(tenant.slug)
+        if pending is None:
+            return False
+        if str(pending.get("room") or room) != room:
+            return False
+        pick = parse_promote_pick(message.body)
+        if pick is None:
+            self.logger.info(
+                "Ignored Lead chatter while /prd-recommend is open",
+                slug=tenant.slug,
+            )
+            return True
+        initiative = str(pending.get("initiative") or "")
+        await self._status(
+            room,
+            self._copy(
+                "hermes.pm.status.promote-noted",
+                {"initiative": initiative, "pick": pick},
+            ),
+            EventType.PROGRESS,
+            {
+                "lane": "pm",
+                "hop": "recommend",
+                "status": "promote_noted",
+                "pick": pick,
+                "initiative": initiative,
+                "programme_slug": tenant.slug,
+            },
+        )
+        self.logger.info(
+            "Lead named a promote pick; Forge is not wired",
+            slug=tenant.slug,
+            pick=pick,
+            initiative=initiative,
+        )
+        return True
+
+    async def _resume_pending_ask(self, tenant: TenantContext) -> None:
+        pending = await self._load_pending_ask(tenant.slug)
+        if pending is None:
+            return
+        if tenant.slug in self._ask_events:
+            return
+        task = asyncio.create_task(self._wait_then_continue_ask(tenant, pending))
+        self._work_tasks.add(task)
+        task.add_done_callback(self._work_tasks.discard)
+
+    async def _wait_then_continue_ask(self, tenant: TenantContext, pending: dict[str, Any]) -> None:
+        timeout = float(self._settings.pm_ask_wait_seconds)
+        if timeout <= 0:
+            answers: dict[str, str] = {}
+        else:
+            answers = await self._wait_ask_answers(tenant.slug, timeout)
+        await self._continue_from_pending_ask(tenant, pending, answers)
+
+    async def _continue_from_pending_ask(
+        self,
+        tenant: TenantContext,
+        pending: dict[str, Any],
+        answers: dict[str, str],
+    ) -> None:
+        await self._clear_pending_ask(tenant.slug)
+        room = str(pending.get("room") or tenant.ops_room)
+        initiative = str(pending.get("initiative") or "")
+        outline = str(pending.get("outline") or "")
+        if answers.get("_skip") == "stop":
+            await self._status(
+                room,
+                self._copy("hermes.pm.status.ask-stopped", {"initiative": initiative}),
+                EventType.STALL,
+                {"status": "stopped", "hop": "ask", "initiative": initiative},
+            )
+            return
+        thinks = self._thinks_from_paths(tenant, initiative, pending.get("think_paths") or [])
+        qpath = str(pending.get("quality_path") or quality_path(initiative))
+        qbody = self._workspace.read_local(tenant, qpath)
+        quality = HermesArtifactRead(
+            kind="pm_quality",
+            initiative=initiative,
+            rubric_id=RUBRIC_PM["id"],
+            body=qbody,
+            payload={"path": qpath, "file_body": qbody, "artifact": {}, "hop": "quality"},
+        )
+        ask_body = self._workspace.read_local(tenant, ask_path(initiative))
+        ask = HermesArtifactRead(
+            kind="pm_ask",
+            initiative=initiative,
+            rubric_id=RUBRIC_PM["id"],
+            body=ask_body,
+            payload={
+                "path": ask_path(initiative),
+                "file_body": ask_body,
+                "artifact": {"forks": pending.get("forks") or []},
+                "hop": "ask",
+            },
+        )
+        meta = {
+            "initiative": initiative,
+            "programme_slug": tenant.slug,
+            "hop": "recommend",
+            "status": "in_progress",
+        }
+        if not answers or answers.get("_skip"):
+            await self._status(
+                room,
+                self._copy(
+                    "hermes.pm.status.ask-timeout-provisional",
+                    {"initiative": initiative},
+                ),
+                EventType.PROGRESS,
+                {**meta, "hop": "ask", "status": "provisional"},
+            )
+        await self._recommend_pass(
+            tenant,
+            room,
+            outline,
+            initiative,
+            None,
+            meta,
+            thinks,
+            quality,
+            ask,
+            answers,
+        )
+        await self._status(
+            room,
+            self._copy("hermes.pm.status.promote-is-you", {"initiative": initiative}),
+            EventType.DONE,
+            {**meta, "status": "done", "hop": "recommend"},
+        )
+
+    def _thinks_from_paths(
+        self, tenant: TenantContext, initiative: str, paths: list[Any]
+    ) -> list[HermesArtifactRead]:
+        thinks: list[HermesArtifactRead] = []
+        for index, raw in enumerate(paths, start=1):
+            path = str(raw or "")
+            if not path:
+                continue
+            body = self._workspace.read_local(tenant, path)
+            if not body.strip():
+                continue
+            label = f"C{index}"
+            thinks.append(
+                HermesArtifactRead(
+                    kind=f"pm_think_{label.lower()}",
+                    initiative=initiative,
+                    rubric_id=RUBRIC_PM["id"],
+                    body=body[:500],
+                    payload={
+                        "path": path,
+                        "file_body": body,
+                        "artifact": {"candidate_label": label},
+                        "hop": f"think-{label.lower()}",
+                    },
+                )
+            )
+        return thinks
 
     def _is_lead_outline(self, message: MessageRead) -> bool:
         if message.kind != MessageKind.MESSAGE:
@@ -1021,19 +1931,20 @@ class HermesService(BaseBusinessService):
             source_uuid = UUID(source_id) if source_id else None
         except ValueError:
             source_uuid = None
-        task = asyncio.create_task(
-            self._run_outline_work(
-                tenant,
-                room,
-                outline,
-                fingerprint,
-                source_id,
-                source_uuid,
-                initiative=initiative,
-            )
+        self._track_outline_task(
+            tenant.slug,
+            asyncio.create_task(
+                self._run_outline_work(
+                    tenant,
+                    room,
+                    outline,
+                    fingerprint,
+                    source_id,
+                    source_uuid,
+                    initiative=initiative,
+                )
+            ),
         )
-        self._work_tasks.add(task)
-        task.add_done_callback(self._work_tasks.discard)
 
     async def _resume_pending_outline(self, tenant: TenantContext) -> None:
         """Continue an outline that T0 stored while waiting for an INIT name."""
@@ -1070,6 +1981,11 @@ class HermesService(BaseBusinessService):
             source_id,
             source_uuid,
         )
+
+    def _track_outline_task(self, slug: str, task: asyncio.Task[None]) -> None:
+        self._outline_tasks[slug] = task
+        self._work_tasks.add(task)
+        task.add_done_callback(self._work_tasks.discard)
 
     def _lock_key(self, slug: str, fingerprint: str) -> str:
         return f"adh:pm:inflight:{slug}:{fingerprint}"
@@ -1344,6 +2260,85 @@ class HermesService(BaseBusinessService):
             self._think_copy_vars(initiative, label, parsed, path, numbered_locked=True),
         )
 
+    async def _apply_quality_card(
+        self,
+        initiative: str,
+        parsed: dict[str, Any],
+        files: list[dict[str, str]],
+        outline: str,
+        model: str,
+    ) -> dict[str, Any]:
+        """LLM memo for the human PM. Frozen scores. No programme-specific rewrite."""
+        card = await self._prompts.complete(
+            "hermes.pm.quality.card",
+            {
+                "initiative": initiative,
+                "outline": (outline or "").strip() or "(none)",
+                "scorecard": json.dumps(_scorecard_for_card(parsed), ensure_ascii=False),
+                "files": _format_ready_files(files),
+                "max_questions": 3,
+            },
+            model=model,
+        )
+        if not quality_card_has_signal(card.parsed):
+            raise TimeoutError(
+                self._copy("hermes.pm.error.quality-card", {"initiative": initiative})
+            )
+        merged = apply_quality_card(parsed, dict(card.parsed))
+        self.logger.info(
+            "Hermes quality card applied",
+            initiative=initiative,
+            questions=len(merged.get("lead_questions") or []),
+            model=card.model,
+        )
+        return merged
+
+    async def _apply_ask_card(
+        self,
+        initiative: str,
+        parsed: dict[str, Any],
+        files: list[dict[str, str]],
+        outline: str,
+        model: str,
+    ) -> dict[str, Any]:
+        """LLM decision aid on frozen forks. Does not change questions or choice strings."""
+        try:
+            card = await self._prompts.complete(
+                "hermes.pm.ask.card",
+                {
+                    "initiative": initiative,
+                    "outline": (outline or "").strip() or "(none)",
+                    "forks": json.dumps(
+                        [
+                            {
+                                "id": fork.get("id"),
+                                "question": fork.get("question"),
+                                "choices": fork.get("choices") or [],
+                            }
+                            for fork in parsed.get("forks") or []
+                            if isinstance(fork, dict)
+                        ],
+                        ensure_ascii=False,
+                    ),
+                    "files": _format_ready_files(files),
+                },
+                model=model,
+            )
+        except Exception:
+            self.logger.exception("Hermes ask card failed", initiative=initiative)
+            return parsed
+        if not ask_card_has_signal(card.parsed):
+            self.logger.warning("Hermes ask card returned no examples", initiative=initiative)
+            return parsed
+        merged = apply_ask_card(parsed, dict(card.parsed))
+        self.logger.info(
+            "Hermes ask card applied",
+            initiative=initiative,
+            forks=len(merged.get("forks") or []),
+            model=card.model,
+        )
+        return merged
+
     def _render_quality_hop_body(
         self,
         initiative: str,
@@ -1351,21 +2346,13 @@ class HermesService(BaseBusinessService):
         model: str,
         pass_number: int = 1,
         max_passes: int = 2,
+        path: str = "",
     ) -> str:
         return self._copy(
             "hermes.pm.hop.quality",
-            {
-                "initiative": initiative,
-                "model": model,
-                "threshold_x": RUBRIC_PM["threshold_x"],
-                "rank": parsed.get("rank") or "tie",
-                "pass_number": pass_number,
-                "max_passes": max_passes,
-                "candidate_block": _format_candidate_block(parsed.get("candidates") or []),
-                "recommend_promote": parsed.get("recommend_promote") or "none",
-                "notes": parsed.get("notes") or "(none)",
-                "harness_proposal": parsed.get("harness_proposal") or "(none)",
-            },
+            _quality_copy_vars(
+                initiative, parsed, path or quality_path(initiative), model, pass_number, max_passes
+            ),
         )
 
     def _render_quality_hop(self, artifact: HermesArtifactRead) -> str:
@@ -1377,6 +2364,7 @@ class HermesService(BaseBusinessService):
             model,
             int(artifact.payload.get("pass_number") or 1),
             int(artifact.payload.get("max_passes") or 2),
+            str(artifact.payload.get("path") or quality_path(artifact.initiative)),
         )
 
     def _render_quality_file(
@@ -1388,19 +2376,78 @@ class HermesService(BaseBusinessService):
         pass_number: int = 1,
         max_passes: int = 2,
     ) -> str:
-        hop_body = self._render_quality_hop_body(initiative, parsed, model, pass_number, max_passes)
-        candidates = parsed.get("candidates") or []
         return self._copy(
             "hermes.pm.file.quality",
+            _quality_copy_vars(initiative, parsed, path, model, pass_number, max_passes),
+        )
+
+    def _render_ask_hop_body(self, initiative: str, parsed: dict[str, Any], model: str) -> str:
+        forks = parsed.get("forks") or []
+        return self._copy(
+            "hermes.pm.hop.ask",
             {
                 "initiative": initiative,
-                "files_row": _files_row(candidates),
-                "handover_row": _handover_row(candidates),
+                "model": model,
+                "fork_count": len(forks),
+                "fork_block": _format_fork_block(forks),
+                "notes": parsed.get("notes") or "(none)",
+            },
+        )
+
+    def _render_ask_hop(self, artifact: HermesArtifactRead) -> str:
+        parsed = dict(artifact.payload.get("artifact") or {})
+        model = str(artifact.payload.get("model") or artifact.model or "unresolved")
+        return self._render_ask_hop_body(artifact.initiative, parsed, model)
+
+    def _render_ask_file(self, initiative: str, parsed: dict[str, Any], path: str) -> str:
+        forks = parsed.get("forks") or []
+        return self._copy(
+            "hermes.pm.file.ask",
+            {
+                "initiative": initiative,
                 "path": path,
-                "rank": parsed.get("rank") or "tie",
-                "pass_number": pass_number,
-                "max_passes": max_passes,
-                "hop_body": hop_body,
+                "fork_count": len(forks),
+                "fork_block": _format_fork_block(forks),
+                "notes": parsed.get("notes") or "(none)",
+            },
+        )
+
+    def _render_recommend_hop_body(
+        self, initiative: str, parsed: dict[str, Any], model: str
+    ) -> str:
+        return self._copy(
+            "hermes.pm.hop.recommend",
+            {
+                "initiative": initiative,
+                "model": model,
+                "recommend": parsed.get("recommend") or "none",
+                "engineering_ready": parsed.get("engineering_ready") or "no",
+                "path": parsed.get("path") or "(none)",
+                "why": parsed.get("why") or "(none)",
+                "why_not": _format_why_not(parsed.get("why_not") or []),
+                "residual_locks": _bullets(parsed.get("residual_locks")),
+                "notes": parsed.get("notes") or "(none)",
+            },
+        )
+
+    def _render_recommend_hop(self, artifact: HermesArtifactRead) -> str:
+        parsed = dict(artifact.payload.get("artifact") or {})
+        model = str(artifact.payload.get("model") or artifact.model or "unresolved")
+        return self._render_recommend_hop_body(artifact.initiative, parsed, model)
+
+    def _render_recommend_file(self, initiative: str, parsed: dict[str, Any], path: str) -> str:
+        return self._copy(
+            "hermes.pm.file.recommend",
+            {
+                "initiative": initiative,
+                "recommend": parsed.get("recommend") or "none",
+                "path": parsed.get("path") or "(none)",
+                "engineering_ready": parsed.get("engineering_ready") or "no",
+                "file_path": path,
+                "why": parsed.get("why") or "(none)",
+                "why_not": _format_why_not(parsed.get("why_not") or []),
+                "residual_locks": _bullets(parsed.get("residual_locks")),
+                "notes": parsed.get("notes") or "(none)",
             },
         )
 
@@ -1539,6 +2586,8 @@ def _as_float_map(value: Any) -> dict[str, float]:
     return out
 
 
+_FORK_LINE = re.compile(r"^F(\d+)\s*[:.\-]\s*(.+)$", re.I)
+
 _MATERIAL_BARS = {
     "B1",
     "B2",
@@ -1560,8 +2609,8 @@ def apply_ready_gate(parsed: dict[str, Any], files: list[dict[str, str]]) -> dic
     """Merge LLM B-bar with code skeleton FAILs. Empty B-table cannot be handover yes."""
     by_label = {str(item.get("label") or ""): item for item in files}
     raw = parsed.get("candidates")
-    if not isinstance(raw, list) or not raw:
-        raw = [{"label": item.get("label"), "path": item.get("path")} for item in files]
+    if not isinstance(raw, list):
+        raw = []
     candidates: list[dict[str, Any]] = []
     for item in raw:
         if not isinstance(item, dict):
@@ -1588,6 +2637,7 @@ def apply_ready_gate(parsed: dict[str, Any], files: list[dict[str, str]]) -> dic
                     "result": result,
                     "material": material,
                     "evidence": evidence,
+                    "pointer": str(bar.get("pointer") or "").strip(),
                 }
             )
             if result == "FAIL" and (material or bid in _MATERIAL_BARS):
@@ -1598,16 +2648,6 @@ def apply_ready_gate(parsed: dict[str, Any], files: list[dict[str, str]]) -> dic
                 bar_rows.append({"bar": bid, "result": "FAIL", "material": True, "evidence": fail})
         fails.extend(skel)
         unique = list(dict.fromkeys(fails))
-        if not bar_rows:
-            unique.append("ready judge returned no B-bar")
-            bar_rows.append(
-                {
-                    "bar": "B1",
-                    "result": "FAIL",
-                    "material": True,
-                    "evidence": "ready judge returned no B-bar",
-                }
-            )
         scores = _as_float_map(item.get("scores"))
         handover = str(item.get("handover") or "no").strip().lower()
         if unique:
@@ -1617,6 +2657,8 @@ def apply_ready_gate(parsed: dict[str, Any], files: list[dict[str, str]]) -> dic
                 "label": label,
                 "path": path,
                 "handover": "yes" if handover == "yes" else "no",
+                "why": str(item.get("why") or "").strip(),
+                "why_not": str(item.get("why_not") or "").strip(),
                 "material_fails": unique,
                 "bars": bar_rows,
                 "spec_lane_guesses": [str(row) for row in (item.get("spec_lane_guesses") or [])],
@@ -1625,12 +2667,204 @@ def apply_ready_gate(parsed: dict[str, Any], files: list[dict[str, str]]) -> dic
             }
         )
     parsed["candidates"] = candidates
+    parsed["recommendation_why"] = str(parsed.get("recommendation_why") or "").strip()
+    parsed["lead_questions"] = cap_lead_questions(parsed.get("lead_questions"))
     yes_labels = [cand["label"] for cand in candidates if cand["handover"] == "yes"]
     recommend = str(parsed.get("recommend_promote") or "").strip().upper()
     allowed = {label.upper() for label in yes_labels}
     if recommend not in allowed:
         parsed["recommend_promote"] = yes_labels[0] if len(yes_labels) == 1 else ""
     return parsed
+
+
+def apply_recommend_gate(
+    parsed: dict[str, Any],
+    files: list[dict[str, str]],
+    quality: HermesArtifactRead,
+) -> dict[str, Any]:
+    """Force none when the label is unknown. Handover-no files cannot be engineering-ready."""
+    by_label = {str(item.get("label") or "").upper(): item for item in files}
+    rec = str(parsed.get("recommend") or "none").strip().upper()
+    if rec in by_label:
+        parsed["recommend"] = rec
+        parsed["path"] = str(parsed.get("path") or by_label[rec].get("path") or "")
+    else:
+        parsed["recommend"] = "none"
+        parsed["path"] = ""
+        parsed["engineering_ready"] = "no"
+    if not _any_handover(quality):
+        parsed["engineering_ready"] = "no"
+    ready = str(parsed.get("engineering_ready") or "no").strip().lower()
+    parsed["engineering_ready"] = "yes" if ready == "yes" else "no"
+    return parsed
+
+
+def parse_ask_answers(body: str) -> Optional[dict[str, str]]:
+    text = (body or "").strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered == "stop":
+        return {"_skip": "stop"}
+    if lowered in {"skip", "provisional", "none", "timeout"}:
+        return {"_skip": lowered}
+    answers: dict[str, str] = {}
+    for line in text.splitlines():
+        match = _FORK_LINE.match(line.strip())
+        if match:
+            answers[f"F{match.group(1)}"] = match.group(2).strip()
+    return answers or None
+
+
+def parse_promote_pick(body: str) -> Optional[str]:
+    token = (body or "").strip()
+    if not token:
+        return None
+    lowered = token.lower()
+    if lowered in {"none", "iterate", "skip"}:
+        return lowered
+    if re.fullmatch(r"C\d+", token, re.I):
+        return token.upper()
+    normalized = token.replace("\\", "/")
+    if "prd/reports/" in normalized and normalized.lower().endswith(".md"):
+        return token
+    return None
+
+
+def _format_answers(answers: dict[str, str]) -> str:
+    if not answers:
+        return "(none — Lead skipped / timed out)"
+    skip = answers.get("_skip")
+    if skip:
+        return f"(skip: {skip})"
+    return "\n".join(f"{key}: {value}" for key, value in sorted(answers.items()))
+
+
+_THINK_LABEL = re.compile(r"\bC\d+\b")
+
+
+def _human_pm_text(text: str) -> str:
+    """Think-file labels stay off the Lead card. Factory-wide, not programme-specific."""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    cleaned = _THINK_LABEL.sub("this", raw)
+    cleaned = re.sub(r"\bthis proves\b", "This proves", cleaned, count=1)
+    return re.sub(r" {2,}", " ", cleaned).strip()
+
+
+def apply_ask_card(frozen: dict[str, Any], card: dict[str, Any]) -> dict[str, Any]:
+    """Merge examples onto frozen forks. Never change question or choice strings."""
+    merged = dict(frozen)
+    by_id = {
+        str(item.get("id") or ""): item
+        for item in card.get("forks") or []
+        if isinstance(item, dict)
+    }
+    forks: list[dict[str, Any]] = []
+    for fork in merged.get("forks") or []:
+        if not isinstance(fork, dict):
+            continue
+        row = dict(fork)
+        extra = by_id.get(str(row.get("id") or "")) or {}
+        labels = [str(item) for item in row.get("choices") or []]
+        if extra.get("example"):
+            row["example"] = _human_pm_text(str(extra.get("example") or ""))
+        recommend = str(extra.get("recommend") or "").strip()
+        if recommend in labels:
+            row["recommend"] = recommend
+        if extra.get("recommend_why"):
+            row["recommend_why"] = _human_pm_text(str(extra.get("recommend_why") or ""))
+        choice_rows: list[dict[str, str]] = []
+        for item in extra.get("choice_rows") or extra.get("choices") or []:
+            if isinstance(item, str):
+                continue
+            if not isinstance(item, dict):
+                continue
+            choice = str(item.get("choice") or "").strip()
+            if choice not in labels:
+                continue
+            choice_rows.append(
+                {
+                    "choice": choice,
+                    "means": _human_pm_text(str(item.get("means") or "")),
+                    "favours": str(item.get("favours") or "").strip(),
+                }
+            )
+        if choice_rows:
+            row["choice_rows"] = choice_rows
+        forks.append(row)
+    merged["forks"] = forks
+    if card.get("notes"):
+        merged["notes"] = _human_pm_text(str(card.get("notes") or ""))
+    return merged
+
+
+def _format_fork_block(forks: list[Any]) -> str:
+    rows = [fork for fork in forks if isinstance(fork, dict)]
+    if not rows:
+        return "(none)"
+    chunks: list[str] = [
+        "| Fork | Decision | We recommend |",
+        "|------|----------|--------------|",
+    ]
+    for fork in rows:
+        fid = str(fork.get("id") or "?")
+        chunks.append(
+            "| "
+            + " | ".join(
+                [
+                    fid,
+                    _md_cell(fork.get("question") or ""),
+                    _md_cell(fork.get("recommend") or "(you choose)"),
+                ]
+            )
+            + " |"
+        )
+    for fork in rows:
+        fid = str(fork.get("id") or "?")
+        parts = [f"### {fid}", "", _md_cell(fork.get("question") or "")]
+        example = str(fork.get("example") or "").strip()
+        if example:
+            parts.extend(["", f"**In real life.** {example}"])
+        recommend = str(fork.get("recommend") or "").strip()
+        recommend_why = str(fork.get("recommend_why") or "").strip()
+        if recommend:
+            why = f" — {recommend_why}" if recommend_why else ""
+            parts.extend(["", f"**We recommend.** {recommend}{why}"])
+        choice_rows = [
+            item
+            for item in (fork.get("choice_rows") or [])
+            if isinstance(item, dict) and item.get("choice")
+        ]
+        labels = [str(item) for item in fork.get("choices") or []]
+        parts.extend(["", "| If you choose | What happens |", "|---------------|--------------|"])
+        if choice_rows:
+            for item in choice_rows:
+                mark = " ←" if item.get("choice") == recommend else ""
+                parts.append(
+                    f"| {_md_cell(item.get('choice'))}{mark} | {_md_cell(item.get('means') or '')} |"
+                )
+        else:
+            for choice in labels:
+                mark = " ←" if choice == recommend else ""
+                parts.append(f"| {_md_cell(choice)}{mark} |  |")
+        parts.extend(["", f"Reply `{fid}: <choice>` using the exact text in the table."])
+        chunks.extend(["", *parts])
+    return "\n".join(chunks)
+
+
+def _format_why_not(rows: list[Any]) -> str:
+    if not rows:
+        return "- (none)"
+    lines: list[str] = []
+    for item in rows:
+        if isinstance(item, dict):
+            label = item.get("label") or "?"
+            lines.append(f"- {label}: {item.get('why_not') or ''}")
+        else:
+            lines.append(f"- {item}")
+    return "\n".join(lines)
 
 
 def _format_ready_files(files: list[dict[str, str]]) -> str:
@@ -1679,39 +2913,295 @@ def _fail_list_from_quality(artifact: HermesArtifactRead) -> str:
     return "; ".join(fails) if fails else "(none)"
 
 
-def _format_candidate_block(candidates: list[Any]) -> str:
-    lines: list[str] = []
-    for cand in candidates:
+_BAR_ORDER = [f"B{index}" for index in range(1, 16)]
+
+
+def _quality_copy_vars(
+    initiative: str,
+    parsed: dict[str, Any],
+    path: str,
+    model: str,
+    pass_number: int,
+    max_passes: int,
+) -> dict[str, Any]:
+    candidates = [row for row in (parsed.get("candidates") or []) if isinstance(row, dict)]
+    promote = _quality_promote_label(parsed)
+    return {
+        "initiative": initiative,
+        "model": model,
+        "threshold_x": RUBRIC_PM["threshold_x"],
+        "rank": parsed.get("rank") or "tie",
+        "pass_number": pass_number,
+        "max_passes": max_passes,
+        "path": path,
+        "recommend_promote": parsed.get("recommend_promote") or "none",
+        "headline": _format_quality_headline(parsed, promote, pass_number, max_passes),
+        "recommendation_why": parsed.get("recommendation_why") or "(none)",
+        "questions_table": _format_lead_questions(parsed.get("lead_questions") or []),
+        "recommend_table": _format_quality_recommend_table(candidates, promote),
+        "evidence_heading": promote,
+        "evidence_block": _format_quality_evidence(candidates, promote),
+        "scorecard": _format_quality_scorecard(candidates),
+        "notes": parsed.get("notes") or "(none)",
+        "harness_proposal": parsed.get("harness_proposal") or "(none)",
+    }
+
+
+def _quality_promote_label(parsed: dict[str, Any]) -> str:
+    rec = str(parsed.get("recommend_promote") or "").strip()
+    if rec and rec.lower() not in {"none", "tie", ""}:
+        return rec
+    for cand in parsed.get("candidates") or []:
+        if isinstance(cand, dict) and str(cand.get("handover") or "").lower() == "yes":
+            return str(cand.get("label") or "none")
+    return "none"
+
+
+def _md_cell(text: Any) -> str:
+    raw = " ".join(str(text or "").split()).replace("|", "/")
+    return raw or "(none)"
+
+
+def apply_quality_card(scored: dict[str, Any], card: dict[str, Any]) -> dict[str, Any]:
+    """Merge the PM memo onto frozen scores. Never change PASS/FAIL/handover/rank."""
+    merged = dict(scored)
+    why = str(card.get("recommendation_why") or "").strip()
+    if why:
+        merged["recommendation_why"] = why
+    questions = cap_lead_questions(card.get("lead_questions"))
+    if questions:
+        merged["lead_questions"] = questions
+    by_label = {
+        str(item.get("label") or ""): item
+        for item in card.get("candidates") or []
+        if isinstance(item, dict)
+    }
+    candidates: list[dict[str, Any]] = []
+    for cand in merged.get("candidates") or []:
         if not isinstance(cand, dict):
             continue
-        label = cand.get("label") or "?"
-        lines.append(
-            f"{label} handover={cand.get('handover')} overall={cand.get('overall')}/3 "
-            f"FAILs: {_inline_list(cand.get('material_fails'))}"
-        )
-        for bar in cand.get("bars") or []:
+        row = dict(cand)
+        extra = by_label.get(str(row.get("label") or "")) or {}
+        if extra.get("why"):
+            row["why"] = str(extra.get("why") or "").strip()
+        if extra.get("why_not"):
+            row["why_not"] = str(extra.get("why_not") or "").strip()
+        card_bars = {
+            str(bar.get("bar") or "").split()[0].upper(): bar
+            for bar in extra.get("bars") or []
+            if isinstance(bar, dict)
+        }
+        bars: list[dict[str, Any]] = []
+        for bar in row.get("bars") or []:
             if not isinstance(bar, dict):
                 continue
-            lines.append(
-                f"  {bar.get('bar')} {bar.get('result')} {bar.get('evidence') or ''}".rstrip()
+            item = dict(bar)
+            rewrite = card_bars.get(str(item.get("bar") or "").split()[0].upper()) or {}
+            if rewrite.get("evidence"):
+                item["evidence"] = str(rewrite.get("evidence") or "").strip()
+            if "pointer" in rewrite:
+                item["pointer"] = str(rewrite.get("pointer") or "").strip()
+            bars.append(item)
+        row["bars"] = bars
+        candidates.append(row)
+    merged["candidates"] = candidates
+    return merged
+
+
+def _scorecard_for_card(parsed: dict[str, Any]) -> dict[str, Any]:
+    candidates = []
+    for cand in parsed.get("candidates") or []:
+        if not isinstance(cand, dict):
+            continue
+        candidates.append(
+            {
+                "label": cand.get("label"),
+                "path": cand.get("path"),
+                "handover": cand.get("handover"),
+                "overall": cand.get("overall"),
+                "material_fails": cand.get("material_fails") or [],
+                "bars": [
+                    {
+                        "bar": bar.get("bar"),
+                        "result": bar.get("result"),
+                        "evidence": bar.get("evidence"),
+                    }
+                    for bar in cand.get("bars") or []
+                    if isinstance(bar, dict)
+                ],
+            }
+        )
+    return {
+        "rank": parsed.get("rank"),
+        "recommend_promote": parsed.get("recommend_promote"),
+        "candidates": candidates,
+    }
+
+
+def _format_quality_headline(
+    parsed: dict[str, Any], promote: str, pass_number: int, max_passes: int
+) -> str:
+    yes = [
+        str(cand.get("label"))
+        for cand in parsed.get("candidates") or []
+        if isinstance(cand, dict) and str(cand.get("handover") or "").lower() == "yes"
+    ]
+    yes_txt = ", ".join(yes) if yes else "none"
+    rank = parsed.get("rank") or "tie"
+    return (
+        "Hermes evaluator — so you can judge the candidates fairly. "
+        "Rank is not permission to promote.\n\n"
+        "| Field | Value |\n"
+        "|-------|-------|\n"
+        f"| Rank | {rank} — **not** the validate signal |\n"
+        f"| Handover-yes | {yes_txt} |\n"
+        f"| Recommend (label only) | **{promote}** |\n"
+        f"| Ready pass | {pass_number}/{max_passes} |\n"
+        "| Your job | Name the file, or none, or iterate. I will not merge. |"
+    )
+
+
+def _why_row(cand: dict[str, Any]) -> str:
+    return str(cand.get("why") or "").strip() or (
+        "Engineering-ready."
+        if str(cand.get("handover") or "").lower() == "yes"
+        else "Not engineering-ready."
+    )
+
+
+def _why_not_row(cand: dict[str, Any]) -> str:
+    return str(cand.get("why_not") or "").strip() or "(none)"
+
+
+def _format_lead_questions(rows: list[Any]) -> str:
+    questions = [item for item in rows if isinstance(item, dict) and item.get("question")]
+    if not questions:
+        return "(none)"
+    lines = [
+        "| # | Question | Why it matters | If you skip |",
+        "|---|----------|----------------|-------------|",
+    ]
+    for index, item in enumerate(questions, start=1):
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(index),
+                    _md_cell(item.get("question")),
+                    _md_cell(item.get("why_it_matters") or "(none)"),
+                    _md_cell(item.get("if_unanswered") or "(none)"),
+                ]
             )
-    return "\n".join(lines) if lines else "(none)"
+            + " |"
+        )
+    return "\n".join(lines)
 
 
-def _files_row(candidates: list[Any]) -> str:
-    parts = []
+def _format_quality_recommend_table(candidates: list[dict[str, Any]], promote: str) -> str:
+    if not candidates:
+        return "(none)"
+    lines = [
+        "| Candidate | File | Handover | Overall | Why | Why not |",
+        "|-----------|------|----------|---------|-----|---------|",
+    ]
     for cand in candidates:
-        if isinstance(cand, dict) and cand.get("label"):
-            parts.append(f"{cand.get('label')} `{cand.get('path')}`")
-    return " / ".join(parts) if parts else "(none)"
+        label = str(cand.get("label") or "?")
+        path = str(cand.get("path") or "")
+        file_cell = f"`{path}`" if path else "(none)"
+        handover = str(cand.get("handover") or "no")
+        if handover == "yes":
+            handover = "**yes**"
+        overall = cand.get("overall")
+        overall_txt = f"{overall}/3" if overall is not None and overall != "" else "—"
+        pick = label.upper() == promote.upper() and promote.lower() != "none"
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    f"**{label} ←**" if pick else label,
+                    file_cell,
+                    handover,
+                    overall_txt,
+                    _md_cell(_why_row(cand)),
+                    _md_cell(_why_not_row(cand)),
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(lines)
 
 
-def _handover_row(candidates: list[Any]) -> str:
-    parts = []
-    for cand in candidates:
-        if isinstance(cand, dict) and cand.get("label"):
-            parts.append(f"{cand.get('label')}: {cand.get('handover')}")
-    return "; ".join(parts) if parts else "(none)"
+def _bars_by_id(cand: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for bar in cand.get("bars") or []:
+        if not isinstance(bar, dict):
+            continue
+        bid = str(bar.get("bar") or "").split()[0].upper()
+        if bid:
+            out[bid] = bar
+    return out
+
+
+def _bar_table(cand: dict[str, Any], *, fails_only: bool) -> str:
+    mapped = _bars_by_id(cand)
+    rows = [
+        "| Bar | Result | What this means |",
+        "|-----|--------|-----------------|",
+    ]
+    used = False
+    for bid in _BAR_ORDER:
+        bar = mapped.get(bid)
+        if not bar:
+            continue
+        result = str(bar.get("result") or "").upper() or "—"
+        if fails_only and result != "FAIL":
+            continue
+        used = True
+        rows.append(f"| {bid} | {result} | {_md_cell(bar.get('evidence') or '')} |")
+    return "\n".join(rows) if used else "(none)"
+
+
+def _format_quality_evidence(candidates: list[dict[str, Any]], promote: str) -> str:
+    if not candidates:
+        return "(none)"
+    by_label = {str(cand.get("label") or ""): cand for cand in candidates}
+    chunks: list[str] = []
+    promote_cand = by_label.get(promote)
+    if promote_cand and promote.lower() not in {"", "none"}:
+        chunks.append(_bar_table(promote_cand, fails_only=False))
+    else:
+        chunks.append(
+            "No handover-yes candidate. FAIL rows below are why none is engineering-ready."
+        )
+    others = [
+        cand for cand in candidates if str(cand.get("label") or "").upper() != promote.upper()
+    ]
+    if others:
+        chunks.append("### Why not the others")
+        for cand in others:
+            label = cand.get("label") or "?"
+            path = cand.get("path") or ""
+            chunks.append(f"**{label}** `{path}`\n\n" + _bar_table(cand, fails_only=True))
+    return "\n\n".join(chunks)
+
+
+def _format_quality_scorecard(candidates: list[dict[str, Any]]) -> str:
+    if not candidates:
+        return "(none)"
+    labels = [str(cand.get("label") or "?") for cand in candidates]
+    maps = [_bars_by_id(cand) for cand in candidates]
+    header = "| Bar | " + " | ".join(labels) + " |"
+    divider = "|-----|" + "|".join(["------" for _ in labels]) + "|"
+    lines = [header, divider]
+    for bid in _BAR_ORDER:
+        cells = []
+        for mapped in maps:
+            bar = mapped.get(bid)
+            cells.append(str(bar.get("result") or "—").upper() if bar else "—")
+        if all(cell == "—" for cell in cells):
+            continue
+        lines.append("| " + bid + " | " + " | ".join(cells) + " |")
+    return "\n".join(lines) if len(lines) > 2 else "(none)"
 
 
 def _is_numbered_init(token: str, tenant: TenantContext) -> bool:
@@ -1746,14 +3236,6 @@ def _numbered(value: Any) -> str:
         return f"1. {value}"
     lines = [f"{index}. {item}" for index, item in enumerate(value, start=1)]
     return "\n".join(lines) if lines else "(none)"
-
-
-def _inline_list(value: Any) -> str:
-    if not value:
-        return "(none)"
-    if not isinstance(value, list):
-        return str(value)
-    return "; ".join(str(item) for item in value) if value else "(none)"
 
 
 def _format_caps(value: Any) -> str:

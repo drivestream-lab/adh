@@ -1,9 +1,11 @@
 """Buzz API tests with the service mocked."""
 
+import asyncio
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -62,6 +64,30 @@ def test_ingest_heartbeat(client: TestClient) -> None:
     body = response.json()
     assert body["kind"] == "heartbeat"
     assert body["identity_handle"] == "adh.system"
+
+
+def test_stream_room_closes_pubsub_when_subscribe_fails() -> None:
+    from src.business_services.buzz_service import BuzzService
+
+    redis = MagicMock()
+    pubsub = MagicMock()
+    pubsub.subscribe = AsyncMock(side_effect=ConnectionError("Too many connections"))
+    pubsub.unsubscribe = AsyncMock()
+    pubsub.aclose = AsyncMock()
+    redis.pubsub.return_value = pubsub
+    buzz = BuzzService(MagicMock(), redis, MagicMock())
+    buzz.get_room = AsyncMock()
+
+    async def _run() -> None:
+        gen = buzz.stream_room("realworld-ops")
+        try:
+            with pytest.raises(ConnectionError, match="Too many"):
+                await anext(gen)
+        finally:
+            await gen.aclose()
+
+    asyncio.run(_run())
+    pubsub.aclose.assert_awaited()
 
 
 def test_list_identities(client: TestClient) -> None:

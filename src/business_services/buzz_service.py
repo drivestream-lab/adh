@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 from typing import Optional
 
@@ -240,15 +240,15 @@ class BuzzService(BaseBusinessService):
         await self._publish_room(slug, posted)
         return posted
 
-    async def stream_room(self, slug: str) -> AsyncIterator[str]:
+    async def stream_room(self, slug: str) -> AsyncGenerator[str, None]:
         """Yield JSON MessageRead payloads for one room (Redis Pub/Sub)."""
         await self.get_room(slug)
         pubsub = self._redis.pubsub()
         channel = self._room_channel(slug)
-        await pubsub.subscribe(channel)
-        self.logger.info("Buzz SSE subscribed", room=slug, channel=channel)
-        last_ping = asyncio.get_event_loop().time()
         try:
+            await pubsub.subscribe(channel)
+            self.logger.info("Buzz SSE subscribed", room=slug, channel=channel)
+            last_ping = asyncio.get_event_loop().time()
             yield json.dumps({"type": "subscribed", "slug": slug})
             while True:
                 raw = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
@@ -265,6 +265,9 @@ class BuzzService(BaseBusinessService):
         finally:
             try:
                 await pubsub.unsubscribe(channel)
+            except Exception:
+                self.logger.exception("Failed to unsubscribe Buzz pubsub", room=slug)
+            try:
                 await pubsub.aclose()
             except Exception:
                 self.logger.exception("Failed to close Buzz pubsub", room=slug)

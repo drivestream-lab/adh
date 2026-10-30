@@ -10,6 +10,8 @@ type Message = {
   created_at?: string | null;
 };
 
+import { renderMarkdown } from "./markdown";
+
 const api = "/api/v1/buzz";
 const HANDLE_KEY = "buzz.handle";
 const HIDE_HB_KEY = "buzz.hideHeartbeats";
@@ -79,7 +81,7 @@ function messageHtml(m: Message): string {
   const extra = m.event_type ? ` · ${esc(m.event_type)}` : "";
   return `<div class="${cls}" data-id="${esc(m.id)}">
     <div class="meta">${esc(m.identity_handle)} <span class="kind">${esc(m.kind)}${extra}</span> · ${esc(when)}</div>
-    <div>${esc(m.body)}</div>
+    <div class="body">${renderMarkdown(m.body)}</div>
   </div>`;
 }
 
@@ -116,25 +118,36 @@ async function loadMessages() {
 }
 
 let reconnectTimer: number | null = null;
+let reconnectDelay = 1500;
+const MAX_RECONNECT_DELAY = 15000;
 
 function connectStream() {
   source?.close();
+  source = null;
   if (reconnectTimer !== null) {
     window.clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
   source = new EventSource(`${api}/rooms/${encodeURIComponent(currentSlug)}/stream`);
-  source.onopen = () => setStatus("live", true);
+  source.onopen = () => {
+    setStatus("live", true);
+    reconnectDelay = 1500;
+  };
   source.onerror = () => {
+    if (reconnectTimer !== null) return;
     setStatus("reconnecting", false);
     source?.close();
+    source = null;
+    const delay = reconnectDelay;
+    reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
     reconnectTimer = window.setTimeout(() => {
       reconnectTimer = null;
       connectStream();
-    }, 1500);
+    }, delay);
   };
   source.onmessage = (ev) => {
     setStatus("live", true);
+    reconnectDelay = 1500;
     try {
       const data = JSON.parse(ev.data) as Message & { type?: string };
       if (data.type === "ping" || data.type === "subscribed") return;

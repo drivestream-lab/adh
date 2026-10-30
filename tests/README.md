@@ -13,8 +13,8 @@ tests/
 ## Running
 
 ```bash
-# Unit only (CI gate)
-make check && make test
+make check
+make test
 
 # Live verify (integration) — run scripts directly when added:
 # docker-compose -f docker/docker-compose.yml up -d

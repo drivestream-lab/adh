@@ -7,7 +7,7 @@ templates:
       Rejected: the same outline is already in progress. I received it earlier and will post status on that work. Do not paste it again.
   hermes.pm.status.outline-ack:
     body: |-
-      Received your outline. Work is in progress — I will walk /prd-think C1 then C2, then /prd-quality, write those files on {{ branch }} in {{ meta_repo }} as adh-dev-pm, and post each hop's status and logical output here. This outline is a hypothesis, not a PRD. I will not merge. Do not resend.
+      Received your outline. Work is in progress — I will walk /prd-think C1 then C2, then /prd-quality, then /prd-ask, then /prd-recommend, write those files on {{ branch }} in {{ meta_repo }} as adh-dev-pm, and post each hop's status and logical output here. This outline is a hypothesis, not a PRD. I will not merge. Do not resend.
   hermes.pm.status.need-init:
     body: |-
       T0: cannot allocate INIT from {{ meta_repo }}. Occupied: {{ occupied_inits }}. Prefix from programme.yaml is {{ prefix }}. Harness shape is INIT-COMPONENT-NUMBER. Reply with that id only. I will not invent a job slug. Do not resend the outline.
@@ -34,10 +34,47 @@ templates:
       Ready pass {{ pass_number }}/{{ max_passes }}: no handover yes. Loop continues to /prd-think {{ label }} at `{{ claimed_path }}`. FAILs: {{ fail_list }}. Think {{ think_runs }}/{{ max_think }}.
   hermes.pm.status.loop-stop:
     body: |-
-      Ready loop stop ({{ reason }}). Think runs {{ think_runs }}/{{ max_think }}. Ready passes {{ ready_passes }}/{{ max_ready }}. Promote is still you — name the file. Low score still gets a draft PR later. I will not merge.
+      Ready loop stop ({{ reason }}). Think runs {{ think_runs }}/{{ max_think }}. Ready passes {{ ready_passes }}/{{ max_ready }}. Next hop: /prd-ask. Promote is still you after recommend. I will not merge.
+  hermes.pm.status.ask-next:
+    body: |-
+      Next hop: /prd-ask for {{ initiative }}. I will read the think files and quality, then post at most {{ max_forks }} closed forks that change the pick.
+  hermes.pm.status.ask-returned:
+    body: |-
+      Ask returned {{ fork_count }} fork(s) for {{ initiative }}. Answer with `F1: <choice>` lines, or `skip`.
+  hermes.pm.status.ask-card:
+    body: |-
+      Forks for {{ initiative }}. Team rec is marked with ←. You still choose. Reply `F1: <choice>` lines, or `skip`. One question. Long notes are ignored.
+
+      {{ fork_block }}
+  hermes.pm.status.ask-timeout-provisional:
+    body: |-
+      No fork answers for {{ initiative }}. Recommend will be provisional (skip / timeout).
+  hermes.pm.status.ask-stopped:
+    body: |-
+      Stopped /prd-ask for {{ initiative }}. I will not recommend. Promote is still you. I will not merge.
+  hermes.pm.status.lead-stopped:
+    body: |-
+      Stopped {{ initiative }} on Lead `stop`. I will not continue think, quality, ask, or recommend. Promote is still you. I will not merge.
+  hermes.pm.status.recommend-next:
+    body: |-
+      Next hop: /prd-recommend for {{ initiative }}. Pick is vs the brief, not vs 0-3.
+  hermes.pm.status.recommend-returned:
+    body: |-
+      Recommend returned {{ recommend }} for {{ initiative }}. Engineering-ready={{ engineering_ready }}.
+  hermes.pm.status.recommend-card:
+    body: |-
+      Recommend for {{ initiative }}: {{ recommend }} (`{{ path }}`). Engineering-ready={{ engineering_ready }}.
+      Why: {{ why }}
+      Reply `{{ recommend }}` to name that file, `none`, or `iterate`. Promote is still you. Forge does not draft until you promote. I will not merge.
+  hermes.pm.status.promote-noted:
+    body: |-
+      Noted {{ pick }} for {{ initiative }}. Promote is still you. Forge is not drafting yet. I will not merge.
+  hermes.pm.status.busy:
+    body: |-
+      Work is already in progress for this programme. I will not start a new outline. Answer the open question, send `stop`, or wait.
   hermes.pm.status.promote-is-you:
     body: |-
-      Think candidates and quality for {{ initiative }} are on this room. Promote is still you — name the file when you want it promoted. Forge does not draft until you promote. I will not merge.
+      Think, quality, ask, and recommend for {{ initiative }} are on this room. Promote is still you — name the file when you want it promoted. Forge does not draft until you promote. I will not merge.
   hermes.pm.status.failed:
     body: |-
       Failed: {{ error }}. Resend the outline to try again.
@@ -53,6 +90,12 @@ templates:
   hermes.pm.heartbeat.quality:
     body: |-
       PM walking prd-quality
+  hermes.pm.heartbeat.ask:
+    body: |-
+      PM walking prd-ask
+  hermes.pm.heartbeat.recommend:
+    body: |-
+      PM walking prd-recommend
   hermes.pm.heartbeat.still-working:
     body: |-
       PM still working on outline ({{ step }}/{{ steps }}, {{ elapsed }}s)
@@ -70,13 +113,16 @@ templates:
       after-PR grade done
   hermes.pm.error.stub-hop:
     body: |-
-      {{ hop }} did not produce a valid candidate ({{ reason }}). I will not post a stub hop.
+      {{ hop }} did not produce a valid candidate ({{ reason }}). I will not post a fake hop.
   hermes.pm.error.ready-no-bars:
     body: |-
       Ready pass {{ pass_number }} returned no B-bar for {{ initiative }}. I will not post a fake zero.
+  hermes.pm.error.quality-card:
+    body: |-
+      Quality card for {{ initiative }} returned no recommendation or gaps. I will not post a fake memo.
   hermes.pm.error.pending-init:
     body: |-
-      {{ hop }} did not allocate a programme INIT. I will not post a stub hop.
+      {{ hop }} did not allocate a programme INIT. I will not invent an id.
   hermes.pm.error.model-timeout:
     body: |-
       Model did not finish after {{ steps }} waits of {{ interval }}s ({{ elapsed }}s). Failing.

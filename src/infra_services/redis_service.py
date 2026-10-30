@@ -172,7 +172,7 @@ class RedisService(BaseInfraService):
         """Return a Redis Pub/Sub object for live Buzz streams."""
         if not self._initialized:
             raise RuntimeError("Redis service has not been initialized")
-        return self.get_client().pubsub()
+        return self._require_connection_manager().get_pubsub_client().pubsub()
 
     def _require_connection_manager(self) -> RedisConnectionManager:
         if not self._initialized:
