@@ -10,6 +10,7 @@ from src.business_services.orchestrator_service import OrchestratorService
 from src.infra_services.github_app_service import GitHubAppService
 from src.infra_services.hermes_store_service import HermesStoreService
 from src.infra_services.litellm_service import LiteLLMService
+from src.infra_services.pm_skill_runner_service import PmSkillRunnerService
 from src.infra_services.pm_workspace_service import PmWorkspaceService
 from src.infra_services.prompt_service import PromptService
 from src.infra_services.tenant_registry_service import TenantRegistryService
@@ -33,6 +34,7 @@ _INFRA_SERVICE_TYPES: tuple[type, ...] = (
     GitHubAppService,
     TenantRegistryService,
     PmWorkspaceService,
+    PmSkillRunnerService,
     TelemetryService,
 )
 

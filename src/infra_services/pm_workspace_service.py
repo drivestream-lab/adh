@@ -51,6 +51,10 @@ def recommend_path(initiative: str) -> str:
     return f"prd/reports/{initiative}-prd-recommend.md"
 
 
+def prd_path(initiative: str) -> str:
+    return f"prd/{initiative}.md"
+
+
 def next_free_think_runs(initiative: str, existing: list[str]) -> tuple[int, int]:
     occupied = set(existing)
     run = 1
@@ -229,6 +233,116 @@ class PmWorkspaceService(BaseInfraService):
         if not dest.is_file():
             return ""
         return dest.read_text(encoding="utf-8")
+
+    def delete_local(self, tenant: TenantContext, relative_path: str) -> Optional[Path]:
+        dest = Path(tenant.meta_root).expanduser() / relative_path
+        if not dest.is_file():
+            return None
+        dest.unlink()
+        logger.info("Deleted PM artifact from workspace", path=str(dest), slug=tenant.slug)
+        return dest
+
+    def move_local(
+        self, tenant: TenantContext, relative_path: str, dest_relative: str
+    ) -> Optional[Path]:
+        root = Path(tenant.meta_root).expanduser()
+        source = root / relative_path
+        if not source.is_file():
+            return None
+        dest = root / dest_relative
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        contents = source.read_text(encoding="utf-8")
+        dest.write_text(contents, encoding="utf-8")
+        source.unlink()
+        logger.info(
+            "Moved PM artifact in workspace",
+            source=str(source),
+            dest=str(dest),
+            slug=tenant.slug,
+        )
+        return dest
+
+    async def archive_paths(
+        self,
+        tenant: TenantContext,
+        moves: list[tuple[str, str]],
+        *,
+        commit_message: str,
+    ) -> dict[str, Any]:
+        """Copy each source→dest via publish, then delete the source locally and on GitHub.
+
+        Caller must pre-validate allowlist (Hermes promote_cleanup).
+        """
+        archived: list[dict[str, Any]] = []
+        skipped: list[str] = []
+        for source, dest in moves:
+            normalized = source.replace("\\", "/").strip()
+            target = dest.replace("\\", "/").strip()
+            body = self.read_local(tenant, normalized)
+            if not body:
+                skipped.append(normalized)
+                continue
+            published = await self.publish(
+                tenant,
+                target,
+                body,
+                f"{commit_message}: archive {normalized}",
+            )
+            self.delete_local(tenant, normalized)
+            github_delete = await self._delete_github(
+                tenant,
+                normalized,
+                f"{commit_message}: remove {normalized}",
+            )
+            archived.append(
+                {
+                    "source": normalized,
+                    "dest": target,
+                    "local": published.get("local_path"),
+                    "github_archive": published.get("github"),
+                    "github_delete": github_delete,
+                }
+            )
+        return {"archived": archived, "skipped": skipped}
+
+    async def _delete_github(
+        self,
+        tenant: TenantContext,
+        relative_path: str,
+        commit_message: str,
+    ) -> Optional[dict[str, Any]]:
+        roles_path = self._roles_path()
+        if roles_path is None:
+            logger.warning("roles.yaml missing; skip GitHub delete")
+            return None
+        app = _pm_app(roles_path)
+        if tenant.meta_repo not in app.repos:
+            raise ValidationError(
+                f"PM write refused: {tenant.meta_repo} is not on identity {_PM_APP_SLUG}"
+            )
+        try:
+            token, _granted = await self._github.installation_token(
+                app,
+                write=True,
+                repositories=[tenant.meta_repo],
+            )
+            return await self._github.delete_text_file(
+                token,
+                tenant.meta_repo,
+                path=relative_path,
+                branch=tenant.integration_branch,
+                message=commit_message,
+            )
+        except ValidationError:
+            raise
+        except Exception:
+            logger.exception(
+                "GitHub delete failed",
+                path=relative_path,
+                repo=tenant.meta_repo,
+                slug=tenant.slug,
+            )
+            return None
 
     async def _put_github(
         self,
