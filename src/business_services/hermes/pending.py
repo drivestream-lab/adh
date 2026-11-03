@@ -27,6 +27,22 @@ def pending_init_key(slug: str) -> str:
     return f"adh:pm:awaiting-init:{slug}"
 
 
+def pending_post_promote_key(slug: str) -> str:
+    return f"adh:pm:awaiting-post-promote:{slug}"
+
+
+def pending_validate_decisions_key(slug: str) -> str:
+    return f"adh:pm:awaiting-validate-decisions:{slug}"
+
+
+def pending_update_manifest_key(slug: str) -> str:
+    return f"adh:pm:awaiting-update-manifest:{slug}"
+
+
+def pending_impact_confirm_key(slug: str) -> str:
+    return f"adh:pm:awaiting-impact-confirm:{slug}"
+
+
 def inflight_lock_key(slug: str, fingerprint: str) -> str:
     return f"adh:pm:inflight:{slug}:{fingerprint}"
 
@@ -51,6 +67,10 @@ class PendingMixin:
             slug in self._awaiting_init
             or slug in self._awaiting_ask
             or slug in self._awaiting_recommend
+            or slug in getattr(self, "_awaiting_post_promote", {})
+            or slug in getattr(self, "_awaiting_validate_decisions", {})
+            or slug in getattr(self, "_awaiting_update_manifest", {})
+            or slug in getattr(self, "_awaiting_impact_confirm", {})
         )
 
     def _pending_ask_key(self, slug: str) -> str:
@@ -162,6 +182,176 @@ class PendingMixin:
             await self._redis.delete(self._pending_recommend_key(slug))
         except Exception:
             self.logger.exception("PM pending recommend clear failed", slug=slug)
+
+    def _pending_post_promote_key(self, slug: str) -> str:
+        return pending_post_promote_key(slug)
+
+    def _pending_validate_decisions_key(self, slug: str) -> str:
+        return pending_validate_decisions_key(slug)
+
+    def _pending_update_manifest_key(self, slug: str) -> str:
+        return pending_update_manifest_key(slug)
+
+    def _pending_impact_confirm_key(self, slug: str) -> str:
+        return pending_impact_confirm_key(slug)
+
+    async def _store_pending_post_promote(
+        self,
+        tenant: TenantContext,
+        room: str,
+        initiative: str,
+        prd_path_value: str,
+        *,
+        clean_after: bool = False,
+    ) -> None:
+        pending = {
+            "room": room,
+            "initiative": initiative,
+            "prd_path": prd_path_value,
+            "clean_after": clean_after,
+        }
+        self._awaiting_post_promote[tenant.slug] = pending
+        try:
+            await self._redis.set(
+                self._pending_post_promote_key(tenant.slug),
+                pending,
+                self._ask_pending_ttl(),
+            )
+        except Exception:
+            self.logger.exception("PM pending post-promote store failed", slug=tenant.slug)
+
+    async def _load_pending_post_promote(self, slug: str) -> Optional[dict[str, Any]]:
+        local = self._awaiting_post_promote.get(slug)
+        if local:
+            return local
+        try:
+            raw = await self._redis.get(self._pending_post_promote_key(slug), as_json=True)
+        except Exception:
+            self.logger.exception("PM pending post-promote load failed", slug=slug)
+            return None
+        if isinstance(raw, dict):
+            self._awaiting_post_promote[slug] = raw
+            return raw
+        return None
+
+    async def _clear_pending_post_promote(self, slug: str) -> None:
+        self._awaiting_post_promote.pop(slug, None)
+        try:
+            await self._redis.delete(self._pending_post_promote_key(slug))
+        except Exception:
+            self.logger.exception("PM pending post-promote clear failed", slug=slug)
+
+    async def _store_json_pending(
+        self, local: dict[str, dict[str, Any]], key: str, slug: str, pending: dict[str, Any]
+    ) -> None:
+        local[slug] = pending
+        try:
+            await self._redis.set(key, pending, self._ask_pending_ttl())
+        except Exception:
+            self.logger.exception("PM pending store failed", key=key, slug=slug)
+
+    async def _load_json_pending(
+        self, local: dict[str, dict[str, Any]], key: str, slug: str
+    ) -> Optional[dict[str, Any]]:
+        cached = local.get(slug)
+        if cached:
+            return cached
+        try:
+            raw = await self._redis.get(key, as_json=True)
+        except Exception:
+            self.logger.exception("PM pending load failed", key=key, slug=slug)
+            return None
+        if isinstance(raw, dict):
+            local[slug] = raw
+            return raw
+        return None
+
+    async def _clear_json_pending(
+        self, local: dict[str, dict[str, Any]], key: str, slug: str
+    ) -> None:
+        local.pop(slug, None)
+        try:
+            await self._redis.delete(key)
+        except Exception:
+            self.logger.exception("PM pending clear failed", key=key, slug=slug)
+
+    async def _store_pending_validate_decisions(
+        self, tenant: TenantContext, pending: dict[str, Any]
+    ) -> None:
+        await self._store_json_pending(
+            self._awaiting_validate_decisions,
+            self._pending_validate_decisions_key(tenant.slug),
+            tenant.slug,
+            pending,
+        )
+
+    async def _load_pending_validate_decisions(self, slug: str) -> Optional[dict[str, Any]]:
+        return await self._load_json_pending(
+            self._awaiting_validate_decisions,
+            self._pending_validate_decisions_key(slug),
+            slug,
+        )
+
+    async def _clear_pending_validate_decisions(self, slug: str) -> None:
+        await self._clear_json_pending(
+            self._awaiting_validate_decisions,
+            self._pending_validate_decisions_key(slug),
+            slug,
+        )
+
+    async def _store_pending_update_manifest(
+        self, tenant: TenantContext, pending: dict[str, Any]
+    ) -> None:
+        await self._store_json_pending(
+            self._awaiting_update_manifest,
+            self._pending_update_manifest_key(tenant.slug),
+            tenant.slug,
+            pending,
+        )
+
+    async def _load_pending_update_manifest(self, slug: str) -> Optional[dict[str, Any]]:
+        return await self._load_json_pending(
+            self._awaiting_update_manifest,
+            self._pending_update_manifest_key(slug),
+            slug,
+        )
+
+    async def _clear_pending_update_manifest(self, slug: str) -> None:
+        await self._clear_json_pending(
+            self._awaiting_update_manifest,
+            self._pending_update_manifest_key(slug),
+            slug,
+        )
+
+    async def _store_pending_impact_confirm(
+        self, tenant: TenantContext, pending: dict[str, Any]
+    ) -> None:
+        await self._store_json_pending(
+            self._awaiting_impact_confirm,
+            self._pending_impact_confirm_key(tenant.slug),
+            tenant.slug,
+            pending,
+        )
+
+    async def _load_pending_impact_confirm(self, slug: str) -> Optional[dict[str, Any]]:
+        return await self._load_json_pending(
+            self._awaiting_impact_confirm,
+            self._pending_impact_confirm_key(slug),
+            slug,
+        )
+
+    async def _clear_pending_impact_confirm(self, slug: str) -> None:
+        await self._clear_json_pending(
+            self._awaiting_impact_confirm,
+            self._pending_impact_confirm_key(slug),
+            slug,
+        )
+
+    async def _clear_all_post_promote(self, slug: str) -> None:
+        await self._clear_pending_post_promote(slug)
+        await self._clear_pending_validate_decisions(slug)
+        await self._clear_pending_update_manifest(slug)
+        await self._clear_pending_impact_confirm(slug)
 
     async def _wait_ask_answers(self, slug: str, timeout: float) -> dict[str, str]:
         event = asyncio.Event()

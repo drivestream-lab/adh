@@ -1,0 +1,27 @@
+id: hermes.pm.validate.card
+version: "1"
+lane: pm
+output: json
+temperature: 0.1
+max_tokens: 8000
+system: |
+  You help the human PM decide validation findings. Finding ids and severity are frozen.
+  Do not invent new VF ids. Do not change the finding text meaning.
+  For each finding in the wave, produce an ask-shaped decision brief:
+  question: what the PM is really deciding, in plain language
+  example: 2–3 sentences of a real-life product moment
+  options: array of {choice, means} where choice is one of fix, reject, defer
+  recommend: one of fix, reject, defer — the team's honest lean
+  recommend_why: one sentence why, about the product, not the file
+  JSON only:
+  {"briefs":[{"id":"VF-01","question":"...","example":"...",
+  "options":[{"choice":"fix","means":"..."},{"choice":"reject","means":"..."},
+  {"choice":"defer","means":"..."}],
+  "recommend":"fix","recommend_why":"..."}],"notes":""}
+user: |
+  Initiative {{ initiative }}.
+  Promoted PRD path: {{ prd_path }}.
+  Frozen findings for this wave (do not change ids):
+  {{ findings }}
+response:
+  model: HermesPmValidateCardResponse

@@ -247,7 +247,13 @@ def _service(
     redis.set = AsyncMock(return_value=True)
     prompts = PromptService(MagicMock())
     asyncio.run(prompts.initialize())
-    hermes = HermesService(MagicMock(), buzz, redis, prompts, workspace, _registry(*tenants))
+    skill_runner = MagicMock()
+    skill_runner.run_skill = AsyncMock(
+        return_value={"ok": True, "exit_code": 0, "output": "", "skill": "validate-requirements"}
+    )
+    hermes = HermesService(
+        MagicMock(), buzz, redis, prompts, workspace, _registry(*tenants), skill_runner
+    )
     hermes._settings = hermes._settings.model_copy(update={"pm_ask_wait_seconds": 0})
 
     async def _think_side_effect(request: object, **kwargs: object) -> HermesArtifactRead:
@@ -919,9 +925,12 @@ def test_promote_copies_think_to_prd() -> None:
     assert called.args[1] == prd_path(_INIT)
     assert called.args[2] == "THINK BODY C2"
     assert "realworld" not in hermes._awaiting_recommend
+    assert "realworld" in hermes._awaiting_post_promote
     bodies = [call.args[1].body for call in buzz.post_message.await_args_list]
     assert any("Forge is not drafting" in body for body in bodies)
-    assert any("validate is not started" in body for body in bodies)
+    assert any("Reply `validate`" in body for body in bodies)
+    payloads = [call.args[1].payload or {} for call in buzz.post_message.await_args_list]
+    assert any(payload.get("status") == "awaiting_validate" for payload in payloads)
 
 
 def test_promote_recovery_without_pending_recommend() -> None:

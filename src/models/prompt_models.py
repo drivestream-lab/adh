@@ -776,6 +776,20 @@ class HermesEngGradeResponse(BaseCreateModel):
     harness_proposal: Optional[str] = None
 
 
+class HermesPmValidateBrief(BaseCreateModel):
+    id: str = ""
+    question: str = ""
+    example: str = ""
+    options: list[dict[str, str]] = Field(default_factory=list)
+    recommend: str = "fix"
+    recommend_why: str = ""
+
+
+class HermesPmValidateCardResponse(BaseCreateModel):
+    briefs: list[HermesPmValidateBrief] = Field(default_factory=list)
+    notes: str = ""
+
+
 RESPONSE_MODELS: dict[str, type[BaseCreateModel]] = {
     "HermesPmBriefResponse": HermesPmBriefResponse,
     "HermesPmOutlineResponse": HermesPmOutlineResponse,
@@ -785,6 +799,7 @@ RESPONSE_MODELS: dict[str, type[BaseCreateModel]] = {
     "HermesPmAskResponse": HermesPmAskResponse,
     "HermesPmAskCardResponse": HermesPmAskCardResponse,
     "HermesPmRecommendResponse": HermesPmRecommendResponse,
+    "HermesPmValidateCardResponse": HermesPmValidateCardResponse,
     "HermesEngGradeResponse": HermesEngGradeResponse,
 }
 

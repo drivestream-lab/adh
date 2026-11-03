@@ -10,6 +10,7 @@ from src.infra_services.github_app_service import GitHubAppService
 from src.infra_services.hermes_store_service import HermesStoreService
 from src.infra_services.litellm_service import LiteLLMService
 from src.infra_services.pin_walker_service import PinWalkerService
+from src.infra_services.pm_skill_runner_service import PmSkillRunnerService
 from src.infra_services.pm_workspace_service import PmWorkspaceService
 from src.infra_services.postgres_service import PostgresService
 from src.infra_services.prompt_service import PromptService
@@ -37,6 +38,7 @@ class InfraModule(Module):
         binder.bind(GitHubAppService, to=GitHubAppService, scope=singleton)
         binder.bind(TenantRegistryService, to=TenantRegistryService, scope=singleton)
         binder.bind(PmWorkspaceService, to=PmWorkspaceService, scope=singleton)
+        binder.bind(PmSkillRunnerService, to=PmSkillRunnerService, scope=singleton)
         binder.bind(CursorCliService, to=CursorCliService, scope=singleton)
         binder.bind(BuzzHttpService, to=BuzzHttpService, scope=singleton)
         binder.bind(TelemetryService, scope=singleton)

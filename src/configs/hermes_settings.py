@@ -105,6 +105,22 @@ class HermesSettings(BaseSettings):
         ge=0,
         description="Extra Redis TTL after ask wait so expiry cannot free an outline slot.",
     )
+    pm_max_validate_briefs: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Max ask-shaped VF briefs posted per decision wave.",
+    )
+    pm_max_post_validate_passes: int = Field(
+        default=2,
+        ge=1,
+        le=4,
+        description="Max validate→update cycles in post-promote before stalling.",
+    )
+    pm_skill_runner_enabled: bool = Field(
+        default=True,
+        description="When true, post-promote hops invoke Cursor CLI skill runner.",
+    )
     litellm_concurrency: int = Field(
         default=2,
         ge=1,

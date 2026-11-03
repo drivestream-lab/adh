@@ -1,0 +1,12 @@
+kind: copy-catalog
+id: hermes.pm.skill.invoke
+version: "1"
+templates:
+  hermes.pm.skill.invoke:
+    body: |-
+      Execute the prayog skill `/{{ skill }}` for initiative {{ initiative }}.
+      Promoted PRD path: `{{ prd_path }}`.
+      Reports directory: `{{ reports_dir }}`.
+      Follow the skill SKILL.md exactly. Write only canonical artifact paths.
+      Do not open a GitHub PR. Do not merge. Do not invent a new INIT.
+      Extra Lead context: {{ extra }}

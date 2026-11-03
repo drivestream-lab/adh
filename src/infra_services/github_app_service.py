@@ -308,6 +308,57 @@ class GitHubAppService(BaseInfraService):
             "branch": branch,
         }
 
+    async def delete_text_file(
+        self,
+        token: str,
+        repo: str,
+        *,
+        path: str,
+        branch: str,
+        message: str,
+    ) -> Optional[dict[str, Any]]:
+        """Delete a file on `branch`. Never merges. Returns None if missing."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        headers = _token_headers(token)
+        repo_url = f"{api}/repos/{org}/{repo}"
+        await self._ensure_branch(repo_url, headers, branch)
+        api_path = "/".join(quote(part, safe="") for part in path.split("/") if part)
+        file_url = f"{repo_url}/contents/{api_path}"
+        existing = await self._client.get(file_url, headers=headers, params={"ref": branch})
+        if existing.status_code == 404:
+            return None
+        if existing.status_code >= 400:
+            existing.raise_for_status()
+        sha = str(existing.json().get("sha") or "")
+        if not sha:
+            return None
+        response = await self._client.request(
+            "DELETE",
+            file_url,
+            headers=headers,
+            json={"message": message, "sha": sha, "branch": branch},
+        )
+        if response.status_code >= 400:
+            logger.info(
+                "GitHub content delete failed",
+                repo=repo,
+                path=path,
+                branch=branch,
+                status=response.status_code,
+                body=response.text[:300],
+            )
+            response.raise_for_status()
+        body = response.json() if response.content else {}
+        commit = body.get("commit") or {}
+        return {
+            "commit_sha": str(commit.get("sha") or ""),
+            "path": path,
+            "branch": branch,
+        }
+
     async def _ensure_branch(self, repo_url: str, headers: dict[str, str], branch: str) -> None:
         if self._client is None:
             raise RuntimeError("GitHub App service has not been initialized")

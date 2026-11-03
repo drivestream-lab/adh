@@ -74,7 +74,60 @@ templates:
       Reply `{{ recommend }}` to name that file, `none`, or `iterate`. Promote is still you. Forge does not draft until you promote. I will not merge.
   hermes.pm.status.promote-noted:
     body: |-
-      Noted {{ pick }} for {{ initiative }} ({{ path }}). Copied think → `prd/{{ initiative }}.md` (workspace={{ local }}; github={{ github_state }}). Forge is not drafting. Next hop validate is not started. I will not merge.
+      Noted {{ pick }} for {{ initiative }} ({{ path }}). Copied think → `prd/{{ initiative }}.md` (workspace={{ local }}; github={{ github_state }}). Forge is not drafting. Think/quality scratch is kept until you `clean`. Reply `validate` to start post-PM, or `clean` to archive scratch. I will not merge.
+  hermes.pm.status.promote-await-validate:
+    body: |-
+      Promoted `{{ path }}` for {{ initiative }}. Scratch think/quality files are still on disk. Reply `validate` to run `/validate-requirements`, `clean` to archive pre-promote reports, or `stop`. I will not merge.
+  hermes.pm.status.promote-archived:
+    body: |-
+      Archived pre-promote scratch for {{ initiative }}: {{ paths }}. `prd/{{ initiative }}.md` was not touched. I will not merge.
+  hermes.pm.status.validate-next:
+    body: |-
+      Next hop: `/validate-requirements` for {{ initiative }} (pass {{ pass_number }}). Skill will write the validation report. I will not merge.
+  hermes.pm.status.validate-card:
+    body: |-
+      Validation decisions for {{ initiative }}. Each brief is one finding. Reply `VF-01: fix` / `reject` / `defer`, or `VF-01: explain`, or `accept-recs` for this wave.
+
+      {{ brief_block }}
+  hermes.pm.status.validate-explain:
+    body: |-
+      Deeper brief for {{ initiative }} (no advance):
+
+      {{ brief_block }}
+  hermes.pm.status.validate-partial:
+    body: |-
+      Recorded {{ answered }}/{{ wave_size }} answers in this wave for {{ initiative }}. Reply the remaining `VF-*: …` lines, or `accept-recs`.
+  hermes.pm.status.validate-invalid:
+    body: |-
+      Validation answers for {{ initiative }} were not accepted ({{ reason }}). Reply one `VF-nn: fix|reject|defer` per line, or `explain`.
+  hermes.pm.status.zero-findings-skip:
+    body: |-
+      Validation for {{ initiative }} has no open findings. Skipping review/update. Next hop: impact-map.
+  hermes.pm.status.resolution-wrote:
+    body: |-
+      Wrote `{{ path }}` from your VF answers for {{ initiative }}. Next: update-documents manifest.
+  hermes.pm.status.manifest-card:
+    body: |-
+      Update manifest for {{ initiative }}.
+
+      {{ brief_block }}
+  hermes.pm.status.manifest-held:
+    body: |-
+      Held update-documents for {{ initiative }}. Reply when you want to `apply`, or `stop`.
+  hermes.pm.status.impact-card:
+    body: |-
+      Impact map for {{ initiative }}.
+
+      {{ brief_block }}
+  hermes.pm.status.impact-confirmed:
+    body: |-
+      Impact map confirmed for {{ initiative }} (`{{ path }}`). Forge baton is ready — Hermes will not open a draft PR. Reply `clean` anytime to archive leftover think scratch. I will not merge.
+  hermes.pm.status.impact-revise:
+    body: |-
+      Impact map for {{ initiative }} needs revision. Tell me what to change, then we can re-run impact. Forge is not drafting. I will not merge.
+  hermes.pm.status.skill-failed:
+    body: |-
+      Skill hop `{{ hop }}` failed for {{ initiative }}: {{ error }}. Reply `retry {{ hop }}` or `stop`. I will not merge.
   hermes.pm.status.promote-already:
     body: |-
       `prd/{{ initiative }}.md` already exists for {{ initiative }}. I will not overwrite. Forge is not drafting. Next hop validate is not started. I will not merge.
