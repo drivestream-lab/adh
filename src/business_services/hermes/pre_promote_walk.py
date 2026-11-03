@@ -16,6 +16,7 @@ from src.business_services.hermes.lead_tokens import (
     is_lead_outline_body,
     parse_ask_answers,
     parse_promote_pick,
+    promote_pick_wants_clean,
     validate_ask_answers,
 )
 from src.business_services.hermes.gates import _any_handover
@@ -747,6 +748,7 @@ class PrePromoteWalkMixin:
         await self._clear_pending_init(tenant.slug)
         await self._clear_pending_ask(tenant.slug)
         await self._clear_pending_recommend(tenant.slug)
+        await self._clear_all_post_promote(tenant.slug)
         await self._status(
             room,
             self._copy("hermes.pm.status.lead-stopped", {"initiative": initiative}),
@@ -835,20 +837,22 @@ class PrePromoteWalkMixin:
         # A6: while ask is open, promote tokens are chatter (ask handler already claimed).
         if await self._load_pending_ask(tenant.slug) is not None:
             return False
-        pick = parse_promote_pick(message.body)
+        raw_pick = parse_promote_pick(message.body)
         pending = await self._load_pending_recommend(tenant.slug)
         if pending is None:
-            if pick is None or pick in {"none", "iterate", "skip"}:
+            if raw_pick is None or raw_pick in {"none", "iterate", "skip"}:
                 return False
-            return await self._promote_recovery(tenant, room, pick)
+            pick, clean_after = promote_pick_wants_clean(raw_pick)
+            return await self._promote_recovery(tenant, room, pick, clean_after=clean_after)
         if str(pending.get("room") or room) != room:
             return False
-        if pick is None:
+        if raw_pick is None:
             self.logger.info(
                 "Ignored Lead chatter while /prd-recommend is open",
                 slug=tenant.slug,
             )
             return True
+        pick, clean_after = promote_pick_wants_clean(raw_pick)
         initiative = str(pending.get("initiative") or "")
         if pick in {"none", "iterate", "skip"}:
             await self._clear_pending_recommend(tenant.slug)
@@ -876,11 +880,19 @@ class PrePromoteWalkMixin:
             pick=pick,
             preferred_path=str(pending.get("path") or ""),
             think_paths=list(pending.get("think_paths") or []),
+            clean_after=clean_after,
         )
         await self._clear_pending_recommend(tenant.slug)
         return True
 
-    async def _promote_recovery(self, tenant: TenantContext, room: str, pick: str) -> bool:
+    async def _promote_recovery(
+        self,
+        tenant: TenantContext,
+        room: str,
+        pick: str,
+        *,
+        clean_after: bool = False,
+    ) -> bool:
         """A7: promote when quality exists, PRD missing, even without awaiting-recommend."""
         listing = self._workspace.inventory(tenant)
         initiative = self._open_initiative.get(tenant.slug) or ""
@@ -936,6 +948,7 @@ class PrePromoteWalkMixin:
             pick=pick,
             preferred_path="",
             think_paths=think_paths,
+            clean_after=clean_after,
         )
         return True
 
@@ -948,6 +961,7 @@ class PrePromoteWalkMixin:
         pick: str,
         preferred_path: str,
         think_paths: list[Any],
+        clean_after: bool = False,
     ) -> None:
         dest = prd_path(initiative)
         if self._workspace.read_local(tenant, dest).strip():
@@ -1042,13 +1056,15 @@ class PrePromoteWalkMixin:
             },
         )
         self.logger.info(
-            "Promoted think file to PRD; Forge is not drafting; validate not started",
+            "Promoted think file to PRD; awaiting Lead validate/clean",
             slug=tenant.slug,
             pick=pick,
             initiative=initiative,
             source=source,
             dest=dest,
         )
+        self._open_initiative[tenant.slug] = initiative
+        await self._enter_post_promote_gate(tenant, room, initiative, clean_after=clean_after)
 
     def _resolve_promote_source(
         self,

@@ -28,11 +28,13 @@ from src.business_services.hermes.lead_tokens import (  # noqa: F401
     parse_promote_pick,
 )
 from src.business_services.hermes.pending import PendingMixin
+from src.business_services.hermes.post_promote_walk import PostPromoteWalkMixin
 from src.business_services.hermes.pre_promote_walk import PrePromoteWalkMixin
 from src.business_services.hermes.render_pm import (
     RenderPmMixin,
     _format_ready_files,
 )
+from src.infra_services.pm_skill_runner_service import PmSkillRunnerService
 from src.configs.hermes_settings import HermesSettings
 from src.configs.rubrics import RUBRIC_ENG, RUBRIC_PM, weighted_overall
 from src.infra_services.hermes_store_service import HermesStoreService
@@ -69,7 +71,13 @@ from src.models.tenant_models import (
 )
 
 
-class HermesService(PrePromoteWalkMixin, PendingMixin, RenderPmMixin, BaseBusinessService):
+class HermesService(
+    PostPromoteWalkMixin,
+    PrePromoteWalkMixin,
+    PendingMixin,
+    RenderPmMixin,
+    BaseBusinessService,
+):
     """Autonomous LLM brain. Writes Buzz + meta-repo files as adh-dev-pm. Never merges."""
 
     @inject
@@ -81,6 +89,7 @@ class HermesService(PrePromoteWalkMixin, PendingMixin, RenderPmMixin, BaseBusine
         prompts: PromptService,
         workspace: PmWorkspaceService,
         tenants: TenantRegistryService,
+        skill_runner: PmSkillRunnerService,
     ) -> None:
         super().__init__()
         self._store = store
@@ -89,6 +98,7 @@ class HermesService(PrePromoteWalkMixin, PendingMixin, RenderPmMixin, BaseBusine
         self._prompts = prompts
         self._workspace = workspace
         self._tenants = tenants
+        self._skill_runner = skill_runner
         self._settings = HermesSettings.get_instance()
         self._boot_task: Optional[asyncio.Task[None]] = None
         self._listen_tasks: list[asyncio.Task[None]] = []
@@ -97,6 +107,10 @@ class HermesService(PrePromoteWalkMixin, PendingMixin, RenderPmMixin, BaseBusine
         self._awaiting_init: dict[str, dict[str, Any]] = {}
         self._awaiting_ask: dict[str, dict[str, Any]] = {}
         self._awaiting_recommend: dict[str, dict[str, Any]] = {}
+        self._awaiting_post_promote: dict[str, dict[str, Any]] = {}
+        self._awaiting_validate_decisions: dict[str, dict[str, Any]] = {}
+        self._awaiting_update_manifest: dict[str, dict[str, Any]] = {}
+        self._awaiting_impact_confirm: dict[str, dict[str, Any]] = {}
         self._ask_events: dict[str, asyncio.Event] = {}
         self._ask_answers: dict[str, dict[str, str]] = {}
         self._outline_tasks: dict[str, asyncio.Task[None]] = {}
@@ -669,6 +683,14 @@ class HermesService(PrePromoteWalkMixin, PendingMixin, RenderPmMixin, BaseBusine
         if await self._try_lead_stop(tenant, room, message):
             return
         if await self._try_ask_answer(tenant, room, message):
+            return
+        if await self._try_post_promote_gate(tenant, room, message):
+            return
+        if await self._try_finding_answers(tenant, room, message):
+            return
+        if await self._try_manifest_answer(tenant, room, message):
+            return
+        if await self._try_impact_answer(tenant, room, message):
             return
         if await self._try_promote_pick(tenant, room, message):
             return

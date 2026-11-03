@@ -90,7 +90,15 @@ _PARSED = {
 def _hermes() -> HermesService:
     prompts = PromptService(MagicMock())
     asyncio.run(prompts.initialize())
-    return HermesService(MagicMock(), MagicMock(), MagicMock(), prompts, MagicMock(), MagicMock())
+    return HermesService(
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        prompts,
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+    )
 
 
 def test_quality_file_keeps_tables_and_highlights_recommendation() -> None:
