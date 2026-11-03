@@ -40,18 +40,24 @@ templates:
       Next hop: /prd-ask for {{ initiative }}. I will read the think files and quality, then post at most {{ max_forks }} closed forks that change the pick.
   hermes.pm.status.ask-returned:
     body: |-
-      Ask returned {{ fork_count }} fork(s) for {{ initiative }}. Answer with `F1: <choice>` lines, or `skip`.
+      Ask returned {{ fork_count }} fork(s) for {{ initiative }}. Answer with `F1: <choice>` lines (exact table text), or `skip`. Naming a candidate (`C4`) here does not promote — answer forks or `skip` first.
   hermes.pm.status.ask-card:
     body: |-
-      Forks for {{ initiative }}. Team rec is marked with ←. You still choose. Reply `F1: <choice>` lines, or `skip`. One question. Long notes are ignored.
+      Forks for {{ initiative }}. Team rec is marked with ←. You still choose. Reply `F1: <choice>` lines using the exact table text, or `skip`. One fork per line. A candidate label (`C4`) or path is not a promote while ask is open — `skip` first, then name the file. Long notes are ignored.
 
       {{ fork_block }}
+  hermes.pm.status.ask-invalid:
+    body: |-
+      Ask answers for {{ initiative }} were not accepted ({{ reason }}). Reply one `F1: <choice>` line per fork using the exact choice text, or `skip`. I will not advance.
   hermes.pm.status.ask-timeout-provisional:
     body: |-
-      No fork answers for {{ initiative }}. Recommend will be provisional (skip / timeout).
+      No fork answers for {{ initiative }}. Recommend will be provisional (skip / timeout). I will not start a new outline from this wait.
   hermes.pm.status.ask-stopped:
     body: |-
       Stopped /prd-ask for {{ initiative }}. I will not recommend. Promote is still you. I will not merge.
+  hermes.pm.status.ask-resume:
+    body: |-
+      Resuming open /prd-ask for {{ initiative }}. Answer with `F1: <choice>` lines or `skip`. Naming a file does not promote while ask is open.
   hermes.pm.status.lead-stopped:
     body: |-
       Stopped {{ initiative }} on Lead `stop`. I will not continue think, quality, ask, or recommend. Promote is still you. I will not merge.
@@ -68,13 +74,22 @@ templates:
       Reply `{{ recommend }}` to name that file, `none`, or `iterate`. Promote is still you. Forge does not draft until you promote. I will not merge.
   hermes.pm.status.promote-noted:
     body: |-
-      Noted {{ pick }} for {{ initiative }}. Promote is still you. Forge is not drafting yet. I will not merge.
+      Noted {{ pick }} for {{ initiative }} ({{ path }}). Copied think → `prd/{{ initiative }}.md` (workspace={{ local }}; github={{ github_state }}). Forge is not drafting. Next hop validate is not started. I will not merge.
+  hermes.pm.status.promote-already:
+    body: |-
+      `prd/{{ initiative }}.md` already exists for {{ initiative }}. I will not overwrite. Forge is not drafting. Next hop validate is not started. I will not merge.
+  hermes.pm.status.promote-skip:
+    body: |-
+      Lead chose {{ pick }} for {{ initiative }}. No promote copy. Forge is not drafting. I will not merge.
+  hermes.pm.status.promote-unknown:
+    body: |-
+      Could not resolve {{ pick }} to a think file for {{ initiative }}. Name a candidate like `C4` or a `prd/reports/…-prd-think….md` path. I will not merge.
   hermes.pm.status.busy:
     body: |-
       Work is already in progress for this programme. I will not start a new outline. Answer the open question, send `stop`, or wait.
   hermes.pm.status.promote-is-you:
     body: |-
-      Think, quality, ask, and recommend for {{ initiative }} are on this room. Promote is still you — name the file when you want it promoted. Forge does not draft until you promote. I will not merge.
+      Think, quality, ask, and recommend for {{ initiative }} are on this room. Promote is still you — after ask, name the file (`C4` or path). While ask is open, `skip` first. Forge does not draft until you promote. I will not merge.
   hermes.pm.status.failed:
     body: |-
       Failed: {{ error }}. Resend the outline to try again.

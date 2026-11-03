@@ -1,9 +1,9 @@
 """Hermes: PM lane + after-PR verify/grade/RCA. Does not merge."""
 
 import asyncio
-import hashlib
 import json
 import re
+from pathlib import Path
 from typing import Any, Optional
 from uuid import UUID
 
@@ -14,14 +14,52 @@ from src.business_services.buzz_service import BuzzService
 from src.configs.hermes_settings import HermesSettings
 from src.configs.rubrics import RUBRIC_ENG, RUBRIC_PM, weighted_overall
 from src.infra_services.hermes_store_service import HermesStoreService
+from src.business_services.hermes.cards import (
+    _scorecard_for_card,
+    apply_ask_card,
+    apply_quality_card,
+)
+from src.business_services.hermes.gates import (
+    _any_handover,
+    _as_float_map,
+    apply_ready_gate,
+    apply_recommend_gate,
+)
+from src.business_services.hermes.lead_tokens import (
+    _coerce_init,
+    _is_numbered_init,
+    is_lead_outline_body,
+    lock_token as _lock_token,
+    outline_fingerprint,
+    parse_ask_answers,
+    parse_promote_pick,
+    validate_ask_answers,
+)
+from src.business_services.hermes import pending as pm_pending
+from src.business_services.hermes.render_pm import (
+    _bullets,
+    _fail_list_from_quality,
+    _format_answers,
+    _format_caps,
+    _format_fork_block,
+    _format_journeys,
+    _format_oqs,
+    _format_ready_files,
+    _format_reqs,
+    _format_why_not,
+    _numbered,
+    _prior_candidate_text,
+    _quality_copy_vars,
+    _think_file_ref,
+)
 from src.infra_services.pm_workspace_service import (
     PmWorkspaceService,
     ask_path,
     next_free_think_runs,
     next_programme_init,
+    prd_path,
     quality_path,
     recommend_path,
-    skeleton_material_fails,
     think_path,
 )
 from src.infra_services.prompt_service import PromptService
@@ -47,7 +85,6 @@ from src.models.hermes_models import HermesArtifactRead, HermesBriefRequest, Her
 from src.models.prompt_models import (
     ask_card_has_signal,
     cap_ask_forks,
-    cap_lead_questions,
     quality_card_has_signal,
     quality_has_signal,
 )
@@ -1410,7 +1447,14 @@ class HermesService(BaseBusinessService):
                 "choices": [pick, "none", "iterate"],
             },
         )
-        await self._store_pending_recommend(tenant, room, initiative, pick, path)
+        await self._store_pending_recommend(
+            tenant,
+            room,
+            initiative,
+            pick,
+            path,
+            think_paths=[str(item.get("path") or "") for item in files],
+        )
         return artifact
 
     async def _listen_ops(self, room: str) -> None:
@@ -1519,10 +1563,17 @@ class HermesService(BaseBusinessService):
         )
 
     def _pending_ask_key(self, slug: str) -> str:
-        return f"adh:pm:awaiting-ask:{slug}"
+        return pm_pending.pending_ask_key(slug)
 
     def _pending_recommend_key(self, slug: str) -> str:
-        return f"adh:pm:awaiting-recommend:{slug}"
+        return pm_pending.pending_recommend_key(slug)
+
+    def _ask_pending_ttl(self) -> int:
+        return pm_pending.ask_pending_ttl_seconds(
+            ask_wait_seconds=float(self._settings.pm_ask_wait_seconds),
+            outline_lock_seconds=int(self._settings.outline_lock_seconds),
+            grace_seconds=int(self._settings.pm_ask_grace_seconds),
+        )
 
     async def _store_pending_ask(
         self,
@@ -1547,7 +1598,7 @@ class HermesService(BaseBusinessService):
             await self._redis.set(
                 self._pending_ask_key(tenant.slug),
                 pending,
-                int(self._settings.outline_lock_seconds),
+                self._ask_pending_ttl(),
             )
         except Exception:
             self.logger.exception("PM pending ask store failed", slug=tenant.slug)
@@ -1581,12 +1632,14 @@ class HermesService(BaseBusinessService):
         initiative: str,
         pick: str,
         path: str,
+        think_paths: Optional[list[str]] = None,
     ) -> None:
         pending = {
             "room": room,
             "initiative": initiative,
             "recommend": pick,
             "path": path,
+            "think_paths": list(think_paths or []),
         }
         self._awaiting_recommend[tenant.slug] = pending
         try:
@@ -1645,6 +1698,47 @@ class HermesService(BaseBusinessService):
                 slug=tenant.slug,
             )
             return True
+        if answers.get("_invalid"):
+            await self._status(
+                room,
+                self._copy(
+                    "hermes.pm.status.ask-invalid",
+                    {
+                        "initiative": str(pending.get("initiative") or ""),
+                        "reason": str(answers.get("_invalid")),
+                    },
+                ),
+                EventType.STALL,
+                {
+                    "status": "ask_invalid",
+                    "hop": "ask",
+                    "reason": answers.get("_invalid"),
+                    "initiative": pending.get("initiative"),
+                    "programme_slug": tenant.slug,
+                },
+            )
+            return True
+        mismatch = validate_ask_answers(answers, list(pending.get("forks") or []))
+        if mismatch:
+            await self._status(
+                room,
+                self._copy(
+                    "hermes.pm.status.ask-invalid",
+                    {
+                        "initiative": str(pending.get("initiative") or ""),
+                        "reason": mismatch,
+                    },
+                ),
+                EventType.STALL,
+                {
+                    "status": "ask_invalid",
+                    "hop": "ask",
+                    "reason": mismatch,
+                    "initiative": pending.get("initiative"),
+                    "programme_slug": tenant.slug,
+                },
+            )
+            return True
         self._ask_answers[tenant.slug] = answers
         event = self._ask_events.get(tenant.slug)
         if event is not None:
@@ -1660,12 +1754,17 @@ class HermesService(BaseBusinessService):
     ) -> bool:
         if not self._is_lead_text(message):
             return False
-        pending = await self._load_pending_recommend(tenant.slug)
-        if pending is None:
-            return False
-        if str(pending.get("room") or room) != room:
+        # A6: while ask is open, promote tokens are chatter (ask handler already claimed).
+        if await self._load_pending_ask(tenant.slug) is not None:
             return False
         pick = parse_promote_pick(message.body)
+        pending = await self._load_pending_recommend(tenant.slug)
+        if pending is None:
+            if pick is None or pick in {"none", "iterate", "skip"}:
+                return False
+            return await self._promote_recovery(tenant, room, pick)
+        if str(pending.get("room") or room) != room:
+            return False
         if pick is None:
             self.logger.info(
                 "Ignored Lead chatter while /prd-recommend is open",
@@ -1673,29 +1772,224 @@ class HermesService(BaseBusinessService):
             )
             return True
         initiative = str(pending.get("initiative") or "")
+        if pick in {"none", "iterate", "skip"}:
+            await self._clear_pending_recommend(tenant.slug)
+            await self._status(
+                room,
+                self._copy(
+                    "hermes.pm.status.promote-skip",
+                    {"initiative": initiative, "pick": pick},
+                ),
+                EventType.PROGRESS,
+                {
+                    "lane": "pm",
+                    "hop": "promote",
+                    "status": "promote_skip",
+                    "pick": pick,
+                    "initiative": initiative,
+                    "programme_slug": tenant.slug,
+                },
+            )
+            return True
+        await self._promote_copy(
+            tenant,
+            room,
+            initiative=initiative,
+            pick=pick,
+            preferred_path=str(pending.get("path") or ""),
+            think_paths=list(pending.get("think_paths") or []),
+        )
+        await self._clear_pending_recommend(tenant.slug)
+        return True
+
+    async def _promote_recovery(self, tenant: TenantContext, room: str, pick: str) -> bool:
+        """A7: promote when quality exists, PRD missing, even without awaiting-recommend."""
+        listing = self._workspace.inventory(tenant)
+        initiative = self._open_initiative.get(tenant.slug) or ""
+        if not initiative and "prd/reports/" in pick.replace("\\", "/"):
+            stem = Path(pick.replace("\\", "/")).name
+            if stem.upper().endswith("-PRD-THINK.MD"):
+                initiative = stem[: -len("-prd-think.md")]
+            else:
+                match = re.match(r"^(INIT-.+)-prd-think-\d+\.md$", stem, re.I)
+                if match:
+                    initiative = match.group(1)
+        if not initiative and re.fullmatch(r"C\d+", pick, re.I):
+            candidates: list[str] = []
+            for init in listing.inits:
+                qbody = self._workspace.read_local(tenant, quality_path(init))
+                if not qbody.strip():
+                    continue
+                if self._workspace.read_local(tenant, prd_path(init)).strip():
+                    continue
+                candidates.append(init)
+            if len(candidates) == 1:
+                initiative = candidates[0]
+        if not initiative:
+            return False
+        qpath = quality_path(initiative)
+        if not self._workspace.read_local(tenant, qpath).strip():
+            return False
+        dest = prd_path(initiative)
+        if self._workspace.read_local(tenant, dest).strip():
+            await self._status(
+                room,
+                self._copy("hermes.pm.status.promote-already", {"initiative": initiative}),
+                EventType.PROGRESS,
+                {
+                    "lane": "pm",
+                    "hop": "promote",
+                    "status": "promote_already",
+                    "pick": pick,
+                    "initiative": initiative,
+                    "programme_slug": tenant.slug,
+                },
+            )
+            return True
+        think_paths = [
+            path
+            for path in listing.think_paths
+            if path.startswith(f"prd/reports/{initiative}-prd-think")
+        ]
+        await self._promote_copy(
+            tenant,
+            room,
+            initiative=initiative,
+            pick=pick,
+            preferred_path="",
+            think_paths=think_paths,
+        )
+        return True
+
+    async def _promote_copy(
+        self,
+        tenant: TenantContext,
+        room: str,
+        *,
+        initiative: str,
+        pick: str,
+        preferred_path: str,
+        think_paths: list[Any],
+    ) -> None:
+        dest = prd_path(initiative)
+        if self._workspace.read_local(tenant, dest).strip():
+            await self._status(
+                room,
+                self._copy("hermes.pm.status.promote-already", {"initiative": initiative}),
+                EventType.PROGRESS,
+                {
+                    "lane": "pm",
+                    "hop": "promote",
+                    "status": "promote_already",
+                    "pick": pick,
+                    "initiative": initiative,
+                    "programme_slug": tenant.slug,
+                },
+            )
+            return
+        source = self._resolve_promote_source(pick, preferred_path, think_paths)
+        if not source:
+            await self._status(
+                room,
+                self._copy(
+                    "hermes.pm.status.promote-unknown",
+                    {"initiative": initiative, "pick": pick},
+                ),
+                EventType.STALL,
+                {
+                    "lane": "pm",
+                    "hop": "promote",
+                    "status": "promote_unknown",
+                    "pick": pick,
+                    "initiative": initiative,
+                    "programme_slug": tenant.slug,
+                },
+            )
+            return
+        body = self._workspace.read_local(tenant, source)
+        if not body.strip():
+            await self._status(
+                room,
+                self._copy(
+                    "hermes.pm.status.promote-unknown",
+                    {"initiative": initiative, "pick": pick},
+                ),
+                EventType.STALL,
+                {
+                    "lane": "pm",
+                    "hop": "promote",
+                    "status": "promote_unknown",
+                    "pick": pick,
+                    "path": source,
+                    "initiative": initiative,
+                    "programme_slug": tenant.slug,
+                },
+            )
+            return
+        result = await self._workspace.publish(
+            tenant,
+            dest,
+            body,
+            f"docs({initiative}): promote {pick} → prd",
+        )
+        local = result.get("local_path") or "skipped"
+        github = result.get("github") or {}
+        sha = ""
+        if isinstance(github, dict):
+            sha = str(github.get("commit_sha") or github.get("sha") or "")
+        github_state = f"committed {sha[:7]}" if sha else "skipped"
         await self._status(
             room,
             self._copy(
                 "hermes.pm.status.promote-noted",
-                {"initiative": initiative, "pick": pick},
+                {
+                    "initiative": initiative,
+                    "pick": pick,
+                    "path": source,
+                    "local": local,
+                    "github_state": github_state,
+                },
             ),
             EventType.PROGRESS,
             {
                 "lane": "pm",
-                "hop": "recommend",
-                "status": "promote_noted",
+                "hop": "promote",
+                "status": "promote_copied",
                 "pick": pick,
+                "source_path": source,
+                "path": dest,
                 "initiative": initiative,
                 "programme_slug": tenant.slug,
+                "publish": result,
             },
         )
         self.logger.info(
-            "Lead named a promote pick; Forge is not wired",
+            "Promoted think file to PRD; Forge is not drafting; validate not started",
             slug=tenant.slug,
             pick=pick,
             initiative=initiative,
+            source=source,
+            dest=dest,
         )
-        return True
+
+    def _resolve_promote_source(
+        self,
+        pick: str,
+        preferred_path: str,
+        think_paths: list[Any],
+    ) -> str:
+        paths = [str(item) for item in think_paths if str(item or "").strip()]
+        normalized = pick.replace("\\", "/")
+        if "prd/reports/" in normalized and normalized.lower().endswith(".md"):
+            return pick
+        if re.fullmatch(r"C\d+", pick, re.I):
+            index = int(pick[1:])
+            if 1 <= index <= len(paths):
+                return paths[index - 1]
+            if preferred_path:
+                return preferred_path
+            return ""
+        return preferred_path or ""
 
     async def _resume_pending_ask(self, tenant: TenantContext) -> None:
         pending = await self._load_pending_ask(tenant.slug)
@@ -1703,6 +1997,45 @@ class HermesService(BaseBusinessService):
             return
         if tenant.slug in self._ask_events:
             return
+        room = str(pending.get("room") or tenant.ops_room)
+        initiative = str(pending.get("initiative") or "")
+        forks = list(pending.get("forks") or [])
+        await self._status(
+            room,
+            self._copy(
+                "hermes.pm.status.ask-resume",
+                {"initiative": initiative},
+            ),
+            EventType.PROGRESS,
+            {
+                "lane": "pm",
+                "hop": "ask",
+                "status": "need_ask",
+                "initiative": initiative,
+                "programme_slug": tenant.slug,
+                "choices": forks,
+            },
+        )
+        if forks:
+            await self._status(
+                room,
+                self._copy(
+                    "hermes.pm.status.ask-card",
+                    {
+                        "initiative": initiative,
+                        "fork_block": _format_fork_block(forks),
+                    },
+                ),
+                EventType.PROGRESS,
+                {
+                    "lane": "pm",
+                    "hop": "ask",
+                    "status": "need_ask",
+                    "initiative": initiative,
+                    "programme_slug": tenant.slug,
+                    "choices": forks,
+                },
+            )
         task = asyncio.create_task(self._wait_then_continue_ask(tenant, pending))
         self._work_tasks.add(task)
         task.add_done_callback(self._work_tasks.discard)
@@ -1825,8 +2158,10 @@ class HermesService(BaseBusinessService):
         handle = message.identity_handle or ""
         if handle != self._settings.lead_handle:
             return False
-        body = (message.body or "").strip()
-        return len(body) >= self._settings.outline_min_chars
+        return is_lead_outline_body(
+            message.body or "",
+            min_chars=int(self._settings.outline_min_chars),
+        )
 
     def _is_lead_init_name(self, message: MessageRead, tenant: TenantContext) -> bool:
         if message.kind != MessageKind.MESSAGE:
@@ -1843,7 +2178,7 @@ class HermesService(BaseBusinessService):
         return _is_numbered_init(coerced, tenant)
 
     def _pending_init_key(self, slug: str) -> str:
-        return f"adh:pm:awaiting-init:{slug}"
+        return pm_pending.pending_init_key(slug)
 
     async def _ask_for_init(
         self,
@@ -2540,15 +2875,6 @@ class HermesService(BaseBusinessService):
         )
 
 
-def _lock_token(slug: str, fingerprint: str) -> str:
-    return f"{slug}:{fingerprint}"
-
-
-def outline_fingerprint(body: str) -> str:
-    normalized = " ".join(body.strip().lower().split())
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
-
-
 def _parse_stream_message(raw: str) -> Optional[MessageRead]:
     try:
         data = json.loads(raw)
@@ -2572,751 +2898,3 @@ def _outline_already_acked(rows: list[MessageRead], fingerprint: str) -> bool:
         if payload.get("status") in {"received", "in_progress", "done", "need_init"}:
             return True
     return False
-
-
-def _as_float_map(value: Any) -> dict[str, float]:
-    if not isinstance(value, dict):
-        return {}
-    out: dict[str, float] = {}
-    for key, raw in value.items():
-        try:
-            out[str(key)] = float(raw)
-        except (TypeError, ValueError):
-            continue
-    return out
-
-
-_FORK_LINE = re.compile(r"^F(\d+)\s*[:.\-]\s*(.+)$", re.I)
-
-_MATERIAL_BARS = {
-    "B1",
-    "B2",
-    "B3",
-    "B4",
-    "B5",
-    "B6",
-    "B8",
-    "B9",
-    "B10",
-    "B11",
-    "B12",
-    "B14",
-    "B15",
-}
-
-
-def apply_ready_gate(parsed: dict[str, Any], files: list[dict[str, str]]) -> dict[str, Any]:
-    """Merge LLM B-bar with code skeleton FAILs. Empty B-table cannot be handover yes."""
-    by_label = {str(item.get("label") or ""): item for item in files}
-    raw = parsed.get("candidates")
-    if not isinstance(raw, list):
-        raw = []
-    candidates: list[dict[str, Any]] = []
-    for item in raw:
-        if not isinstance(item, dict):
-            continue
-        label = str(item.get("label") or "")
-        source = by_label.get(label) or {}
-        path = str(item.get("path") or source.get("path") or "")
-        body = str(source.get("file_body") or "")
-        skel = skeleton_material_fails(body)
-        raw_bars = item.get("bars")
-        bars_in: list[Any] = raw_bars if isinstance(raw_bars, list) else []
-        bar_rows: list[dict[str, Any]] = []
-        fails: list[str] = [str(fail) for fail in (item.get("material_fails") or []) if fail]
-        for bar in bars_in:
-            if not isinstance(bar, dict):
-                continue
-            bid = str(bar.get("bar") or "").strip().split()[0].upper()
-            result = str(bar.get("result") or "").strip().upper()
-            evidence = str(bar.get("evidence") or "")
-            material = bool(bar.get("material", bid in _MATERIAL_BARS))
-            bar_rows.append(
-                {
-                    "bar": bid or str(bar.get("bar") or ""),
-                    "result": result,
-                    "material": material,
-                    "evidence": evidence,
-                    "pointer": str(bar.get("pointer") or "").strip(),
-                }
-            )
-            if result == "FAIL" and (material or bid in _MATERIAL_BARS):
-                fails.append(f"{bid} {evidence}".strip())
-        if not bar_rows:
-            for fail in skel:
-                bid = fail.split()[0]
-                bar_rows.append({"bar": bid, "result": "FAIL", "material": True, "evidence": fail})
-        fails.extend(skel)
-        unique = list(dict.fromkeys(fails))
-        scores = _as_float_map(item.get("scores"))
-        handover = str(item.get("handover") or "no").strip().lower()
-        if unique:
-            handover = "no"
-        candidates.append(
-            {
-                "label": label,
-                "path": path,
-                "handover": "yes" if handover == "yes" else "no",
-                "why": str(item.get("why") or "").strip(),
-                "why_not": str(item.get("why_not") or "").strip(),
-                "material_fails": unique,
-                "bars": bar_rows,
-                "spec_lane_guesses": [str(row) for row in (item.get("spec_lane_guesses") or [])],
-                "scores": scores,
-                "overall": weighted_overall(scores, RUBRIC_PM),
-            }
-        )
-    parsed["candidates"] = candidates
-    parsed["recommendation_why"] = str(parsed.get("recommendation_why") or "").strip()
-    parsed["lead_questions"] = cap_lead_questions(parsed.get("lead_questions"))
-    yes_labels = [cand["label"] for cand in candidates if cand["handover"] == "yes"]
-    recommend = str(parsed.get("recommend_promote") or "").strip().upper()
-    allowed = {label.upper() for label in yes_labels}
-    if recommend not in allowed:
-        parsed["recommend_promote"] = yes_labels[0] if len(yes_labels) == 1 else ""
-    return parsed
-
-
-def apply_recommend_gate(
-    parsed: dict[str, Any],
-    files: list[dict[str, str]],
-    quality: HermesArtifactRead,
-) -> dict[str, Any]:
-    """Force none when the label is unknown. Handover-no files cannot be engineering-ready."""
-    by_label = {str(item.get("label") or "").upper(): item for item in files}
-    rec = str(parsed.get("recommend") or "none").strip().upper()
-    if rec in by_label:
-        parsed["recommend"] = rec
-        parsed["path"] = str(parsed.get("path") or by_label[rec].get("path") or "")
-    else:
-        parsed["recommend"] = "none"
-        parsed["path"] = ""
-        parsed["engineering_ready"] = "no"
-    if not _any_handover(quality):
-        parsed["engineering_ready"] = "no"
-    ready = str(parsed.get("engineering_ready") or "no").strip().lower()
-    parsed["engineering_ready"] = "yes" if ready == "yes" else "no"
-    return parsed
-
-
-def parse_ask_answers(body: str) -> Optional[dict[str, str]]:
-    text = (body or "").strip()
-    if not text:
-        return None
-    lowered = text.lower()
-    if lowered == "stop":
-        return {"_skip": "stop"}
-    if lowered in {"skip", "provisional", "none", "timeout"}:
-        return {"_skip": lowered}
-    answers: dict[str, str] = {}
-    for line in text.splitlines():
-        match = _FORK_LINE.match(line.strip())
-        if match:
-            answers[f"F{match.group(1)}"] = match.group(2).strip()
-    return answers or None
-
-
-def parse_promote_pick(body: str) -> Optional[str]:
-    token = (body or "").strip()
-    if not token:
-        return None
-    lowered = token.lower()
-    if lowered in {"none", "iterate", "skip"}:
-        return lowered
-    if re.fullmatch(r"C\d+", token, re.I):
-        return token.upper()
-    normalized = token.replace("\\", "/")
-    if "prd/reports/" in normalized and normalized.lower().endswith(".md"):
-        return token
-    return None
-
-
-def _format_answers(answers: dict[str, str]) -> str:
-    if not answers:
-        return "(none — Lead skipped / timed out)"
-    skip = answers.get("_skip")
-    if skip:
-        return f"(skip: {skip})"
-    return "\n".join(f"{key}: {value}" for key, value in sorted(answers.items()))
-
-
-_THINK_LABEL = re.compile(r"\bC\d+\b")
-
-
-def _human_pm_text(text: str) -> str:
-    """Think-file labels stay off the Lead card. Factory-wide, not programme-specific."""
-    raw = (text or "").strip()
-    if not raw:
-        return ""
-    cleaned = _THINK_LABEL.sub("this", raw)
-    cleaned = re.sub(r"\bthis proves\b", "This proves", cleaned, count=1)
-    return re.sub(r" {2,}", " ", cleaned).strip()
-
-
-def apply_ask_card(frozen: dict[str, Any], card: dict[str, Any]) -> dict[str, Any]:
-    """Merge examples onto frozen forks. Never change question or choice strings."""
-    merged = dict(frozen)
-    by_id = {
-        str(item.get("id") or ""): item
-        for item in card.get("forks") or []
-        if isinstance(item, dict)
-    }
-    forks: list[dict[str, Any]] = []
-    for fork in merged.get("forks") or []:
-        if not isinstance(fork, dict):
-            continue
-        row = dict(fork)
-        extra = by_id.get(str(row.get("id") or "")) or {}
-        labels = [str(item) for item in row.get("choices") or []]
-        if extra.get("example"):
-            row["example"] = _human_pm_text(str(extra.get("example") or ""))
-        recommend = str(extra.get("recommend") or "").strip()
-        if recommend in labels:
-            row["recommend"] = recommend
-        if extra.get("recommend_why"):
-            row["recommend_why"] = _human_pm_text(str(extra.get("recommend_why") or ""))
-        choice_rows: list[dict[str, str]] = []
-        for item in extra.get("choice_rows") or extra.get("choices") or []:
-            if isinstance(item, str):
-                continue
-            if not isinstance(item, dict):
-                continue
-            choice = str(item.get("choice") or "").strip()
-            if choice not in labels:
-                continue
-            choice_rows.append(
-                {
-                    "choice": choice,
-                    "means": _human_pm_text(str(item.get("means") or "")),
-                    "favours": str(item.get("favours") or "").strip(),
-                }
-            )
-        if choice_rows:
-            row["choice_rows"] = choice_rows
-        forks.append(row)
-    merged["forks"] = forks
-    if card.get("notes"):
-        merged["notes"] = _human_pm_text(str(card.get("notes") or ""))
-    return merged
-
-
-def _format_fork_block(forks: list[Any]) -> str:
-    rows = [fork for fork in forks if isinstance(fork, dict)]
-    if not rows:
-        return "(none)"
-    chunks: list[str] = [
-        "| Fork | Decision | We recommend |",
-        "|------|----------|--------------|",
-    ]
-    for fork in rows:
-        fid = str(fork.get("id") or "?")
-        chunks.append(
-            "| "
-            + " | ".join(
-                [
-                    fid,
-                    _md_cell(fork.get("question") or ""),
-                    _md_cell(fork.get("recommend") or "(you choose)"),
-                ]
-            )
-            + " |"
-        )
-    for fork in rows:
-        fid = str(fork.get("id") or "?")
-        parts = [f"### {fid}", "", _md_cell(fork.get("question") or "")]
-        example = str(fork.get("example") or "").strip()
-        if example:
-            parts.extend(["", f"**In real life.** {example}"])
-        recommend = str(fork.get("recommend") or "").strip()
-        recommend_why = str(fork.get("recommend_why") or "").strip()
-        if recommend:
-            why = f" — {recommend_why}" if recommend_why else ""
-            parts.extend(["", f"**We recommend.** {recommend}{why}"])
-        choice_rows = [
-            item
-            for item in (fork.get("choice_rows") or [])
-            if isinstance(item, dict) and item.get("choice")
-        ]
-        labels = [str(item) for item in fork.get("choices") or []]
-        parts.extend(["", "| If you choose | What happens |", "|---------------|--------------|"])
-        if choice_rows:
-            for item in choice_rows:
-                mark = " ←" if item.get("choice") == recommend else ""
-                parts.append(
-                    f"| {_md_cell(item.get('choice'))}{mark} | {_md_cell(item.get('means') or '')} |"
-                )
-        else:
-            for choice in labels:
-                mark = " ←" if choice == recommend else ""
-                parts.append(f"| {_md_cell(choice)}{mark} |  |")
-        parts.extend(["", f"Reply `{fid}: <choice>` using the exact text in the table."])
-        chunks.extend(["", *parts])
-    return "\n".join(chunks)
-
-
-def _format_why_not(rows: list[Any]) -> str:
-    if not rows:
-        return "- (none)"
-    lines: list[str] = []
-    for item in rows:
-        if isinstance(item, dict):
-            label = item.get("label") or "?"
-            lines.append(f"- {label}: {item.get('why_not') or ''}")
-        else:
-            lines.append(f"- {item}")
-    return "\n".join(lines)
-
-
-def _format_ready_files(files: list[dict[str, str]]) -> str:
-    chunks: list[str] = []
-    for item in files:
-        label = item.get("label") or "?"
-        path = item.get("path") or ""
-        body = item.get("file_body") or "(empty file)"
-        chunks.append(f"### {label} `{path}`\n{body}")
-    return "\n\n".join(chunks) if chunks else "(none)"
-
-
-def _prior_candidate_text(artifact: HermesArtifactRead) -> str:
-    body = str(artifact.payload.get("file_body") or "").strip()
-    if body:
-        return body
-    parsed = artifact.payload.get("artifact") or {}
-    if isinstance(parsed, dict):
-        return json.dumps(parsed)
-    return str(parsed or "")
-
-
-def _think_file_ref(artifact: HermesArtifactRead) -> dict[str, str]:
-    parsed = dict(artifact.payload.get("artifact") or {})
-    return {
-        "label": str(parsed.get("candidate_label") or "C1"),
-        "path": str(artifact.payload.get("path") or ""),
-        "file_body": str(artifact.payload.get("file_body") or ""),
-    }
-
-
-def _any_handover(artifact: HermesArtifactRead) -> bool:
-    parsed = artifact.payload.get("artifact") or {}
-    return any(
-        str(cand.get("handover") or "").lower() == "yes" for cand in parsed.get("candidates") or []
-    )
-
-
-def _fail_list_from_quality(artifact: HermesArtifactRead) -> str:
-    parsed = artifact.payload.get("artifact") or {}
-    fails: list[str] = []
-    for cand in parsed.get("candidates") or []:
-        label = cand.get("label") or "?"
-        for item in cand.get("material_fails") or []:
-            fails.append(f"{label}: {item}")
-    return "; ".join(fails) if fails else "(none)"
-
-
-_BAR_ORDER = [f"B{index}" for index in range(1, 16)]
-
-
-def _quality_copy_vars(
-    initiative: str,
-    parsed: dict[str, Any],
-    path: str,
-    model: str,
-    pass_number: int,
-    max_passes: int,
-) -> dict[str, Any]:
-    candidates = [row for row in (parsed.get("candidates") or []) if isinstance(row, dict)]
-    promote = _quality_promote_label(parsed)
-    return {
-        "initiative": initiative,
-        "model": model,
-        "threshold_x": RUBRIC_PM["threshold_x"],
-        "rank": parsed.get("rank") or "tie",
-        "pass_number": pass_number,
-        "max_passes": max_passes,
-        "path": path,
-        "recommend_promote": parsed.get("recommend_promote") or "none",
-        "headline": _format_quality_headline(parsed, promote, pass_number, max_passes),
-        "recommendation_why": parsed.get("recommendation_why") or "(none)",
-        "questions_table": _format_lead_questions(parsed.get("lead_questions") or []),
-        "recommend_table": _format_quality_recommend_table(candidates, promote),
-        "evidence_heading": promote,
-        "evidence_block": _format_quality_evidence(candidates, promote),
-        "scorecard": _format_quality_scorecard(candidates),
-        "notes": parsed.get("notes") or "(none)",
-        "harness_proposal": parsed.get("harness_proposal") or "(none)",
-    }
-
-
-def _quality_promote_label(parsed: dict[str, Any]) -> str:
-    rec = str(parsed.get("recommend_promote") or "").strip()
-    if rec and rec.lower() not in {"none", "tie", ""}:
-        return rec
-    for cand in parsed.get("candidates") or []:
-        if isinstance(cand, dict) and str(cand.get("handover") or "").lower() == "yes":
-            return str(cand.get("label") or "none")
-    return "none"
-
-
-def _md_cell(text: Any) -> str:
-    raw = " ".join(str(text or "").split()).replace("|", "/")
-    return raw or "(none)"
-
-
-def apply_quality_card(scored: dict[str, Any], card: dict[str, Any]) -> dict[str, Any]:
-    """Merge the PM memo onto frozen scores. Never change PASS/FAIL/handover/rank."""
-    merged = dict(scored)
-    why = str(card.get("recommendation_why") or "").strip()
-    if why:
-        merged["recommendation_why"] = why
-    questions = cap_lead_questions(card.get("lead_questions"))
-    if questions:
-        merged["lead_questions"] = questions
-    by_label = {
-        str(item.get("label") or ""): item
-        for item in card.get("candidates") or []
-        if isinstance(item, dict)
-    }
-    candidates: list[dict[str, Any]] = []
-    for cand in merged.get("candidates") or []:
-        if not isinstance(cand, dict):
-            continue
-        row = dict(cand)
-        extra = by_label.get(str(row.get("label") or "")) or {}
-        if extra.get("why"):
-            row["why"] = str(extra.get("why") or "").strip()
-        if extra.get("why_not"):
-            row["why_not"] = str(extra.get("why_not") or "").strip()
-        card_bars = {
-            str(bar.get("bar") or "").split()[0].upper(): bar
-            for bar in extra.get("bars") or []
-            if isinstance(bar, dict)
-        }
-        bars: list[dict[str, Any]] = []
-        for bar in row.get("bars") or []:
-            if not isinstance(bar, dict):
-                continue
-            item = dict(bar)
-            rewrite = card_bars.get(str(item.get("bar") or "").split()[0].upper()) or {}
-            if rewrite.get("evidence"):
-                item["evidence"] = str(rewrite.get("evidence") or "").strip()
-            if "pointer" in rewrite:
-                item["pointer"] = str(rewrite.get("pointer") or "").strip()
-            bars.append(item)
-        row["bars"] = bars
-        candidates.append(row)
-    merged["candidates"] = candidates
-    return merged
-
-
-def _scorecard_for_card(parsed: dict[str, Any]) -> dict[str, Any]:
-    candidates = []
-    for cand in parsed.get("candidates") or []:
-        if not isinstance(cand, dict):
-            continue
-        candidates.append(
-            {
-                "label": cand.get("label"),
-                "path": cand.get("path"),
-                "handover": cand.get("handover"),
-                "overall": cand.get("overall"),
-                "material_fails": cand.get("material_fails") or [],
-                "bars": [
-                    {
-                        "bar": bar.get("bar"),
-                        "result": bar.get("result"),
-                        "evidence": bar.get("evidence"),
-                    }
-                    for bar in cand.get("bars") or []
-                    if isinstance(bar, dict)
-                ],
-            }
-        )
-    return {
-        "rank": parsed.get("rank"),
-        "recommend_promote": parsed.get("recommend_promote"),
-        "candidates": candidates,
-    }
-
-
-def _format_quality_headline(
-    parsed: dict[str, Any], promote: str, pass_number: int, max_passes: int
-) -> str:
-    yes = [
-        str(cand.get("label"))
-        for cand in parsed.get("candidates") or []
-        if isinstance(cand, dict) and str(cand.get("handover") or "").lower() == "yes"
-    ]
-    yes_txt = ", ".join(yes) if yes else "none"
-    rank = parsed.get("rank") or "tie"
-    return (
-        "Hermes evaluator — so you can judge the candidates fairly. "
-        "Rank is not permission to promote.\n\n"
-        "| Field | Value |\n"
-        "|-------|-------|\n"
-        f"| Rank | {rank} — **not** the validate signal |\n"
-        f"| Handover-yes | {yes_txt} |\n"
-        f"| Recommend (label only) | **{promote}** |\n"
-        f"| Ready pass | {pass_number}/{max_passes} |\n"
-        "| Your job | Name the file, or none, or iterate. I will not merge. |"
-    )
-
-
-def _why_row(cand: dict[str, Any]) -> str:
-    return str(cand.get("why") or "").strip() or (
-        "Engineering-ready."
-        if str(cand.get("handover") or "").lower() == "yes"
-        else "Not engineering-ready."
-    )
-
-
-def _why_not_row(cand: dict[str, Any]) -> str:
-    return str(cand.get("why_not") or "").strip() or "(none)"
-
-
-def _format_lead_questions(rows: list[Any]) -> str:
-    questions = [item for item in rows if isinstance(item, dict) and item.get("question")]
-    if not questions:
-        return "(none)"
-    lines = [
-        "| # | Question | Why it matters | If you skip |",
-        "|---|----------|----------------|-------------|",
-    ]
-    for index, item in enumerate(questions, start=1):
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    str(index),
-                    _md_cell(item.get("question")),
-                    _md_cell(item.get("why_it_matters") or "(none)"),
-                    _md_cell(item.get("if_unanswered") or "(none)"),
-                ]
-            )
-            + " |"
-        )
-    return "\n".join(lines)
-
-
-def _format_quality_recommend_table(candidates: list[dict[str, Any]], promote: str) -> str:
-    if not candidates:
-        return "(none)"
-    lines = [
-        "| Candidate | File | Handover | Overall | Why | Why not |",
-        "|-----------|------|----------|---------|-----|---------|",
-    ]
-    for cand in candidates:
-        label = str(cand.get("label") or "?")
-        path = str(cand.get("path") or "")
-        file_cell = f"`{path}`" if path else "(none)"
-        handover = str(cand.get("handover") or "no")
-        if handover == "yes":
-            handover = "**yes**"
-        overall = cand.get("overall")
-        overall_txt = f"{overall}/3" if overall is not None and overall != "" else "—"
-        pick = label.upper() == promote.upper() and promote.lower() != "none"
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    f"**{label} ←**" if pick else label,
-                    file_cell,
-                    handover,
-                    overall_txt,
-                    _md_cell(_why_row(cand)),
-                    _md_cell(_why_not_row(cand)),
-                ]
-            )
-            + " |"
-        )
-    return "\n".join(lines)
-
-
-def _bars_by_id(cand: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    out: dict[str, dict[str, Any]] = {}
-    for bar in cand.get("bars") or []:
-        if not isinstance(bar, dict):
-            continue
-        bid = str(bar.get("bar") or "").split()[0].upper()
-        if bid:
-            out[bid] = bar
-    return out
-
-
-def _bar_table(cand: dict[str, Any], *, fails_only: bool) -> str:
-    mapped = _bars_by_id(cand)
-    rows = [
-        "| Bar | Result | What this means |",
-        "|-----|--------|-----------------|",
-    ]
-    used = False
-    for bid in _BAR_ORDER:
-        bar = mapped.get(bid)
-        if not bar:
-            continue
-        result = str(bar.get("result") or "").upper() or "—"
-        if fails_only and result != "FAIL":
-            continue
-        used = True
-        rows.append(f"| {bid} | {result} | {_md_cell(bar.get('evidence') or '')} |")
-    return "\n".join(rows) if used else "(none)"
-
-
-def _format_quality_evidence(candidates: list[dict[str, Any]], promote: str) -> str:
-    if not candidates:
-        return "(none)"
-    by_label = {str(cand.get("label") or ""): cand for cand in candidates}
-    chunks: list[str] = []
-    promote_cand = by_label.get(promote)
-    if promote_cand and promote.lower() not in {"", "none"}:
-        chunks.append(_bar_table(promote_cand, fails_only=False))
-    else:
-        chunks.append(
-            "No handover-yes candidate. FAIL rows below are why none is engineering-ready."
-        )
-    others = [
-        cand for cand in candidates if str(cand.get("label") or "").upper() != promote.upper()
-    ]
-    if others:
-        chunks.append("### Why not the others")
-        for cand in others:
-            label = cand.get("label") or "?"
-            path = cand.get("path") or ""
-            chunks.append(f"**{label}** `{path}`\n\n" + _bar_table(cand, fails_only=True))
-    return "\n\n".join(chunks)
-
-
-def _format_quality_scorecard(candidates: list[dict[str, Any]]) -> str:
-    if not candidates:
-        return "(none)"
-    labels = [str(cand.get("label") or "?") for cand in candidates]
-    maps = [_bars_by_id(cand) for cand in candidates]
-    header = "| Bar | " + " | ".join(labels) + " |"
-    divider = "|-----|" + "|".join(["------" for _ in labels]) + "|"
-    lines = [header, divider]
-    for bid in _BAR_ORDER:
-        cells = []
-        for mapped in maps:
-            bar = mapped.get(bid)
-            cells.append(str(bar.get("result") or "—").upper() if bar else "—")
-        if all(cell == "—" for cell in cells):
-            continue
-        lines.append("| " + bid + " | " + " | ".join(cells) + " |")
-    return "\n".join(lines) if len(lines) > 2 else "(none)"
-
-
-def _is_numbered_init(token: str, tenant: TenantContext) -> bool:
-    prefix = tenant.init_prefix.upper()
-    body = (token or "").strip().upper()
-    if not prefix or not body.startswith(prefix):
-        return False
-    rest = body[len(prefix) :]
-    return bool(rest) and rest.isdigit()
-
-
-def _coerce_init(proposed: str, slug: str) -> str:
-    prefix = f"INIT-{slug.upper()}-"
-    token = (proposed or "").strip().upper()
-    if not token.startswith("INIT-"):
-        return f"{prefix}PENDING"
-    rest = token[len("INIT-") :]
-    for drop in (f"{slug.upper()}-", "RW-", "ADH-"):
-        if rest.startswith(drop):
-            rest = rest[len(drop) :]
-            break
-    rest = re.sub(r"[^A-Z0-9-]", "", rest).strip("-")
-    if not rest or rest == "PENDING":
-        return f"{prefix}PENDING"
-    return f"{prefix}{rest}"
-
-
-def _numbered(value: Any) -> str:
-    if not value:
-        return "(none)"
-    if not isinstance(value, list):
-        return f"1. {value}"
-    lines = [f"{index}. {item}" for index, item in enumerate(value, start=1)]
-    return "\n".join(lines) if lines else "(none)"
-
-
-def _format_caps(value: Any) -> str:
-    if not isinstance(value, list) or not value:
-        return "- (none)"
-    lines: list[str] = []
-    for item in value:
-        if not isinstance(item, dict):
-            lines.append(f"- {item}")
-            continue
-        journeys = ", ".join(str(j) for j in item.get("journeys") or []) or "none"
-        notes = str(item.get("notes") or "").strip()
-        extra = f" — {notes}" if notes else ""
-        lines.append(
-            f"- {item.get('id') or '?'}: {item.get('capability') or ''} " f"(J: {journeys}){extra}"
-        )
-    return "\n".join(lines)
-
-
-def _format_reqs(value: Any) -> str:
-    if not isinstance(value, list) or not value:
-        return "- (none)"
-    lines: list[str] = []
-    for item in value:
-        if not isinstance(item, dict):
-            lines.append(f"- {item}")
-            continue
-        lines.append(
-            f"- {item.get('id') or '?'}/{item.get('cap') or '?'}: "
-            f"{item.get('requirement') or ''} | when {item.get('condition') or 'n/a'} "
-            f"→ {item.get('observable') or 'n/a'} "
-            f"(evidence: {item.get('evidence') or 'n/a'})"
-        )
-    return "\n".join(lines)
-
-
-def _format_journeys(value: Any) -> str:
-    if not isinstance(value, list) or not value:
-        return "- (none)"
-    lines: list[str] = []
-    for item in value:
-        if not isinstance(item, dict):
-            lines.append(f"- {item}")
-            continue
-        caps = ", ".join(str(c) for c in item.get("caps") or []) or "none"
-        lines.append(
-            f"- {item.get('id') or '?'}: {item.get('actor') or '?'} / "
-            f"{item.get('trigger') or '?'} → {item.get('main_flow') or '?'} "
-            f"(edge: {item.get('edge') or 'n/a'}; abandon: {item.get('abandon') or 'n/a'}; "
-            f"CAP: {caps})"
-        )
-    return "\n".join(lines)
-
-
-def _format_oqs(value: Any) -> str:
-    if not isinstance(value, list) or not value:
-        return "- (none)"
-    lines: list[str] = []
-    for item in value:
-        if not isinstance(item, dict):
-            lines.append(f"- {item}")
-            continue
-        lines.append(
-            f"- {item.get('id') or '?'}: {item.get('question') or ''} "
-            f"(owner={item.get('owner') or 'PM'}; blocking={item.get('blocking') or 'yes'}; "
-            f"by {item.get('required_by') or 'spec-draft'})"
-        )
-    return "\n".join(lines)
-
-
-def _bullets(value: Any) -> str:
-    if not value:
-        return "- (none)"
-    if not isinstance(value, list):
-        return f"- {value}"
-    lines: list[str] = []
-    for item in value:
-        if isinstance(item, dict):
-            lane = str(item.get("lane") or "").strip()
-            text = str(item.get("text") or "").strip()
-            lines.append(f"- {lane}: {text}" if lane else f"- {text}")
-        else:
-            lines.append(f"- {item}")
-    return "\n".join(lines) if lines else "- (none)"

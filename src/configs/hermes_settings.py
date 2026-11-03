@@ -100,6 +100,11 @@ class HermesSettings(BaseSettings):
         ge=0,
         description="How long the walker waits for Lead fork answers. 0 skips to provisional recommend.",
     )
+    pm_ask_grace_seconds: int = Field(
+        default=600,
+        ge=0,
+        description="Extra Redis TTL after ask wait so expiry cannot free an outline slot.",
+    )
     litellm_concurrency: int = Field(
         default=2,
         ge=1,

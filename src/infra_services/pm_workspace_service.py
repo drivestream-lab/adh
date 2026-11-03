@@ -51,6 +51,10 @@ def recommend_path(initiative: str) -> str:
     return f"prd/reports/{initiative}-prd-recommend.md"
 
 
+def prd_path(initiative: str) -> str:
+    return f"prd/{initiative}.md"
+
+
 def next_free_think_runs(initiative: str, existing: list[str]) -> tuple[int, int]:
     occupied = set(existing)
     run = 1

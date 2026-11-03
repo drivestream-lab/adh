@@ -5,6 +5,10 @@ from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
+from src.business_services.hermes.lead_tokens import (
+    is_lead_outline_body,
+    validate_ask_answers,
+)
 from src.business_services.hermes_service import (
     HermesService,
     _coerce_init,
@@ -15,7 +19,7 @@ from src.business_services.hermes_service import (
     parse_ask_answers,
     parse_promote_pick,
 )
-from src.infra_services.pm_workspace_service import MetaInventory, think_path
+from src.infra_services.pm_workspace_service import MetaInventory, prd_path, think_path
 from src.models.prompt_models import cap_ask_forks
 from src.infra_services.prompt_service import PromptService
 from src.models.buzz_models import EventType, MessageKind, MessageRead
@@ -113,7 +117,19 @@ def _ask_artifact() -> HermesArtifactRead:
                         ],
                         "why_it_changes_the_pick": "C1 leaves this open; C2 locks all-on-home.",
                         "quote": "OQ-03",
-                    }
+                    },
+                    {
+                        "id": "F2",
+                        "question": "Does write equal publish?",
+                        "choices": ["write=publish", "draft then publish"],
+                        "why_it_changes_the_pick": "C2 adds draft.",
+                    },
+                    {
+                        "id": "F3",
+                        "question": "Unpublish in scope?",
+                        "choices": ["skip", "yes"],
+                        "why_it_changes_the_pick": "C2/C4 added it.",
+                    },
                 ],
                 "notes": "",
             },
@@ -788,7 +804,158 @@ def test_parse_ask_answers_and_promote_pick() -> None:
         "F1": "all published",
         "F2": "write=publish",
     }
+    assert parse_ask_answers(
+        "F1: all published, newest first, no pagination — because C4 wins"
+    ) == {"F1": "all published, newest first, no pagination"}
+    assert parse_ask_answers("F1: a F2: b") == {"_invalid": "multi_f_one_line"}
     assert parse_ask_answers("okay proceed with C2") is None
     assert parse_promote_pick("C1") == "C1"
     assert parse_promote_pick("none") == "none"
     assert parse_promote_pick("please merge it") is None
+
+
+def test_ask_shaped_body_is_not_an_outline() -> None:
+    body = (
+        "F1: all published, newest first, no pagination — I align with the rec "
+        "and we should ship this as INIT next"
+    )
+    assert len(body) >= 60
+    assert is_lead_outline_body(body, min_chars=60) is False
+    assert is_lead_outline_body(_OUTLINE, min_chars=60) is True
+
+
+def test_validate_ask_answers_requires_frozen_labels() -> None:
+    forks = [
+        {
+            "id": "F1",
+            "choices": ["all published, newest first, no pagination", "only proving one article"],
+        }
+    ]
+    assert validate_ask_answers({"F1": "all published, newest first, no pagination"}, forks) is None
+    assert validate_ask_answers({"F1": "ship it"}, forks) == "choice_mismatch"
+
+
+def test_ask_paste_does_not_allocate_new_init_while_open_work() -> None:
+    hermes, buzz, _redis, think, _quality = _service()
+    hermes._settings = hermes._settings.model_copy(update={"pm_ask_wait_seconds": 2})
+    paste = (
+        "F1: all published, newest first, no pagination — please proceed with the "
+        "highest score file and also add comments"
+    )
+
+    async def _run() -> None:
+        await hermes.on_room_message(_OPS, _message(_OUTLINE))
+        for _ in range(80):
+            bodies = [call.args[1].body for call in buzz.post_message.await_args_list]
+            if any("Forks for" in body for body in bodies):
+                break
+            await asyncio.sleep(0.05)
+        await hermes.on_room_message(_OPS, _message(paste))
+        await hermes.on_room_message(
+            _OPS,
+            _message(
+                "F1: all published, newest first, no pagination\n" "F2: write=publish\n" "F3: skip"
+            ),
+        )
+        if hermes._work_tasks:
+            await asyncio.gather(*hermes._work_tasks)
+
+    asyncio.run(_run())
+    bodies = [call.args[1].body for call in buzz.post_message.await_args_list]
+    assert not any("allocated INIT-REALWORLD-002" in body for body in bodies)
+    assert not any("Received your outline" in body for body in bodies[1:] if "already" not in body)
+    assert think.await_count == 2
+
+
+def test_c4_during_ask_does_not_promote() -> None:
+    hermes, buzz, _redis, _think, _quality = _service()
+    hermes._settings = hermes._settings.model_copy(update={"pm_ask_wait_seconds": 2})
+    workspace = cast(MagicMock, hermes._workspace)
+
+    async def _run() -> None:
+        await hermes.on_room_message(_OPS, _message(_OUTLINE))
+        for _ in range(80):
+            bodies = [call.args[1].body for call in buzz.post_message.await_args_list]
+            if any("Forks for" in body for body in bodies):
+                break
+            await asyncio.sleep(0.05)
+        await hermes.on_room_message(_OPS, _message("C4"))
+        if hermes._work_tasks:
+            await asyncio.gather(*hermes._work_tasks, return_exceptions=True)
+
+    asyncio.run(_run())
+    publish_paths = [
+        call.args[1] for call in workspace.publish.await_args_list if len(call.args) > 1
+    ]
+    assert prd_path(_INIT) not in publish_paths
+    assert not any(
+        (call.args[1].payload or {}).get("status") == "promote_copied"
+        for call in buzz.post_message.await_args_list
+    )
+
+
+def test_promote_copies_think_to_prd() -> None:
+    hermes, buzz, _redis, _think, _quality = _service()
+    workspace = cast(MagicMock, hermes._workspace)
+    source = think_path(_INIT, 2)
+    workspace.read_local.side_effect = lambda _tenant, path: (
+        "THINK BODY C2" if path == source else ""
+    )
+    hermes._awaiting_recommend["realworld"] = {
+        "room": _OPS,
+        "initiative": _INIT,
+        "recommend": "C2",
+        "path": source,
+        "think_paths": [think_path(_INIT, 1), source],
+    }
+
+    async def _run() -> None:
+        await hermes.on_room_message(_OPS, _message("C2"))
+
+    asyncio.run(_run())
+    workspace.publish.assert_awaited()
+    called = workspace.publish.await_args
+    assert called is not None
+    assert called.args[1] == prd_path(_INIT)
+    assert called.args[2] == "THINK BODY C2"
+    assert "realworld" not in hermes._awaiting_recommend
+    bodies = [call.args[1].body for call in buzz.post_message.await_args_list]
+    assert any("Forge is not drafting" in body for body in bodies)
+    assert any("validate is not started" in body for body in bodies)
+
+
+def test_promote_recovery_without_pending_recommend() -> None:
+    hermes, buzz, _redis, _think, _quality = _service()
+    workspace = cast(MagicMock, hermes._workspace)
+    source = think_path(_INIT, 4)
+    qpath = f"prd/reports/{_INIT}-prd-quality.md"
+    workspace.inventory.return_value = MetaInventory(
+        inits=[_INIT],
+        think_paths=[
+            think_path(_INIT, 1),
+            think_path(_INIT, 2),
+            think_path(_INIT, 3),
+            source,
+        ],
+        prd_paths=[],
+    )
+
+    def _read(_tenant: object, path: str) -> str:
+        if path == qpath:
+            return "# quality\n"
+        if path == source:
+            return "THINK C4"
+        return ""
+
+    workspace.read_local.side_effect = _read
+
+    async def _run() -> None:
+        await hermes.on_room_message(_OPS, _message("C4"))
+
+    asyncio.run(_run())
+    called = workspace.publish.await_args
+    assert called is not None
+    assert called.args[1] == prd_path(_INIT)
+    assert called.args[2] == "THINK C4"
+    payloads = [call.args[1].payload or {} for call in buzz.post_message.await_args_list]
+    assert any(payload.get("status") == "promote_copied" for payload in payloads)
