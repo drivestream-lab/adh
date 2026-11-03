@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+# pyright: reportAttributeAccessIssue=false
+
 import json
 from typing import Any
 
+from src.business_services.hermes.cards import (
+    _scorecard_for_card,
+    apply_ask_card,
+    apply_quality_card,
+)
 from src.configs.rubrics import RUBRIC_PM
-from src.models.hermes_models import HermesArtifactRead
+from src.infra_services.pm_workspace_service import quality_path
+from src.models.hermes_models import HermesArtifactRead, HermesGradeRequest
+from src.models.prompt_models import ask_card_has_signal, quality_card_has_signal
 
 
 def _format_answers(answers: dict[str, str]) -> str:
@@ -430,3 +439,313 @@ def _bullets(value: Any) -> str:
         else:
             lines.append(f"- {item}")
     return "\n".join(lines) if lines else "- (none)"
+
+
+class RenderPmMixin:
+    """Instance render/card helpers used by HermesService and the walk mixin."""
+
+    def _raise_if_stub(self, artifact: HermesArtifactRead, hop: str) -> None:
+        reason = str(artifact.payload.get("raw") or "").strip() or "no JSON object"
+        if artifact.payload.get("stub") or artifact.payload.get("model") == "stub":
+            raise TimeoutError(
+                self._copy("hermes.pm.error.stub-hop", {"hop": hop, "reason": reason})
+            )
+        if str(artifact.initiative).endswith("-PENDING") or artifact.initiative == "INIT-PENDING":
+            raise TimeoutError(self._copy("hermes.pm.error.pending-init", {"hop": hop}))
+
+    def _think_copy_vars(
+        self,
+        initiative: str,
+        label: str,
+        parsed: dict[str, Any],
+        path: str,
+        *,
+        model: str = "",
+        numbered_locked: bool = False,
+    ) -> dict[str, Any]:
+        locked = parsed.get("locked_decisions")
+        return {
+            "initiative": initiative,
+            "label": label,
+            "path": path or f"prd/reports/{initiative}-prd-think.md",
+            "model": model,
+            "short": str(parsed.get("summary") or parsed.get("job") or "prd-think candidate").split(
+                "\n"
+            )[0],
+            "job": parsed.get("job") or "(none)",
+            "why_now": parsed.get("why_now") or "(none)",
+            "if_we_do_nothing": parsed.get("if_we_do_nothing") or "(none)",
+            "kill_assumption": parsed.get("kill_assumption") or "(none)",
+            "locked_decisions": (_numbered(locked) if numbered_locked else _bullets(locked)),
+            "in_scope": _bullets(parsed.get("in_scope")),
+            "non_goals": _bullets(parsed.get("non_goals")),
+            "capabilities": _format_caps(parsed.get("capabilities")),
+            "requirements": _format_reqs(parsed.get("requirements")),
+            "journeys": _format_journeys(parsed.get("journeys")),
+            "open_questions": _format_oqs(parsed.get("open_questions")),
+            "whole_product_delta": parsed.get("whole_product_delta") or "(none)",
+            "equivalent_product_notes": parsed.get("equivalent_product_notes") or "(none)",
+            "summary": parsed.get("summary") or "(none)",
+        }
+
+    def _render_think_hop_body(
+        self,
+        initiative: str,
+        label: str,
+        parsed: dict[str, Any],
+        model: str,
+        path: str,
+    ) -> str:
+        return self._copy(
+            "hermes.pm.hop.think",
+            self._think_copy_vars(initiative, label, parsed, path, model=model),
+        )
+
+    def _render_think_hop(self, artifact: HermesArtifactRead) -> str:
+        parsed = dict(artifact.payload.get("artifact") or {})
+        path = str(artifact.payload.get("path") or "")
+        label = str(parsed.get("candidate_label") or "C1")
+        model = str(artifact.payload.get("model") or artifact.model or "unresolved")
+        file_body = str(artifact.payload.get("file_body") or "").strip()
+        if file_body.startswith("#"):
+            excerpt = "\n".join(file_body.splitlines()[:28])
+            return (
+                f"Think {label}  {artifact.initiative}\n"
+                f"path: {path}\n"
+                f"model={model}  ·  not scored  ·  Hermes will not merge\n\n"
+                f"{excerpt}\n…"
+            )
+        return self._render_think_hop_body(artifact.initiative, label, parsed, model, path)
+
+    def _render_think_file(
+        self, initiative: str, label: str, parsed: dict[str, Any], path: str
+    ) -> str:
+        return self._copy(
+            "hermes.pm.file.think",
+            self._think_copy_vars(initiative, label, parsed, path, numbered_locked=True),
+        )
+
+    async def _apply_quality_card(
+        self,
+        initiative: str,
+        parsed: dict[str, Any],
+        files: list[dict[str, str]],
+        outline: str,
+        model: str,
+    ) -> dict[str, Any]:
+        """LLM memo for the human PM. Frozen scores. No programme-specific rewrite."""
+        card = await self._prompts.complete(
+            "hermes.pm.quality.card",
+            {
+                "initiative": initiative,
+                "outline": (outline or "").strip() or "(none)",
+                "scorecard": json.dumps(_scorecard_for_card(parsed), ensure_ascii=False),
+                "files": _format_ready_files(files),
+                "max_questions": 3,
+            },
+            model=model,
+        )
+        if not quality_card_has_signal(card.parsed):
+            raise TimeoutError(
+                self._copy("hermes.pm.error.quality-card", {"initiative": initiative})
+            )
+        merged = apply_quality_card(parsed, dict(card.parsed))
+        self.logger.info(
+            "Hermes quality card applied",
+            initiative=initiative,
+            questions=len(merged.get("lead_questions") or []),
+            model=card.model,
+        )
+        return merged
+
+    async def _apply_ask_card(
+        self,
+        initiative: str,
+        parsed: dict[str, Any],
+        files: list[dict[str, str]],
+        outline: str,
+        model: str,
+    ) -> dict[str, Any]:
+        """LLM decision aid on frozen forks. Does not change questions or choice strings."""
+        try:
+            card = await self._prompts.complete(
+                "hermes.pm.ask.card",
+                {
+                    "initiative": initiative,
+                    "outline": (outline or "").strip() or "(none)",
+                    "forks": json.dumps(
+                        [
+                            {
+                                "id": fork.get("id"),
+                                "question": fork.get("question"),
+                                "choices": fork.get("choices") or [],
+                            }
+                            for fork in parsed.get("forks") or []
+                            if isinstance(fork, dict)
+                        ],
+                        ensure_ascii=False,
+                    ),
+                    "files": _format_ready_files(files),
+                },
+                model=model,
+            )
+        except Exception:
+            self.logger.exception("Hermes ask card failed", initiative=initiative)
+            return parsed
+        if not ask_card_has_signal(card.parsed):
+            self.logger.warning("Hermes ask card returned no examples", initiative=initiative)
+            return parsed
+        merged = apply_ask_card(parsed, dict(card.parsed))
+        self.logger.info(
+            "Hermes ask card applied",
+            initiative=initiative,
+            forks=len(merged.get("forks") or []),
+            model=card.model,
+        )
+        return merged
+
+    def _render_quality_hop_body(
+        self,
+        initiative: str,
+        parsed: dict[str, Any],
+        model: str,
+        pass_number: int = 1,
+        max_passes: int = 2,
+        path: str = "",
+    ) -> str:
+        return self._copy(
+            "hermes.pm.hop.quality",
+            _quality_copy_vars(
+                initiative, parsed, path or quality_path(initiative), model, pass_number, max_passes
+            ),
+        )
+
+    def _render_quality_hop(self, artifact: HermesArtifactRead) -> str:
+        parsed = dict(artifact.payload.get("artifact") or {})
+        model = str(artifact.payload.get("model") or artifact.model or "unresolved")
+        return self._render_quality_hop_body(
+            artifact.initiative,
+            parsed,
+            model,
+            int(artifact.payload.get("pass_number") or 1),
+            int(artifact.payload.get("max_passes") or 2),
+            str(artifact.payload.get("path") or quality_path(artifact.initiative)),
+        )
+
+    def _render_quality_file(
+        self,
+        initiative: str,
+        parsed: dict[str, Any],
+        path: str,
+        model: str,
+        pass_number: int = 1,
+        max_passes: int = 2,
+    ) -> str:
+        return self._copy(
+            "hermes.pm.file.quality",
+            _quality_copy_vars(initiative, parsed, path, model, pass_number, max_passes),
+        )
+
+    def _render_ask_hop_body(self, initiative: str, parsed: dict[str, Any], model: str) -> str:
+        forks = parsed.get("forks") or []
+        return self._copy(
+            "hermes.pm.hop.ask",
+            {
+                "initiative": initiative,
+                "model": model,
+                "fork_count": len(forks),
+                "fork_block": _format_fork_block(forks),
+                "notes": parsed.get("notes") or "(none)",
+            },
+        )
+
+    def _render_ask_hop(self, artifact: HermesArtifactRead) -> str:
+        parsed = dict(artifact.payload.get("artifact") or {})
+        model = str(artifact.payload.get("model") or artifact.model or "unresolved")
+        return self._render_ask_hop_body(artifact.initiative, parsed, model)
+
+    def _render_ask_file(self, initiative: str, parsed: dict[str, Any], path: str) -> str:
+        forks = parsed.get("forks") or []
+        return self._copy(
+            "hermes.pm.file.ask",
+            {
+                "initiative": initiative,
+                "path": path,
+                "fork_count": len(forks),
+                "fork_block": _format_fork_block(forks),
+                "notes": parsed.get("notes") or "(none)",
+            },
+        )
+
+    def _render_recommend_hop_body(
+        self, initiative: str, parsed: dict[str, Any], model: str
+    ) -> str:
+        return self._copy(
+            "hermes.pm.hop.recommend",
+            {
+                "initiative": initiative,
+                "model": model,
+                "recommend": parsed.get("recommend") or "none",
+                "engineering_ready": parsed.get("engineering_ready") or "no",
+                "path": parsed.get("path") or "(none)",
+                "why": parsed.get("why") or "(none)",
+                "why_not": _format_why_not(parsed.get("why_not") or []),
+                "residual_locks": _bullets(parsed.get("residual_locks")),
+                "notes": parsed.get("notes") or "(none)",
+            },
+        )
+
+    def _render_recommend_hop(self, artifact: HermesArtifactRead) -> str:
+        parsed = dict(artifact.payload.get("artifact") or {})
+        model = str(artifact.payload.get("model") or artifact.model or "unresolved")
+        return self._render_recommend_hop_body(artifact.initiative, parsed, model)
+
+    def _render_recommend_file(self, initiative: str, parsed: dict[str, Any], path: str) -> str:
+        return self._copy(
+            "hermes.pm.file.recommend",
+            {
+                "initiative": initiative,
+                "recommend": parsed.get("recommend") or "none",
+                "path": parsed.get("path") or "(none)",
+                "engineering_ready": parsed.get("engineering_ready") or "no",
+                "file_path": path,
+                "why": parsed.get("why") or "(none)",
+                "why_not": _format_why_not(parsed.get("why_not") or []),
+                "residual_locks": _bullets(parsed.get("residual_locks")),
+                "notes": parsed.get("notes") or "(none)",
+            },
+        )
+
+    def _render_brief(
+        self, initiative: str, parsed: dict[str, Any], overall: float, model: str
+    ) -> str:
+        return self._copy(
+            "hermes.pm.hop.brief",
+            {
+                "initiative": initiative,
+                "overall": overall,
+                "model": model,
+                "summary": parsed.get("summary") or "PM brief",
+            },
+        )
+
+    def _render_grade(
+        self,
+        request: HermesGradeRequest,
+        parsed: dict[str, Any],
+        overall: float,
+        recommend: bool,
+        model: str,
+    ) -> str:
+        return self._copy(
+            "hermes.eng.hop.grade",
+            {
+                "pr_ref": request.pr_ref,
+                "verify_exit": request.verify_exit,
+                "overall": overall,
+                "threshold_x": self._settings.threshold_x,
+                "merge": "recommend merge" if recommend else "do not merge",
+                "model": model,
+                "notes": parsed.get("notes") or parsed.get("rca") or "grade recorded",
+            },
+        )
