@@ -246,6 +246,51 @@ class GitHubAppService(BaseInfraService):
         logger.info("Opened kill PR", repo=repo, pr=number, url=url)
         return number, url
 
+    async def create_pull_request(
+        self,
+        token: str,
+        repo: str,
+        *,
+        title: str,
+        body: str,
+        head: str,
+        base: str,
+        draft: bool,
+        labels: list[str],
+    ) -> tuple[int, str]:
+        """Open a PR from an existing branch (optionally draft) and apply labels. Never merges."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        headers = _token_headers(token)
+        repo_url = f"{api}/repos/{org}/{repo}"
+        created = await self._client.post(
+            f"{repo_url}/pulls",
+            headers=headers,
+            json={"title": title, "head": head, "base": base, "body": body, "draft": draft},
+        )
+        if created.status_code >= 400:
+            logger.info(
+                "GitHub create pull request failed",
+                repo=repo,
+                status=created.status_code,
+                body=created.text[:300],
+            )
+            created.raise_for_status()
+        payload = created.json()
+        number = int(payload["number"])
+        url = str(payload.get("html_url") or f"https://github.com/{org}/{repo}/pull/{number}")
+        if labels:
+            labelled = await self._client.post(
+                f"{repo_url}/issues/{number}/labels",
+                headers=headers,
+                json={"labels": labels},
+            )
+            labelled.raise_for_status()
+        logger.info("Opened pull request", repo=repo, pr=number, url=url, draft=draft)
+        return number, url
+
     async def put_text_file(
         self,
         token: str,

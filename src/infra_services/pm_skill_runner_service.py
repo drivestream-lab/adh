@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from injector import inject
 
 from src.configs.hermes_settings import HermesSettings
 from src.exceptions.app_exceptions import ValidationError
 from src.infra_services.base_infra_service import BaseInfraService
-from src.infra_services.cursor_cli_service import CursorCliService
+from src.infra_services.cursor_cli_service import CursorCliService, ProgressCallback
 from src.infra_services.github_app_service import GitHubAppService
 from src.infra_services.pm_workspace_service import PmWorkspaceService
 from src.infra_services.prompt_service import PromptService
@@ -58,6 +58,7 @@ class PmSkillRunnerService(BaseInfraService):
         initiative: str,
         *,
         extra_prompt: str = "",
+        on_progress: Optional[ProgressCallback] = None,
     ) -> dict[str, Any]:
         if not self._settings.pm_skill_runner_enabled:
             raise ValidationError("PM skill runner is disabled")
@@ -83,6 +84,9 @@ class PmSkillRunnerService(BaseInfraService):
             git_name="adh-dev-pm[bot]",
             git_email="adh-dev-pm[bot]@users.noreply.github.com",
             write=True,
+            on_progress=on_progress,
+            heartbeat_seconds=float(self._settings.progress_seconds),
+            timeout_seconds=float(self._settings.wait_budget_seconds()),
         )
         logger.info(
             "PM skill runner finished",
@@ -97,6 +101,51 @@ class PmSkillRunnerService(BaseInfraService):
             "output": output,
             "model": model,
             "skill": skill_id,
+            "ok": code == 0,
+        }
+
+    async def run_hermes_copy(
+        self,
+        tenant: TenantContext,
+        copy_id: str,
+        variables: dict[str, Any],
+        *,
+        on_progress: Optional[ProgressCallback] = None,
+        label: str = "hermes-copy",
+    ) -> dict[str, Any]:
+        """Run a Hermes-owned copy prompt in the tenant meta workspace (agentic PM)."""
+        if not self._settings.pm_skill_runner_enabled:
+            raise ValidationError("PM skill runner is disabled")
+        workspace = Path(tenant.meta_root).expanduser()
+        if not workspace.is_dir():
+            raise ValidationError(f"meta workspace missing: {workspace}")
+        prompt = self._prompts.render_copy(copy_id, variables)
+        token = await self._mint_token(tenant)
+        code, output, model = await self._cursor.run(
+            workspace=workspace,
+            prompt=prompt,
+            mode="force",
+            github_token=token,
+            git_name="adh-dev-pm[bot]",
+            git_email="adh-dev-pm[bot]@users.noreply.github.com",
+            write=True,
+            on_progress=on_progress,
+            heartbeat_seconds=float(self._settings.progress_seconds),
+            timeout_seconds=float(self._settings.wait_budget_seconds()),
+        )
+        logger.info(
+            "Hermes copy runner finished",
+            slug=tenant.slug,
+            copy_id=copy_id,
+            label=label,
+            code=code,
+            model=model,
+        )
+        return {
+            "exit_code": code,
+            "output": output,
+            "model": model,
+            "copy_id": copy_id,
             "ok": code == 0,
         }
 

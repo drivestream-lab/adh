@@ -1,4 +1,4 @@
-.PHONY: setup check check-ci format format-check lint lint-check types layers test run desktop-dev desktop-install orch-spawn orch-merge orch-kill
+.PHONY: setup check check-ci format format-check lint lint-check types layers test run hermes-worker desktop-dev desktop-install orch-spawn orch-merge orch-kill
 
 # Quality ingress is Makefile-only: `make check` then `make test`.
 
@@ -32,6 +32,9 @@ test:
 
 run:
 	.venv/bin/python -m src.main
+
+hermes-worker:
+	@bash scripts/run_hermes_worker.sh
 
 orch-spawn:
 	ORCH_ENABLE_SPAWN=true .venv/bin/python -m src.orchestrator spawn

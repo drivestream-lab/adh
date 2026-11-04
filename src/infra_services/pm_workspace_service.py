@@ -1,4 +1,4 @@
-"""Publish PM artifacts into a product meta repo on develop as adh-dev-pm."""
+"""PM meta workspace I/O — local by default; GitHub Contents only when remote=True."""
 
 import re
 from dataclasses import dataclass, field
@@ -41,6 +41,16 @@ def think_path(initiative: str, run: int) -> str:
 
 def quality_path(initiative: str) -> str:
     return f"prd/reports/{initiative}-prd-quality.md"
+
+
+def hermes_promote_brief_path(initiative: str) -> str:
+    """Hermes-owned promote decision card (bluf / locking / revise-if)."""
+    return f"prd/reports/{initiative}-hermes-promote-brief.md"
+
+
+def hermes_post_pm_brief_path(initiative: str) -> str:
+    """Hermes-owned end-of-lane post-PM decision card (bluf / locking / revise-if)."""
+    return f"prd/reports/{initiative}-hermes-post-pm-brief.md"
 
 
 def ask_path(initiative: str) -> str:
@@ -166,16 +176,43 @@ class PmWorkspaceService(BaseInfraService):
             prd_paths=prd_paths,
         )
 
+    def write_local(
+        self, tenant: TenantContext, relative_path: str, contents: str
+    ) -> dict[str, Any]:
+        """Write a PM artefact to the tenant meta workspace only (no GitHub).
+
+        Pre/post-PM lane artefacts stay local until an authorized forge hop.
+        """
+        local = self._write_local(tenant, relative_path, contents)
+        if local is None:
+            raise ValidationError(f"PM artifact {relative_path} was not written to workspace")
+        logger.info(
+            "Wrote PM artifact (local-only)",
+            slug=tenant.slug,
+            path=relative_path,
+            local=str(local),
+        )
+        return {"local_path": str(local), "github": None}
+
     async def publish(
         self,
         tenant: TenantContext,
         relative_path: str,
         contents: str,
         commit_message: str,
+        *,
+        remote: bool = False,
     ) -> dict[str, Any]:
-        """Write the file locally and commit it on the tenant branch as adh-dev-pm."""
+        """Write a PM artefact locally; optionally mirror to GitHub Contents.
+
+        Default ``remote=False`` — mid-lane promote/resolution must not push.
+        Pass ``remote=True`` only from an authorized forge / explicit remote hop
+        (``external-writes-require-authorization``).
+        """
         local = self._write_local(tenant, relative_path, contents)
-        github = await self._put_github(tenant, relative_path, contents, commit_message)
+        github: Optional[dict[str, Any]] = None
+        if remote:
+            github = await self._put_github(tenant, relative_path, contents, commit_message)
         if local is None and github is None:
             raise ValidationError(
                 f"PM artifact {relative_path} was not written to workspace or GitHub"
@@ -186,8 +223,16 @@ class PmWorkspaceService(BaseInfraService):
             path=relative_path,
             local=str(local) if local else None,
             github_sha=(github or {}).get("commit_sha"),
+            remote=remote,
         )
         return {"local_path": str(local) if local else None, "github": github}
+
+    def pm_app_role(self) -> AppRole:
+        """adh-dev-pm App identity from roles.yaml (fail fast when missing)."""
+        roles_path = self._roles_path()
+        if roles_path is None:
+            raise ValidationError("roles.yaml missing; cannot resolve PM GitHub App")
+        return _pm_app(roles_path)
 
     def _roles_path(self) -> Optional[Path]:
         if self._orch.meta_root:
@@ -269,7 +314,7 @@ class PmWorkspaceService(BaseInfraService):
         *,
         commit_message: str,
     ) -> dict[str, Any]:
-        """Copy each source→dest via publish, then delete the source locally and on GitHub.
+        """Move each source→dest locally only (no GitHub). Mid-lane cleanup.
 
         Caller must pre-validate allowlist (Hermes promote_cleanup).
         """
@@ -282,25 +327,15 @@ class PmWorkspaceService(BaseInfraService):
             if not body:
                 skipped.append(normalized)
                 continue
-            published = await self.publish(
-                tenant,
-                target,
-                body,
-                f"{commit_message}: archive {normalized}",
-            )
+            written = self.write_local(tenant, target, body)
             self.delete_local(tenant, normalized)
-            github_delete = await self._delete_github(
-                tenant,
-                normalized,
-                f"{commit_message}: remove {normalized}",
-            )
             archived.append(
                 {
                     "source": normalized,
                     "dest": target,
-                    "local": published.get("local_path"),
-                    "github_archive": published.get("github"),
-                    "github_delete": github_delete,
+                    "local": written.get("local_path"),
+                    "github_archive": None,
+                    "github_delete": None,
                 }
             )
         return {"archived": archived, "skipped": skipped}

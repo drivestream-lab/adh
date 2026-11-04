@@ -70,7 +70,38 @@ def test_publish_writes_reports_locally(tmp_path: Path, monkeypatch: pytest.Monk
     _reset_settings()
 
 
-def test_publish_commits_on_develop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_publish_default_is_local_only_even_with_roles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mid-lane publish must not hit GitHub unless remote=True."""
+    meta = tmp_path / "realworld-meta"
+    meta.mkdir()
+    roles = tmp_path / "adh-meta" / "config"
+    roles.mkdir(parents=True)
+    (roles / "roles.yaml").write_text(_roles_yaml(), encoding="utf-8")
+    monkeypatch.setenv("ORCH_META_ROOT", str(tmp_path / "adh-meta"))
+    _reset_settings()
+    github = MagicMock()
+    github.initialize = AsyncMock()
+    github.installation_token = AsyncMock(return_value=("tok", {"contents": "write"}))
+    github.put_text_file = AsyncMock()
+    service = PmWorkspaceService(github)
+    result = asyncio.run(
+        service.publish(
+            _tenant(meta),
+            "prd/reports/INIT-X-prd-think.md",
+            "# think C1\n",
+            "docs(INIT-X): C1",
+        )
+    )
+    assert (meta / "prd" / "reports" / "INIT-X-prd-think.md").is_file()
+    assert result["github"] is None
+    github.installation_token.assert_not_called()
+    github.put_text_file.assert_not_called()
+    _reset_settings()
+
+
+def test_publish_remote_commits_on_develop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     meta = tmp_path / "realworld-meta"
     meta.mkdir()
     roles = tmp_path / "adh-meta" / "config"
@@ -96,6 +127,7 @@ def test_publish_commits_on_develop(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             "prd/reports/INIT-X-prd-think.md",
             "# think C1\n",
             "docs(INIT-X): C1",
+            remote=True,
         )
     )
     github.installation_token.assert_awaited()
@@ -106,7 +138,7 @@ def test_publish_commits_on_develop(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     _reset_settings()
 
 
-def test_publish_refuses_meta_not_on_pm_app(
+def test_publish_remote_refuses_meta_not_on_pm_app(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     meta = tmp_path / "other-meta"
@@ -128,9 +160,20 @@ def test_publish_refuses_meta_not_on_pm_app(
         repos={"other-meta": "meta-pm"},
     )
     with pytest.raises(ValidationError, match="not on identity adh-dev-pm"):
-        asyncio.run(service.publish(tenant, "prd/reports/x.md", "# x\n", "docs"))
+        asyncio.run(service.publish(tenant, "prd/reports/x.md", "# x\n", "docs", remote=True))
     github.put_text_file.assert_not_called()
     _reset_settings()
+
+
+def test_write_local_does_not_touch_github(tmp_path: Path) -> None:
+    meta = tmp_path / "realworld-meta"
+    meta.mkdir()
+    github = MagicMock()
+    service = PmWorkspaceService(github)
+    result = service.write_local(_tenant(meta), "prd/INIT-X.md", "# prd\n")
+    assert (meta / "prd" / "INIT-X.md").read_text(encoding="utf-8") == "# prd\n"
+    assert result["github"] is None
+    github.installation_token.assert_not_called()
 
 
 def test_inventory_reads_init_ids_from_meta(tmp_path: Path) -> None:

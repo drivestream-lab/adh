@@ -11,40 +11,24 @@ from injector import inject
 
 from src.business_services.base_business_service import BaseBusinessService
 from src.business_services.buzz_service import BuzzService
-from src.business_services.hermes.cards import (  # noqa: F401
-    apply_ask_card,
-    apply_quality_card,
-)
-from src.business_services.hermes.gates import (  # noqa: F401
-    _as_float_map,
-    apply_ready_gate,
-    apply_recommend_gate,
-)
-from src.business_services.hermes.lead_tokens import (  # noqa: F401
-    _coerce_init,
+from src.business_services.hermes.gates import _as_float_map
+from src.business_services.hermes.lead_tokens import (
+    is_lead_outline_body,
     lock_token as _lock_token,
     outline_fingerprint,
-    parse_ask_answers,
-    parse_promote_pick,
 )
 from src.business_services.hermes.pending import PendingMixin
-from src.business_services.hermes.post_promote_walk import PostPromoteWalkMixin
-from src.business_services.hermes.pre_promote_walk import PrePromoteWalkMixin
-from src.business_services.hermes.render_pm import (
-    RenderPmMixin,
-    _format_ready_files,
+from src.business_services.hermes.programmes.authoring_programme import (
+    AuthoringProgrammeService,
 )
-from src.infra_services.pm_skill_runner_service import PmSkillRunnerService
+from src.business_services.hermes.programmes.meta_pm_programme import MetaPmProgrammeService
+from src.business_services.hermes.render_pm import RenderPmMixin
+from src.business_services.hermes.runtime.orchestrator_service import HermesCollaboratorService
 from src.configs.hermes_settings import HermesSettings
 from src.configs.rubrics import RUBRIC_ENG, RUBRIC_PM, weighted_overall
 from src.infra_services.hermes_store_service import HermesStoreService
-from src.infra_services.pm_workspace_service import (
-    PmWorkspaceService,
-    ask_path,
-    quality_path,
-    recommend_path,
-    think_path,
-)
+from src.infra_services.pm_skill_runner_service import PmSkillRunnerService
+from src.infra_services.pm_workspace_service import PmWorkspaceService
 from src.infra_services.prompt_service import PromptService
 from src.infra_services.redis_service import RedisService
 from src.infra_services.tenant_registry_service import TenantRegistryService
@@ -56,15 +40,10 @@ from src.models.buzz_models import (
     MessageRead,
 )
 from src.models.hermes_models import HermesArtifactRead, HermesBriefRequest, HermesGradeRequest
-from src.models.prompt_models import (
-    cap_ask_forks,
-    quality_has_signal,
-)
 from src.models.tenant_models import (
     GLOBAL_MEMORY_ROOM,
     GLOBAL_REPO,
     MEMORY_SCOPE_GLOBAL,
-    MEMORY_SCOPE_REPO,
     TenantContext,
     knowledge_scope_key,
     memory_room_for_repo,
@@ -72,13 +51,11 @@ from src.models.tenant_models import (
 
 
 class HermesService(
-    PostPromoteWalkMixin,
-    PrePromoteWalkMixin,
     PendingMixin,
     RenderPmMixin,
     BaseBusinessService,
 ):
-    """Autonomous LLM brain. Writes Buzz + meta-repo files as adh-dev-pm. Never merges."""
+    """Buzz listener: catalogue collaborator + skill-backed authoring + eng grade."""
 
     @inject
     def __init__(
@@ -90,6 +67,9 @@ class HermesService(
         workspace: PmWorkspaceService,
         tenants: TenantRegistryService,
         skill_runner: PmSkillRunnerService,
+        collaborator: HermesCollaboratorService,
+        meta_pm: MetaPmProgrammeService,
+        authoring: AuthoringProgrammeService,
     ) -> None:
         super().__init__()
         self._store = store
@@ -99,25 +79,20 @@ class HermesService(
         self._workspace = workspace
         self._tenants = tenants
         self._skill_runner = skill_runner
+        self._collaborator = collaborator
+        self._meta_pm = meta_pm
+        self._authoring = authoring
         self._settings = HermesSettings.get_instance()
         self._boot_task: Optional[asyncio.Task[None]] = None
         self._listen_tasks: list[asyncio.Task[None]] = []
         self._work_tasks: set[asyncio.Task[None]] = set()
         self._inflight: dict[str, str] = {}
-        self._awaiting_init: dict[str, dict[str, Any]] = {}
-        self._awaiting_ask: dict[str, dict[str, Any]] = {}
-        self._awaiting_recommend: dict[str, dict[str, Any]] = {}
-        self._awaiting_post_promote: dict[str, dict[str, Any]] = {}
-        self._awaiting_validate_decisions: dict[str, dict[str, Any]] = {}
-        self._awaiting_update_manifest: dict[str, dict[str, Any]] = {}
-        self._awaiting_impact_confirm: dict[str, dict[str, Any]] = {}
-        self._ask_events: dict[str, asyncio.Event] = {}
-        self._ask_answers: dict[str, dict[str, str]] = {}
         self._outline_tasks: dict[str, asyncio.Task[None]] = {}
         self._open_initiative: dict[str, str] = {}
 
     async def initialize(self) -> None:
         await super().initialize()
+        self._collaborator.set_programme_runner(self._meta_pm)
         if self._settings.listen_ops:
             rooms = [tenant.ops_room for tenant in self._tenants.active()]
             for room in rooms:
@@ -299,403 +274,21 @@ class HermesService(
         )
         return artifact
 
-    async def run_pm_think(
-        self,
-        request: HermesBriefRequest,
-        *,
-        run: int,
-        tenant: TenantContext,
-        prior_candidate: Any = None,
-        path: Optional[str] = None,
-        fail_list: str = "(none)",
-        remaining_thinks: int = 0,
-    ) -> HermesArtifactRead:
-        """Author one think candidate. Does not score, promote, or open a PR."""
-        label = f"C{run}"
-        template = "hermes.pm.think.c1" if run <= 1 else "hermes.pm.think.c2"
-        slug = tenant.slug
-        initiative = request.initiative
-        claimed = path or think_path(initiative, run)
-        occupied = self._workspace.inventory(tenant).inits
-        variables: dict[str, Any] = {
-            "source_message_id": str(request.source_message_id or "none"),
-            "outline": request.outline.strip(),
-            "programme_slug": slug,
-            "meta_repo": tenant.meta_repo,
-            "occupied_inits": ", ".join(occupied) if occupied else "(none)",
-            "claimed_path": claimed,
-            "initiative": initiative,
-            "label": label,
-            "fail_list": fail_list,
-            "remaining_thinks": remaining_thinks,
-            "prior_candidate": prior_candidate or "(none)",
-        }
-        result = await self._prompts.complete(
-            template, variables, model=self._settings.model_for_lane("pm")
-        )
-        parsed = dict(result.parsed)
-        parsed["proposed_init"] = initiative
-        parsed["candidate_label"] = label
-        path = claimed
-        file_body = str(parsed.get("file_body") or "").strip()
-        if not file_body:
-            file_body = self._render_think_file(initiative, label, parsed, path)
-        parsed["file_body"] = file_body
-        body = (
-            file_body
-            if file_body.startswith("#")
-            else self._render_think_hop_body(initiative, label, parsed, result.model, path)
-        )
-        payload = {
-            "lane": "pm",
-            "hop": f"think-{label.lower()}",
-            "initiative": initiative,
-            "programme_slug": slug,
-            "path": path,
-            "model": result.model,
-            "stub": result.stub,
-            "artifact": parsed,
-            "file_body": file_body,
-            "raw": result.raw[:32000],
-        }
-        posted = await self._post(
-            tenant.memory_room,
-            "adh.pm",
-            body,
-            payload,
-        )
-        artifact = await self._persist(
-            kind=f"pm_think_{label.lower()}",
-            lane="pm",
-            initiative=initiative,
-            rubric_id=RUBRIC_PM["id"],
-            overall=None,
-            recommend_merge=None,
-            body=body,
-            payload=payload,
-            buzz_id=posted.id,
-            dimension="journeys",
-            repo=tenant.meta_repo,
-            scope=MEMORY_SCOPE_REPO,
-        )
-        self.logger.info(
-            "Hermes think hop persisted",
-            initiative=initiative,
-            hop=label,
-            stub=result.stub,
-        )
-        return artifact
-
-    async def run_pm_quality(
-        self,
-        *,
-        initiative: str,
-        files: list[dict[str, str]],
-        tenant: TenantContext,
-        outline: str = "",
-        pass_number: int = 1,
-        max_passes: int = 2,
-        source_message_id: Optional[UUID] = None,
-    ) -> HermesArtifactRead:
-        """Score think files against engineering-ready. Does not promote or merge."""
-        result = await self._prompts.complete(
-            "hermes.pm.quality",
-            {
-                "initiative": initiative,
-                "source_message_id": str(source_message_id or "none"),
-                "rubric_dimensions": ", ".join(RUBRIC_PM["dimensions"]),
-                "threshold_x": RUBRIC_PM["threshold_x"],
-                "outline": (outline or "").strip() or "(none)",
-                "files": _format_ready_files(files),
-                "pass_number": pass_number,
-                "max_passes": max_passes,
-            },
-        )
-        parsed = apply_ready_gate(dict(result.parsed), files)
-        if not quality_has_signal(parsed):
-            raise TimeoutError(
-                self._copy(
-                    "hermes.pm.error.ready-no-bars",
-                    {"pass_number": pass_number, "initiative": initiative},
-                )
-            )
-        parsed = await self._apply_quality_card(
-            initiative, parsed, files, outline or "", result.model
-        )
-        overall = max(
-            (float(cand.get("overall") or 0) for cand in parsed["candidates"]),
-            default=0.0,
-        )
-        path = f"prd/reports/{initiative}-prd-quality.md"
-        body = self._render_quality_hop_body(
-            initiative, parsed, result.model, pass_number, max_passes, path
-        )
-        file_body = self._render_quality_file(
-            initiative, parsed, path, result.model, pass_number, max_passes
-        )
-        payload = {
-            "lane": "pm",
-            "hop": "quality",
-            "initiative": initiative,
-            "programme_slug": tenant.slug,
-            "path": path,
-            "rubric": RUBRIC_PM["id"],
-            "threshold_x": RUBRIC_PM["threshold_x"],
-            "overall": overall,
-            "pass_number": pass_number,
-            "max_passes": max_passes,
-            "model": result.model,
-            "stub": result.stub,
-            "artifact": parsed,
-            "file_body": file_body,
-            "raw": result.raw[:32000],
-        }
-        posted = await self._post(tenant.memory_room, "adh.pm", body, payload)
-        artifact = await self._persist(
-            kind="pm_quality",
-            lane="pm",
-            initiative=initiative,
-            rubric_id=RUBRIC_PM["id"],
-            overall=overall,
-            recommend_merge=None,
-            body=body,
-            payload=payload,
-            buzz_id=posted.id,
-            dimension="findings_quality",
-            repo=tenant.meta_repo,
-            scope=MEMORY_SCOPE_REPO,
-        )
-        self.logger.info(
-            "Hermes quality hop persisted",
-            initiative=initiative,
-            overall=overall,
-            stub=result.stub,
-        )
-        return artifact
-
-    async def run_pm_ask(
-        self,
-        *,
-        initiative: str,
-        files: list[dict[str, str]],
-        tenant: TenantContext,
-        outline: str = "",
-        scorecard: str = "",
-        answers: str = "(none)",
-        source_message_id: Optional[UUID] = None,
-    ) -> HermesArtifactRead:
-        """Pose closed forks that change the pick. Does not recommend or promote."""
-        max_forks = int(self._settings.pm_max_ask_forks)
-        result = await self._prompts.complete(
-            "hermes.pm.ask",
-            {
-                "initiative": initiative,
-                "source_message_id": str(source_message_id or "none"),
-                "outline": (outline or "").strip() or "(none)",
-                "files": _format_ready_files(files),
-                "scorecard": (scorecard or "").strip() or "(none)",
-                "answers": answers,
-                "max_forks": max_forks,
-            },
-        )
-        parsed = dict(result.parsed)
-        parsed["forks"] = cap_ask_forks(parsed.get("forks"), max_forks=max_forks)
-        parsed = await self._apply_ask_card(initiative, parsed, files, outline or "", result.model)
-        path = ask_path(initiative)
-        body = self._render_ask_hop_body(initiative, parsed, result.model)
-        file_body = self._render_ask_file(initiative, parsed, path)
-        payload = {
-            "lane": "pm",
-            "hop": "ask",
-            "initiative": initiative,
-            "programme_slug": tenant.slug,
-            "path": path,
-            "model": result.model,
-            "stub": result.stub,
-            "artifact": parsed,
-            "file_body": file_body,
-            "raw": result.raw[:32000],
-        }
-        posted = await self._post(tenant.memory_room, "adh.pm", body, payload)
-        artifact = await self._persist(
-            kind="pm_ask",
-            lane="pm",
-            initiative=initiative,
-            rubric_id=RUBRIC_PM["id"],
-            overall=None,
-            recommend_merge=None,
-            body=body,
-            payload=payload,
-            buzz_id=posted.id,
-            dimension="findings_quality",
-            repo=tenant.meta_repo,
-            scope=MEMORY_SCOPE_REPO,
-        )
-        self.logger.info(
-            "Hermes ask hop persisted",
-            initiative=initiative,
-            forks=len(parsed.get("forks") or []),
-            stub=result.stub,
-        )
-        return artifact
-
-    async def run_pm_recommend(
-        self,
-        *,
-        initiative: str,
-        files: list[dict[str, str]],
-        tenant: TenantContext,
-        quality: HermesArtifactRead,
-        outline: str = "",
-        scorecard: str = "",
-        answers: str = "(none)",
-        ask_file: str = "(none)",
-        source_message_id: Optional[UUID] = None,
-    ) -> HermesArtifactRead:
-        """Recommend a think file vs the brief. Does not promote, draft, or merge."""
-        result = await self._prompts.complete(
-            "hermes.pm.recommend",
-            {
-                "initiative": initiative,
-                "source_message_id": str(source_message_id or "none"),
-                "outline": (outline or "").strip() or "(none)",
-                "files": _format_ready_files(files),
-                "scorecard": (scorecard or "").strip() or "(none)",
-                "answers": answers,
-                "ask_file": ask_file,
-            },
-        )
-        parsed = apply_recommend_gate(dict(result.parsed), files, quality)
-        path = recommend_path(initiative)
-        body = self._render_recommend_hop_body(initiative, parsed, result.model)
-        file_body = str(parsed.get("file_body") or "").strip()
-        if not file_body.startswith("#"):
-            file_body = self._render_recommend_file(initiative, parsed, path)
-        parsed["file_body"] = file_body
-        payload = {
-            "lane": "pm",
-            "hop": "recommend",
-            "initiative": initiative,
-            "programme_slug": tenant.slug,
-            "path": path,
-            "model": result.model,
-            "stub": result.stub,
-            "artifact": parsed,
-            "file_body": file_body,
-            "raw": result.raw[:32000],
-        }
-        posted = await self._post(tenant.memory_room, "adh.pm", body, payload)
-        artifact = await self._persist(
-            kind="pm_recommend",
-            lane="pm",
-            initiative=initiative,
-            rubric_id=RUBRIC_PM["id"],
-            overall=None,
-            recommend_merge=None,
-            body=body,
-            payload=payload,
-            buzz_id=posted.id,
-            dimension="findings_quality",
-            repo=tenant.meta_repo,
-            scope=MEMORY_SCOPE_REPO,
-        )
-        self.logger.info(
-            "Hermes recommend hop persisted",
-            initiative=initiative,
-            recommend=parsed.get("recommend"),
-            stub=result.stub,
-        )
-        return artifact
-
-    async def replay_pm_ask_recommend(
-        self,
-        tenant: TenantContext,
-        initiative: str,
-        outline: str,
-        *,
-        wait_seconds: Optional[float] = 0,
-    ) -> None:
-        """Run ask then recommend on existing think/quality files. Does not allocate INIT."""
-        thinks: list[HermesArtifactRead] = []
-        for run in range(1, 9):
-            path = think_path(initiative, run)
-            body = self._workspace.read_local(tenant, path)
-            if not body.strip():
-                continue
-            thinks.append(
-                HermesArtifactRead(
-                    kind=f"pm_think_c{run}",
-                    initiative=initiative,
-                    rubric_id=RUBRIC_PM["id"],
-                    body=body[:500],
-                    payload={
-                        "path": path,
-                        "file_body": body,
-                        "artifact": {"candidate_label": f"C{run}"},
-                        "hop": f"think-c{run}",
-                    },
-                )
-            )
-        qpath = quality_path(initiative)
-        qbody = self._workspace.read_local(tenant, qpath)
-        if not thinks or not qbody.strip():
-            raise TimeoutError("replay needs think and quality files on the meta repo")
-        quality = HermesArtifactRead(
-            kind="pm_quality",
-            initiative=initiative,
-            rubric_id=RUBRIC_PM["id"],
-            body=qbody,
-            payload={"path": qpath, "file_body": qbody, "artifact": {}, "hop": "quality"},
-        )
-        meta = {
-            "initiative": initiative,
-            "programme_slug": tenant.slug,
-            "status": "in_progress",
-            "hop": "ask",
-        }
-        previous = float(self._settings.pm_ask_wait_seconds)
-        if wait_seconds is not None:
-            self._settings = self._settings.model_copy(
-                update={"pm_ask_wait_seconds": float(wait_seconds)}
-            )
-        try:
-            await self._ask_then_recommend(
-                tenant,
-                tenant.ops_room,
-                outline,
-                initiative,
-                None,
-                meta,
-                thinks,
-                quality,
-            )
-        finally:
-            self._settings = self._settings.model_copy(update={"pm_ask_wait_seconds": previous})
-
     async def list_ledger(self) -> list[HermesArtifactRead]:
         return await self._store.list_ledger()
 
     async def on_room_message(self, room: str, message: MessageRead) -> None:
-        """Ack Lead outlines, reject duplicates while in progress, post status."""
+        """Collaborator (meta-pm) → authoring (promote/init) → new outline."""
         tenant = self._tenants.by_ops_room(room)
         if tenant is None:
             return
         if await self._try_lead_stop(tenant, room, message):
             return
-        if await self._try_ask_answer(tenant, room, message):
+        if self._is_lead_text(message) and await self._collaborator.handle_lead_message(
+            tenant, room, message
+        ):
             return
-        if await self._try_post_promote_gate(tenant, room, message):
-            return
-        if await self._try_finding_answers(tenant, room, message):
-            return
-        if await self._try_manifest_answer(tenant, room, message):
-            return
-        if await self._try_impact_answer(tenant, room, message):
-            return
-        if await self._try_promote_pick(tenant, room, message):
-            return
-        if self._is_lead_init_name(message, tenant):
-            await self._on_named_init(tenant, room, message)
+        if await self._authoring.handle_lead_message(tenant, room, message):
             return
         if not self._is_lead_outline(message):
             return
@@ -730,19 +323,10 @@ class HermesService(
                     "source_message_id": str(message.id) if message.id else "",
                 },
             )
-            self.logger.info(
-                "Ignored Lead outline while programme work is open",
-                slug=tenant.slug,
-                fingerprint=fingerprint,
-            )
             return
         source_id = str(message.id) if message.id else ""
         claimed = await self._claim_outline(tenant.slug, fingerprint, source_id)
         if not claimed:
-            token = _lock_token(tenant.slug, fingerprint)
-            owner = self._inflight.get(token) or await self._redis.get(
-                self._lock_key(tenant.slug, fingerprint)
-            )
             await self._status(
                 room,
                 self._copy("hermes.pm.status.duplicate"),
@@ -752,14 +336,7 @@ class HermesService(
                     "outline_fingerprint": fingerprint,
                     "programme_slug": tenant.slug,
                     "source_message_id": source_id,
-                    "in_progress_source": owner,
                 },
-            )
-            self.logger.info(
-                "Rejected duplicate Lead outline",
-                fingerprint=fingerprint,
-                slug=tenant.slug,
-                source=source_id,
             )
             return
         await self._status(
@@ -779,14 +356,21 @@ class HermesService(
                 "source_message_id": source_id,
             },
         )
-        self._track_outline_task(
-            tenant.slug,
-            asyncio.create_task(
-                self._run_outline_work(
-                    tenant, room, message.body, fingerprint, source_id, message.id
+
+        async def _run() -> None:
+            try:
+                await self._authoring.start_outline(
+                    tenant,
+                    room,
+                    message.body,
+                    fingerprint=fingerprint,
+                    source_id=source_id,
+                    source_message_id=message.id,
                 )
-            ),
-        )
+            finally:
+                await self._release_outline(tenant.slug, fingerprint)
+
+        self._track_outline_task(tenant.slug, asyncio.create_task(_run()))
 
     async def _listen_ops(self, room: str) -> None:
         delay = 1.0
@@ -831,10 +415,28 @@ class HermesService(
             pending.append(message)
         for message in pending:
             await self.on_room_message(room, message)
-        tenant = self._tenants.by_ops_room(room)
-        if tenant is not None:
-            await self._resume_pending_outline(tenant)
-            await self._resume_pending_ask(tenant)
+
+    def _is_lead_text(self, message: MessageRead) -> bool:
+        if message.kind != MessageKind.MESSAGE:
+            return False
+        return (message.identity_handle or "") == self._settings.lead_handle
+
+    def _is_lead_outline(self, message: MessageRead) -> bool:
+        if not self._is_lead_text(message):
+            return False
+        return is_lead_outline_body(message.body, min_chars=int(self._settings.outline_min_chars))
+
+    def _track_outline_task(self, slug: str, task: asyncio.Task[None]) -> None:
+        prior = self._outline_tasks.pop(slug, None)
+        if prior is not None and not prior.done():
+            prior.cancel()
+        self._outline_tasks[slug] = task
+
+        def _done(done: asyncio.Task[None]) -> None:
+            if self._outline_tasks.get(slug) is done:
+                self._outline_tasks.pop(slug, None)
+
+        task.add_done_callback(_done)
 
     async def _with_pm_progress(
         self,
@@ -916,7 +518,8 @@ class HermesService(
     ) -> None:
         path = str(artifact.payload.get("path") or "")
         contents = str(artifact.payload.get("file_body") or artifact.body)
-        result = await self._workspace.publish(tenant, path, contents, commit_message)
+        # Mid-lane hops stay local; forge owns authorized remote GitHub writes.
+        result = self._workspace.write_local(tenant, path, contents)
         local = result.get("local_path") or "skipped"
         github = result.get("github") or {}
         sha = ""

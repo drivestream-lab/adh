@@ -53,7 +53,12 @@ def apply_validate_briefs(
                 "must change before engineering drafts."
             )
         if not item["recommend_why"]:
-            item["recommend_why"] = "Clear the finding so spec-draft does not guess."
+            finding_text = str(item.get("finding") or fid).strip()
+            item["recommend_why"] = (
+                f"Clear this before update: {finding_text[:160]}"
+                if finding_text
+                else "Clear the finding so update-documents does not guess."
+            )
         out.append(item)
     return out
 

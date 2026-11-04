@@ -32,25 +32,25 @@ class HermesSettings(BaseSettings):
         description="LiteLLM alias for after-PR grade. Empty uses model.",
     )
     wait_step_seconds: float = Field(
-        default=30.0,
+        default=90.0,
         ge=0.05,
-        description="Each wait increment while the model runs",
+        description="Buzz still-working / Cursor progress interval while a hop runs",
     )
     wait_steps: int = Field(
         default=40,
         ge=1,
         le=80,
-        description="How many +wait_step waits before the PM lane fails",
+        description="Max progress ticks per hop before the PM lane fails (configurable)",
     )
     timeout_seconds: float = Field(
-        default=1200.0,
+        default=3600.0,
         ge=30.0,
-        description="Hard cap; default is wait_step_seconds * wait_steps (covers 20k completion)",
+        description="Hard cap per hop; default wait_step_seconds * wait_steps",
     )
     progress_seconds: float = Field(
-        default=30.0,
+        default=90.0,
         ge=0.05,
-        description="Alias of wait_step_seconds for still-working posts",
+        description="Seconds between Buzz still-working posts during Cursor skill runs",
     )
 
     pg_host: str = Field(default="localhost")
@@ -111,15 +111,43 @@ class HermesSettings(BaseSettings):
         le=20,
         description="Max ask-shaped VF briefs posted per decision wave.",
     )
+    pm_auto_decide_validate_passes: int = Field(
+        default=2,
+        ge=0,
+        le=4,
+        description=(
+            "Validate→review→update passes where Hermes owns VF WHYs AND auto-applies "
+            "update-documents (think-lane parity). After the budget, Hermes writes the "
+            "post-PM brief; Impact-Map waits for Lead. 0 = Lead decides every wave."
+        ),
+    )
     pm_max_post_validate_passes: int = Field(
         default=2,
         ge=1,
         le=4,
-        description="Max validate→update cycles in post-promote before stalling.",
+        description=(
+            "Max validate→review→update passes in post-PM (like pm_max_think_runs). "
+            "After the budget, Hermes writes the post-PM brief; Lead confirm then "
+            "triggers impact-map (Buzz or offline) before draft PR auth."
+        ),
     )
     pm_skill_runner_enabled: bool = Field(
         default=True,
         description="When true, post-promote hops invoke Cursor CLI skill runner.",
+    )
+    repo_root: str = Field(
+        default="",
+        description=(
+            "Absolute path to the ADH checkout that owns .harness-pin.yaml. "
+            "Empty = discover from cwd / ORCH_WORKSPACE_ROOT/adh."
+        ),
+    )
+    prayog_skills_root: str = Field(
+        default="",
+        description=(
+            "Absolute path to prayog-skills checkout. Empty = <repo>/prayog-skills "
+            "next to .harness-pin.yaml."
+        ),
     )
     litellm_concurrency: int = Field(
         default=2,
