@@ -202,6 +202,7 @@ class PmWorkspaceService(BaseInfraService):
         commit_message: str,
         *,
         remote: bool = False,
+        branch: Optional[str] = None,
     ) -> dict[str, Any]:
         """Write a PM artefact locally; optionally mirror to GitHub Contents.
 
@@ -212,7 +213,13 @@ class PmWorkspaceService(BaseInfraService):
         local = self._write_local(tenant, relative_path, contents)
         github: Optional[dict[str, Any]] = None
         if remote:
-            github = await self._put_github(tenant, relative_path, contents, commit_message)
+            github = await self._put_github(
+                tenant,
+                relative_path,
+                contents,
+                commit_message,
+                branch=branch or tenant.integration_branch,
+            )
         if local is None and github is None:
             raise ValidationError(
                 f"PM artifact {relative_path} was not written to workspace or GitHub"
@@ -224,8 +231,50 @@ class PmWorkspaceService(BaseInfraService):
             local=str(local) if local else None,
             github_sha=(github or {}).get("commit_sha"),
             remote=remote,
+            branch=(branch or tenant.integration_branch) if remote else None,
         )
         return {"local_path": str(local) if local else None, "github": github}
+
+    async def push_paths_to_branch(
+        self,
+        tenant: TenantContext,
+        *,
+        branch: str,
+        relative_paths: list[str],
+        commit_message: str,
+    ) -> list[str]:
+        """Push existing local meta files to ``branch`` via GitHub Contents API.
+
+        Authorized forge prep only — never uses ``gh`` CLI. ``_ensure_branch``
+        creates the head from the default branch when missing.
+        """
+        pushed: list[str] = []
+        for relative in list(dict.fromkeys(p for p in relative_paths if p)):
+            body = self.read_local(tenant, relative)
+            if not body.strip():
+                logger.warning(
+                    "Skip forge push; local file missing or empty",
+                    path=relative,
+                    slug=tenant.slug,
+                )
+                continue
+            result = await self.publish(
+                tenant,
+                relative,
+                body,
+                f"{commit_message}: {relative}",
+                remote=True,
+                branch=branch,
+            )
+            if not (result.get("github") or {}).get("commit_sha"):
+                raise ValidationError(
+                    f"forge push failed for {relative!r} on branch {branch!r} "
+                    "(GitHub Contents API; check App install / branch protection)"
+                )
+            pushed.append(relative)
+        if not pushed:
+            raise ValidationError(f"no local artefacts to push for forge branch {branch!r}")
+        return pushed
 
     def pm_app_role(self) -> AppRole:
         """adh-dev-pm App identity from roles.yaml (fail fast when missing)."""
@@ -385,7 +434,10 @@ class PmWorkspaceService(BaseInfraService):
         relative_path: str,
         contents: str,
         commit_message: str,
+        *,
+        branch: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
+        target_branch = (branch or tenant.integration_branch).strip()
         roles_path = self._roles_path()
         if roles_path is None:
             logger.warning("roles.yaml missing; skip GitHub publish")
@@ -412,7 +464,7 @@ class PmWorkspaceService(BaseInfraService):
                 tenant.meta_repo,
                 path=relative_path,
                 contents=contents,
-                branch=tenant.integration_branch,
+                branch=target_branch,
                 message=commit_message,
             )
         except ValidationError:
@@ -422,7 +474,7 @@ class PmWorkspaceService(BaseInfraService):
                 "GitHub publish failed",
                 path=relative_path,
                 repo=tenant.meta_repo,
-                branch=tenant.integration_branch,
+                branch=target_branch,
                 slug=tenant.slug,
             )
             return None

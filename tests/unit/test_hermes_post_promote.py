@@ -251,7 +251,7 @@ Proceed — Criticals cleared; deferred identity fields do not undercut stranger
 A stranger reopens home after publish and reads matching title, body, and author name.
 
 ## options
-- confirm — proceed to impact-map when ready
+- confirm — proceed; Hermes runs impact-map next
 - revise — hold and edit the PRD
 """
     judgment = post_pm_brief_from_hermes(body)

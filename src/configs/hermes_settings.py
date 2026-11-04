@@ -118,7 +118,7 @@ class HermesSettings(BaseSettings):
         description=(
             "Validate→review→update passes where Hermes owns VF WHYs AND auto-applies "
             "update-documents (think-lane parity). After the budget, Hermes writes the "
-            "post-PM brief; Impact-Map waits for Lead. 0 = Lead decides every wave."
+            "post-PM brief; confirm auto-runs impact-map. 0 = human decides every wave."
         ),
     )
     pm_max_post_validate_passes: int = Field(
@@ -127,8 +127,8 @@ class HermesSettings(BaseSettings):
         le=4,
         description=(
             "Max validate→review→update passes in post-PM (like pm_max_think_runs). "
-            "After the budget, Hermes writes the post-PM brief; Lead confirm then "
-            "triggers impact-map (Buzz or offline) before draft PR auth."
+            "After the budget, Hermes writes the post-PM brief; confirm auto-runs "
+            "impact-map, then draft PR auth."
         ),
     )
     pm_skill_runner_enabled: bool = Field(

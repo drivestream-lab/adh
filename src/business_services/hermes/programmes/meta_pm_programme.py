@@ -132,9 +132,6 @@ class MetaPmProgrammeService(BaseBusinessService):
         if stage == "prd-impact-acceptance":
             await self._after_post_pm_brief(tenant, room, session, token)
             return
-        if stage == "awaiting-impact-map":
-            await self._after_impact_request(tenant, room, session, token)
-            return
         if stage == "prd-pr-action":
             # Authorization replies are handled by the orchestrator; judgment
             # tokens here are unexpected — surface and stay.
@@ -652,11 +649,11 @@ class MetaPmProgrammeService(BaseBusinessService):
                     "re-read Validation + Resolution before impact-map."
                 ),
                 example=(
-                    "If you proceed, next product step is impact-map, then draft PR "
-                    "when the blast radius looks right."
+                    "If you proceed, impact-map runs next, then draft PR auth "
+                    "when the ownership map looks right."
                 ),
                 locking=("Validate→review→update budget finished",),
-                not_locking=("Impact-map and draft PR still pending",),
+                not_locking=("Draft PR still needs explicit authorize after impact-map",),
                 revise_if=("PRD still wrong after validate — hold and edit before impact-map",),
                 card_kind=CARD_POSTPM,
             )
@@ -665,11 +662,11 @@ class MetaPmProgrammeService(BaseBusinessService):
             purpose="prd-impact-acceptance",
             node_id="prd-impact-acceptance",
             question=(
-                f"After validate for {initiative}: proceed to impact-map, or hold and revise?"
+                f"After validate for {initiative}: proceed (runs impact-map), or hold and revise?"
             ),
             example=judgment.example,
             options=[
-                "confirm — proceed; run impact-map when ready",
+                "confirm — proceed; Hermes runs impact-map now",
                 "revise — hold; edit PRD / re-run validate first",
             ],
             recommend=judgment.recommend,
@@ -697,7 +694,7 @@ class MetaPmProgrammeService(BaseBusinessService):
     async def _after_post_pm_brief(
         self, tenant: TenantContext, room: str, session: HermesSession, token: str
     ) -> None:
-        """After Lead reads the post-PM brief: revise, or wait for impact-map."""
+        """confirm = post-PM accepted → auto impact-map; revise = stop for offline PRD fix."""
         lowered = token.lower()
         if "revise" in lowered:
             session.awaiting = AWAITING_NONE
@@ -707,77 +704,47 @@ class MetaPmProgrammeService(BaseBusinessService):
                 room,
                 (
                     f"Revise requested for {session.initiative} — update the PRD "
-                    "then re-run meta-pm (`post-pm INIT-…`)."
+                    "offline, then re-run meta-pm (`post-pm INIT-…`)."
                 ),
                 EventType.STALL,
             )
             return
-        # confirm → park for Lead-triggered impact-map (Buzz or offline later)
-        session.stage = "awaiting-impact-map"
-        session.open_brief = self._briefs.build_brief(
-            purpose="awaiting-impact-map",
-            node_id="prd-impact-map",
-            question=(
-                f"Proceed readout accepted for {session.initiative}. "
-                "Generate Impact-Map when ready (PRD ready for draft PR after that)?"
-            ),
-            example=(
-                "Impact-Map names who/what repos the PRD touches. "
-                "Run it now here, or later offline, then authorize the draft PR."
-            ),
-            options=[
-                "impact-map — write Impact-Map, then ask to authorize draft PR",
-            ],
-            recommend="impact-map",
-            bluf="Next product step: Impact-Map, then draft PR authorization.",
-            card_kind=CARD_POSTPM,
-            locking=["Validate loop accepted — PRD content frozen for impact"],
-            not_locking=["Draft PR not opened until you authorize after Impact-Map"],
-            revise_if=["none — reply revise on the prior card if the PRD must change"],
-            reply_tokens=["impact-map", "impact"],
-            artefact_path=hermes_post_pm_brief_path(session.initiative or ""),
-        )
-        session.awaiting = AWAITING_JUDGMENT
-        await self._store.save(session)
+        # confirm → continue the pin: impact-map now, then draft-PR auth.
         await self._poster.post_status(
             room,
-            self._briefs.format_brief_markdown(session.open_brief),
+            (f"Post-PM brief accepted for {session.initiative} — " "running impact-map next."),
             EventType.PROGRESS,
-            {
-                "status": "need_impact_map",
-                "initiative": session.initiative,
-            },
+            {"status": "post_pm_confirmed", "initiative": session.initiative},
         )
-
-    async def _after_impact_request(
-        self, tenant: TenantContext, room: str, session: HermesSession, token: str
-    ) -> None:
-        lowered = token.lower()
-        if "impact" not in lowered:
-            await self._poster.post_status(
-                room,
-                "Reply `impact-map` (or `impact`) when ready, or `stop` to cancel.",
-                EventType.PROGRESS,
-            )
-            session.awaiting = AWAITING_JUDGMENT
-            await self._store.save(session)
-            return
         await self._impact_pass(tenant, room, session)
 
     async def _open_forge_auth(
         self, tenant: TenantContext, room: str, session: HermesSession
     ) -> None:
-        """After Impact-Map: PRD is ready — ask Lead to authorize draft PR."""
+        """After Impact-Map: PRD is ready — ask Lead to authorize draft PR.
+
+        Slots for forge ``open_draft_pr`` are seeded here; dispatch also fills
+        defaults and pushes the draft head via GitHub Contents API (not ``gh``).
+        """
+        del tenant  # forge uses tenant at authorize time
         session.stage = "prd-pr-action"
         node = self._navigator.current(session)
         # Navigator may still be on impact-map; force forge node if needed.
         if node.node_id != "prd-pr-action":
             session.stage = "prd-pr-action"
             node = self._navigator.current(session)
+        init = (session.initiative or "").strip()
+        if init:
+            session.slots.setdefault("prd_path", prd_path(init))
+            session.slots.setdefault("body_path", impact_map_path(init))
+            session.slots.setdefault("resolution_path", resolution_path(init))
+            session.slots.setdefault("validation_path", validation_report_path(init))
+            session.slots.setdefault("head_branch", f"chore/{init}-prd")
+            session.slots.setdefault("title", f"[{init}] PRD draft")
         session.open_brief = self._briefs.brief_authorization(node, session.initiative)
         session.awaiting = AWAITING_AUTHORIZATION
         await self._store.save(session)
-        impact = impact_map_path(session.initiative or "")
+        impact = impact_map_path(init)
         await self._poster.post_status(
             room,
             (
@@ -790,6 +757,7 @@ class MetaPmProgrammeService(BaseBusinessService):
                 "status": "need_pr_authorize",
                 "initiative": session.initiative,
                 "artefact": impact,
+                "head_branch": session.slots.get("head_branch"),
             },
         )
 

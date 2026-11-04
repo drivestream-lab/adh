@@ -61,7 +61,7 @@ Proceed — Criticals cleared; deferred items do not undercut stranger-on-home d
 A stranger saw empty home earlier; after publish they reopen home and read title, body, author name.
 
 ## options
-- confirm — proceed to impact-map when ready
+- confirm — proceed; Hermes runs impact-map next
 - revise — hold and edit the PRD first
 """
 

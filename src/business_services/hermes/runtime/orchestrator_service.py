@@ -149,6 +149,7 @@ class HermesCollaboratorService(BaseBusinessService):
             )
             return True
         node = self._navigator.current(session)
+        # Forge only — GitHub App API (Contents + Pulls). Never gh CLI.
         result = await self._dispatch.run_external_action(
             tenant,
             node,
@@ -157,6 +158,8 @@ class HermesCollaboratorService(BaseBusinessService):
             slots=session.slots,
         )
         self._navigator.advance(session, "pass")
+        session.awaiting = AWAITING_NONE
+        session.open_brief = None
         await self._store.save(session)
         await self._say(
             room,

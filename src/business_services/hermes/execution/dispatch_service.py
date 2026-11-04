@@ -134,23 +134,45 @@ class HermesDispatchService(BaseBusinessService):
             raise ValidationError(f"node {node.node_id!r} declares no forge action")
         if node.requires_explicit_authorization() and not authorized:
             raise ValidationError(f"node {node.node_id!r} requires explicit Lead authorization")
-        missing = [name for name in ("body_path", "head_branch") if not slots.get(name)]
+        filled = dict(slots)
+        action = (node.forge.action or "").strip()
+        if action == "open_draft_pr":
+            filled = await self._ensure_prd_draft_slots(tenant, initiative, filled)
+        missing = [name for name in ("body_path", "head_branch") if not filled.get(name)]
         if missing:
             raise ValidationError(
-                f"forge action {node.forge.action!r} is missing inputs: {', '.join(missing)}"
+                f"forge action {action!r} is missing inputs: {', '.join(missing)}"
+            )
+        # Mid-lane wrote local-only; authorized forge pushes the draft head first.
+        if action == "open_draft_pr":
+            push_paths = [
+                p
+                for p in (
+                    filled.get("prd_path"),
+                    filled.get("body_path"),
+                    filled.get("resolution_path"),
+                    filled.get("validation_path"),
+                )
+                if p
+            ]
+            await self._workspace.push_paths_to_branch(
+                tenant,
+                branch=filled["head_branch"],
+                relative_paths=push_paths,
+                commit_message=f"docs({initiative}): forge draft head",
             )
         request = ForgeActionRequest(
             app=self._workspace.pm_app_role(),
-            repo=slots.get("repo") or tenant.meta_repo,
-            title=slots.get("title") or f"{initiative}: {node.node_id}",
-            body_path=slots["body_path"],
-            head_branch=slots["head_branch"],
+            repo=filled.get("repo") or tenant.meta_repo,
+            title=filled.get("title") or f"{initiative}: {node.node_id}",
+            body_path=filled["body_path"],
+            head_branch=filled["head_branch"],
             draft=node.forge.draft if node.forge.draft is not None else True,
             labels=list(node.forge.apply_labels),
         )
         return await self._forge.run_action(
             tenant,
-            node.forge.action or "",
+            action,
             app=request.app,
             title=request.title,
             body_path=request.body_path,
@@ -159,3 +181,30 @@ class HermesDispatchService(BaseBusinessService):
             labels=request.labels,
             repo=request.repo,
         )
+
+    async def _ensure_prd_draft_slots(
+        self,
+        tenant: TenantContext,
+        initiative: str,
+        slots: dict[str, str],
+    ) -> dict[str, str]:
+        """Fill open_draft_pr slots for a meta PRD draft when the programme omitted them."""
+        from src.business_services.hermes.validation_report import (
+            impact_map_path,
+            resolution_path,
+            validation_report_path,
+        )
+        from src.infra_services.pm_workspace_service import prd_path
+
+        filled = dict(slots)
+        init = (initiative or "").strip()
+        if not init:
+            return filled
+        filled.setdefault("prd_path", prd_path(init))
+        filled.setdefault("body_path", impact_map_path(init))
+        filled.setdefault("resolution_path", resolution_path(init))
+        filled.setdefault("validation_path", validation_report_path(init))
+        filled.setdefault("head_branch", f"chore/{init}-prd")
+        filled.setdefault("title", f"[{init}] PRD draft")
+        filled.setdefault("repo", tenant.meta_repo)
+        return filled

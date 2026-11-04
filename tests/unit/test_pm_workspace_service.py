@@ -138,6 +138,50 @@ def test_publish_remote_commits_on_develop(tmp_path: Path, monkeypatch: pytest.M
     _reset_settings()
 
 
+def test_push_paths_to_branch_uses_contents_api_not_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Authorized forge prep pushes local artefacts onto the draft head branch."""
+    meta = tmp_path / "realworld-meta"
+    (meta / "prd" / "reports").mkdir(parents=True)
+    (meta / "prd" / "INIT-X.md").write_text("# prd\n", encoding="utf-8")
+    (meta / "prd" / "reports" / "Impact-Map-INIT-X.md").write_text("# impact\n", encoding="utf-8")
+    roles = tmp_path / "adh-meta" / "config"
+    roles.mkdir(parents=True)
+    (roles / "roles.yaml").write_text(_roles_yaml(), encoding="utf-8")
+    monkeypatch.setenv("ORCH_META_ROOT", str(tmp_path / "adh-meta"))
+    _reset_settings()
+    github = MagicMock()
+    github.initialize = AsyncMock()
+    github.installation_token = AsyncMock(return_value=("tok", {"contents": "write"}))
+    github.put_text_file = AsyncMock(
+        side_effect=lambda *a, **kw: {
+            "sha": "x",
+            "commit_sha": f"sha-{kw['path']}",
+            "path": kw["path"],
+            "branch": kw["branch"],
+        }
+    )
+    service = PmWorkspaceService(github)
+    pushed = asyncio.run(
+        service.push_paths_to_branch(
+            _tenant(meta),
+            branch="chore/INIT-X-prd",
+            relative_paths=[
+                "prd/INIT-X.md",
+                "prd/reports/Impact-Map-INIT-X.md",
+                "prd/INIT-X.md",
+            ],
+            commit_message="docs(INIT-X): forge draft head",
+        )
+    )
+    assert pushed == ["prd/INIT-X.md", "prd/reports/Impact-Map-INIT-X.md"]
+    assert github.put_text_file.await_count == 2
+    branches = {c.kwargs["branch"] for c in github.put_text_file.await_args_list}
+    assert branches == {"chore/INIT-X-prd"}
+    _reset_settings()
+
+
 def test_publish_remote_refuses_meta_not_on_pm_app(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

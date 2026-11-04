@@ -40,8 +40,8 @@ templates:
       <one user moment that is still true if we proceed — who/when/what they see>
 
       ## options
-      - confirm — proceed; next step is impact-map when the PM is ready
-      - revise — hold; edit the PRD / re-run validate before impact-map
+      - confirm — proceed; Hermes runs impact-map next, then draft-PR auth
+      - revise — hold; edit the PRD offline / re-run validate before impact-map
 
       Voice rules (quality bar):
       - Speak only in product outcomes, users, and risks.
@@ -50,7 +50,7 @@ templates:
         (VF ids allowed only inside deferred/still_risky if pointing at a
         concrete Resolution item the PM must reopen).
       - Do NOT restate the whole INIT job; recommend from validate/resolution.
-      - Do NOT invent an Impact-Map; that hop comes after confirm.
+      - Do NOT invent an Impact-Map; confirm means Hermes will generate it next.
       - Prefer `confirm` when Criticals are cleared and deferred items are
         acceptable product bets; prefer `revise` when Criticals remain or a
         deferral undercuts the user-visible done bar.
