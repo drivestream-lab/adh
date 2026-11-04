@@ -74,10 +74,16 @@ templates:
       Reply `{{ recommend }}` to name that file, `none`, or `iterate`. Promote is still you. Forge does not draft until you promote. I will not merge.
   hermes.pm.status.promote-noted:
     body: |-
-      Noted {{ pick }} for {{ initiative }} ({{ path }}). Copied think → `prd/{{ initiative }}.md` (workspace={{ local }}; github={{ github_state }}). Forge is not drafting. Think/quality scratch is kept until you `clean`. Reply `validate` to start post-PM, or `clean` to archive scratch. I will not merge.
+      Noted {{ pick }} for {{ initiative }} ({{ path }}). Copied think → `prd/{{ initiative }}.md` (workspace={{ local }}; github={{ github_state }}). Forge is not drafting. Think/quality scratch is kept until you `clean`. Reply `post-pm {{ initiative }}` to start the full post-PM lane — I will walk findings with you. Or `clean` / `stop`. I will not merge.
   hermes.pm.status.promote-await-validate:
     body: |-
-      Promoted `{{ path }}` for {{ initiative }}. Scratch think/quality files are still on disk. Reply `validate` to run `/validate-requirements`, `clean` to archive pre-promote reports, or `stop`. I will not merge.
+      Promoted `{{ path }}` for {{ initiative }}. Scratch think/quality files are still on disk. Reply `post-pm {{ initiative }}` to start the full post-PM programme (validate → decision briefs → update → impact). Or `clean` / `stop`. I will not merge.
+  hermes.pm.status.post-pm-need-init:
+    body: |-
+      Post-PM needs the initiative id. Reply `post-pm {{ example }}` (always name the INIT). I will not merge.
+  hermes.pm.status.post-pm-missing-prd:
+    body: |-
+      Cannot start post-PM for {{ initiative }} — `{{ path }}` is missing. Promote a think first, then reply `post-pm {{ initiative }}`. I will not merge.
   hermes.pm.status.promote-archived:
     body: |-
       Archived pre-promote scratch for {{ initiative }}: {{ paths }}. `prd/{{ initiative }}.md` was not touched. I will not merge.
@@ -105,7 +111,7 @@ templates:
       Validation for {{ initiative }} has no open findings. Skipping review/update. Next hop: impact-map.
   hermes.pm.status.resolution-wrote:
     body: |-
-      Wrote `{{ path }}` from your VF answers for {{ initiative }}. Next: update-documents manifest.
+      Wrote `{{ path }}` from VF decisions for {{ initiative }}. Next: `/update-documents` (Hermes auto-applies inside the post-PM pass budget; Lead gate is the end-of-lane brief).
   hermes.pm.status.manifest-card:
     body: |-
       Update manifest for {{ initiative }}.
@@ -130,7 +136,7 @@ templates:
       Skill hop `{{ hop }}` failed for {{ initiative }}: {{ error }}. Reply `retry {{ hop }}` or `stop`. I will not merge.
   hermes.pm.status.promote-already:
     body: |-
-      `prd/{{ initiative }}.md` already exists for {{ initiative }}. I will not overwrite. Forge is not drafting. Next hop validate is not started. I will not merge.
+      `prd/{{ initiative }}.md` already exists for {{ initiative }}. I will not overwrite. Forge is not drafting. Post-PM is not started — reply `post-pm {{ initiative }}` when ready. I will not merge.
   hermes.pm.status.promote-skip:
     body: |-
       Lead chose {{ pick }} for {{ initiative }}. No promote copy. Forge is not drafting. I will not merge.

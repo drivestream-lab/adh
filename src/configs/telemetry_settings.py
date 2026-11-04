@@ -13,6 +13,13 @@ class TelemetrySettings(BaseSettings):
 
     PREFIX: ClassVar[str] = "OTEL"
 
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "When false, skip OTLP exporters and library instrumentation "
+            "(no collector required). Set true when Alloy/OTLP is available."
+        ),
+    )
     service_name: str = Field(
         default="adh",
         description="OpenTelemetry service.name resource attribute",

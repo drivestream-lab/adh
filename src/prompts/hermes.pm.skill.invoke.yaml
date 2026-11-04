@@ -9,4 +9,8 @@ templates:
       Reports directory: `{{ reports_dir }}`.
       Follow the skill SKILL.md exactly. Write only canonical artifact paths.
       Do not open a GitHub PR. Do not merge. Do not invent a new INIT.
+      This is a non-interactive Hermes host run: do not ask the Lead questions,
+      do not use AskQuestion, and do not wait for confirmation. Apply skill
+      recommendations yourself, lock decisions from the brief/extra context,
+      and write the required artifact files before ending the turn.
       Extra Lead context: {{ extra }}

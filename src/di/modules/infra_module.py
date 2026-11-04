@@ -6,6 +6,7 @@ from src.database.postgres.connection_manager import PostgresConnectionManager
 from src.database.redis.connection_manager import RedisConnectionManager
 from src.infra_services.buzz_http_service import BuzzHttpService
 from src.infra_services.cursor_cli_service import CursorCliService
+from src.infra_services.forge_action_service import ForgeActionService
 from src.infra_services.github_app_service import GitHubAppService
 from src.infra_services.hermes_store_service import HermesStoreService
 from src.infra_services.litellm_service import LiteLLMService
@@ -17,6 +18,7 @@ from src.infra_services.prompt_service import PromptService
 from src.infra_services.redis_service import RedisService
 from src.infra_services.telemetry_service import TelemetryService
 from src.infra_services.tenant_registry_service import TenantRegistryService
+from src.infra_services.workflow_catalogue_service import WorkflowCatalogueService
 from src.logging import get_logger
 
 logger = get_logger()
@@ -36,9 +38,11 @@ class InfraModule(Module):
         binder.bind(HermesStoreService, to=HermesStoreService, scope=singleton)
         binder.bind(PinWalkerService, to=PinWalkerService, scope=singleton)
         binder.bind(GitHubAppService, to=GitHubAppService, scope=singleton)
+        binder.bind(ForgeActionService, to=ForgeActionService, scope=singleton)
         binder.bind(TenantRegistryService, to=TenantRegistryService, scope=singleton)
         binder.bind(PmWorkspaceService, to=PmWorkspaceService, scope=singleton)
         binder.bind(PmSkillRunnerService, to=PmSkillRunnerService, scope=singleton)
+        binder.bind(WorkflowCatalogueService, to=WorkflowCatalogueService, scope=singleton)
         binder.bind(CursorCliService, to=CursorCliService, scope=singleton)
         binder.bind(BuzzHttpService, to=BuzzHttpService, scope=singleton)
         binder.bind(TelemetryService, scope=singleton)

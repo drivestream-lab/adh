@@ -1,5 +1,8 @@
 """OpenTelemetry infrastructure service for metrics and traces."""
 
+from __future__ import annotations
+
+import asyncio
 from typing import Optional
 
 from fastapi import FastAPI
@@ -33,6 +36,10 @@ from src.models.telemetry_types import TracesSamplerType
 
 logger = get_logger()
 
+# Keep local shutdown snappy when Alloy/collector is down (connection refused).
+_EXPORT_TIMEOUT_SECONDS = 2.0
+_SHUTDOWN_TIMEOUT_MILLIS = 2000.0
+
 
 class TelemetryService(BaseInfraService):
     """Infra service that owns OpenTelemetry SDK lifecycle and instrumentation."""
@@ -47,11 +54,21 @@ class TelemetryService(BaseInfraService):
         self._meter_provider: Optional[MeterProvider] = None
         self._instrumented_app: Optional[FastAPI] = None
         self._initialized = False
+        self._enabled = False
         self._app_instrumented = False
 
     async def initialize(self) -> None:
         """Initialize OpenTelemetry providers and library instrumentors."""
         if self._initialized:
+            return
+
+        if not self._settings.enabled:
+            self._initialized = True
+            self._enabled = False
+            logger.info(
+                "TelemetryService skipped (OTEL_ENABLED=false); "
+                "no OTLP exporters or instrumentation"
+            )
             return
 
         logger.info("Initializing TelemetryService")
@@ -60,10 +77,12 @@ class TelemetryService(BaseInfraService):
         span_exporter = OTLPSpanExporter(
             endpoint=self._build_signal_endpoint("traces"),
             headers=headers,
+            timeout=_EXPORT_TIMEOUT_SECONDS,
         )
         metric_exporter = OTLPMetricExporter(
             endpoint=self._build_signal_endpoint("metrics"),
             headers=headers,
+            timeout=_EXPORT_TIMEOUT_SECONDS,
         )
 
         resource = Resource.create(self._resource_attributes())
@@ -71,10 +90,18 @@ class TelemetryService(BaseInfraService):
             resource=resource,
             sampler=self._build_sampler(),
         )
-        tracer_provider.add_span_processor(BatchSpanProcessor(span_exporter))
+        tracer_provider.add_span_processor(
+            BatchSpanProcessor(
+                span_exporter,
+                export_timeout_millis=_SHUTDOWN_TIMEOUT_MILLIS,
+            )
+        )
         trace.set_tracer_provider(tracer_provider)
 
-        metric_reader = PeriodicExportingMetricReader(metric_exporter)
+        metric_reader = PeriodicExportingMetricReader(
+            metric_exporter,
+            export_timeout_millis=_SHUTDOWN_TIMEOUT_MILLIS,
+        )
         meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
         metrics.set_meter_provider(meter_provider)
 
@@ -85,11 +112,17 @@ class TelemetryService(BaseInfraService):
         self._tracer_provider = tracer_provider
         self._meter_provider = meter_provider
         self._initialized = True
+        self._enabled = True
         logger.info("TelemetryService initialized")
 
     async def close(self) -> None:
         """Shutdown telemetry providers and remove instrumentation."""
         if not self._initialized:
+            return
+
+        if not self._enabled:
+            self._initialized = False
+            logger.info("TelemetryService closed (was disabled)")
             return
 
         if self._app_instrumented and self._instrumented_app is not None:
@@ -98,16 +131,36 @@ class TelemetryService(BaseInfraService):
         RedisInstrumentor().uninstrument()
         HTTPXClientInstrumentor().uninstrument()
 
-        if self._meter_provider is not None:
-            self._meter_provider.shutdown()
-        if self._tracer_provider is not None:
-            self._tracer_provider.shutdown()
+        # Provider shutdown is sync and may attempt a last export; bound it and
+        # run off the event loop so Ctrl+C shutdown cannot wedge on a dead collector.
+        meter_provider = self._meter_provider
+        tracer_provider = self._tracer_provider
+        if meter_provider is not None:
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        meter_provider.shutdown,
+                        timeout_millis=_SHUTDOWN_TIMEOUT_MILLIS,
+                    ),
+                    timeout=_EXPORT_TIMEOUT_SECONDS + 1.0,
+                )
+            except Exception:
+                logger.warning("MeterProvider shutdown timed out or failed; continuing")
+        if tracer_provider is not None:
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(tracer_provider.shutdown),
+                    timeout=_EXPORT_TIMEOUT_SECONDS + 1.0,
+                )
+            except Exception:
+                logger.warning("TracerProvider shutdown timed out or failed; continuing")
 
         self._tracer_provider = None
         self._meter_provider = None
         self._instrumented_app = None
         self._app_instrumented = False
         self._initialized = False
+        self._enabled = False
         logger.info("TelemetryService closed")
 
     async def health_check(self) -> bool:
@@ -118,6 +171,9 @@ class TelemetryService(BaseInfraService):
         """Instrument FastAPI app once."""
         if not self._initialized:
             raise RuntimeError("TelemetryService has not been initialized")
+        if not self._enabled:
+            logger.info("FastAPI app instrumentation skipped (OTEL_ENABLED=false)")
+            return
         if self._app_instrumented:
             return
 

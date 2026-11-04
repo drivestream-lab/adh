@@ -90,121 +90,31 @@ def test_copy_catalog_renders_without_llm() -> None:
     assert "## Job" in hop
 
 
-def test_think_and_quality_templates_load() -> None:
+def test_skill_invoke_and_validate_card_templates_load() -> None:
+    """Authoring think/quality/ask/recommend prompts are deleted — skills + validate card remain."""
     service = PromptService(MagicMock())
     asyncio.run(service.initialize())
-    c1 = service.render(
-        "hermes.pm.think.c1",
+    invoke = service.render_copy(
+        "hermes.pm.skill.invoke",
         {
-            "source_message_id": "abc",
-            "programme_slug": "realworld",
-            "meta_repo": "realworld-meta",
-            "occupied_inits": "(none)",
-            "claimed_path": "prd/reports/INIT-REALWORLD-HOME-prd-think.md",
-            "initiative": "INIT-REALWORLD-HOME",
-            "outline": "Home is empty. Publish one article.",
-        },
-    )
-    assert "/prd-think C1" in c1.system
-    assert "Do not invent an INIT" in c1.system
-    assert "job-shaped" in c1.system
-    assert "not JSON" in c1.system
-    assert "realworld" in c1.user
-    assert c1.max_tokens == 20000
-    assert c1.response_model == "HermesPmThinkResponse"
-    c2 = service.render(
-        "hermes.pm.think.c2",
-        {
-            "initiative": "INIT-REALWORLD-HOME-PUBLISH-001",
-            "source_message_id": "abc",
-            "outline": "Home is empty.",
-            "meta_repo": "realworld-meta",
-            "occupied_inits": "(none)",
-            "claimed_path": "prd/reports/INIT-REALWORLD-HOME-PUBLISH-001-prd-think-2.md",
-            "prior_candidate": {"job": "empty home"},
-        },
-    )
-    assert "/prd-think C2" in c2.system
-    assert "empty home" in c2.user
-    quality = service.render(
-        "hermes.pm.quality",
-        {
+            "skill": "prd-think",
             "initiative": "INIT-REALWORLD-001",
-            "rubric_dimensions": "citation, journeys",
-            "threshold_x": 2.7,
-            "outline": "Home is empty.",
-            "files": "### C1 `prd/reports/INIT-REALWORLD-001-prd-think.md`\nJob text",
-            "pass_number": 1,
-            "max_passes": 2,
+            "prd_path": "prd/INIT-REALWORLD-001.md",
+            "reports_dir": "prd/reports",
+            "extra": "(none)",
         },
     )
-    assert "/prd-quality" in quality.system
-    assert "spec-draft" in quality.system
-    assert "think JSON" in quality.system
-    assert quality.response_model == "HermesPmQualityResponse"
+    assert "prd-think" in invoke
+    assert "INIT-REALWORLD-001" in invoke
     card = service.render(
-        "hermes.pm.quality.card",
+        "hermes.pm.validate.card",
         {
             "initiative": "INIT-REALWORLD-001",
-            "outline": "Home is empty.",
-            "scorecard": '{"rank":"C4-wins"}',
-            "files": "### C1\nJob text",
-            "max_questions": 3,
+            "prd_path": "prd/INIT-REALWORLD-001.md",
+            "findings": "[]",
         },
     )
-    assert "human PM" in card.system
-    assert "Do not change them" in card.system
-    assert "Never emit the tokens" in card.system
-    assert card.response_model == "HermesPmQualityCardResponse"
-    parsed = service.parse_response(
-        "hermes.pm.think.c1",
-        {
-            "proposed_init": "INIT-REALWORLD-HOME-PUBLISH-001",
-            "candidate_label": "C1",
-            "job": "empty home then one article",
-        },
-    )
-    assert parsed["proposed_init"] == "INIT-REALWORLD-HOME-PUBLISH-001"
-    ask = service.render(
-        "hermes.pm.ask",
-        {
-            "initiative": "INIT-REALWORLD-001",
-            "outline": "Home is empty.",
-            "files": "### C1\nJob text",
-            "scorecard": "C1 handover=no",
-            "answers": "(none)",
-            "max_forks": 3,
-        },
-    )
-    assert "/prd-ask" in ask.system
-    assert "handover no" in ask.system
-    assert "real-life example" in ask.system
-    assert ask.response_model == "HermesPmAskResponse"
-    ask_card = service.render(
-        "hermes.pm.ask.card",
-        {
-            "initiative": "INIT-REALWORLD-001",
-            "outline": "Home is empty.",
-            "forks": '[{"id":"F1"}]',
-            "files": "### C1\nJob text",
-        },
-    )
-    assert "Do not change id" in ask_card.system
-    assert ask_card.response_model == "HermesPmAskCardResponse"
-    recommend = service.render(
-        "hermes.pm.recommend",
-        {
-            "initiative": "INIT-REALWORLD-001",
-            "outline": "Home is empty.",
-            "files": "### C1\nJob text",
-            "scorecard": "C2 3.0",
-            "answers": "(none)",
-            "ask_file": "(none)",
-        },
-    )
-    assert "/prd-recommend" in recommend.system
-    assert "not against the 0-3" in recommend.system
-    assert recommend.response_model == "HermesPmRecommendResponse"
+    assert "VF" in card.system or "finding" in card.system.lower() or "brief" in card.system.lower()
 
 
 def test_think_response_coerces_locked_decision_objects() -> None:

@@ -1,0 +1,64 @@
+apiVersion: prayog/v1
+kind: SkillWorkflow
+id: hermes-test-mini
+contract: sdd-delivery/v2
+
+entrypoints:
+  meta-pm: validate-requirements
+
+nodes:
+  validate-requirements:
+    type: skill
+    profile: meta-pm
+    dispatch: manual
+    outcomes:
+      pass: prd-impact-map
+      needs-input: requirements-human-decision
+      failed: requirements-human-decision
+
+  requirements-human-decision:
+    type: human-checkpoint
+    purpose: requirements-clarification
+    outcomes:
+      pass: validate-requirements
+      skipped: workflow-stop
+
+  prd-impact-map:
+    type: skill
+    profile: meta-pm
+    dispatch: manual
+    forge:
+      commit_workspace: required
+    outcomes:
+      pass: prd-pr-action
+      failed: workflow-stop
+
+  prd-pr-action:
+    type: external-action
+    owner: product
+    provider: github
+    authorization: explicit
+    forge:
+      action: open_draft_pr
+      draft: true
+      apply_labels:
+        - impact-map-pending
+      requires:
+        - title
+        - body_path
+    outcomes:
+      pass: prd-impact-acceptance
+      failed: workflow-stop
+
+  prd-impact-acceptance:
+    type: human-checkpoint
+    purpose: prd-impact-acceptance
+    outcomes:
+      pass: workflow-complete
+      findings: validate-requirements
+
+  workflow-complete:
+    type: terminal
+
+  workflow-stop:
+    type: terminal

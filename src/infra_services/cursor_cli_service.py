@@ -46,6 +46,8 @@ class CursorCliService(BaseInfraService):
         git_email: str = "5508912+adh-dev-backend[bot]@users.noreply.github.com",
         write: bool = False,
         on_progress: Optional[ProgressCallback] = None,
+        heartbeat_seconds: Optional[float] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> tuple[int, str, Optional[str]]:
         """Return (exit_code, combined_output, resolved_model)."""
         if self._in_flight >= self._settings.max_cursor:
@@ -81,8 +83,22 @@ class CursorCliService(BaseInfraService):
         env["GIT_CONFIG_VALUE_0"] = f"AUTHORIZATION: basic {basic}"
         env.pop("HERMES_LITELLM_API_KEY", None)
         env.pop("OPENROUTER_API_KEY", None)
+        tick = float(
+            heartbeat_seconds if heartbeat_seconds is not None else self._settings.heartbeat_seconds
+        )
+        deadline = float(
+            timeout_seconds
+            if timeout_seconds is not None
+            else self._settings.cursor_timeout_seconds
+        )
         self._in_flight += 1
-        logger.info("Spawning Cursor CLI", workspace=str(workspace), mode=mode)
+        logger.info(
+            "Spawning Cursor CLI",
+            workspace=str(workspace),
+            mode=mode,
+            heartbeat_seconds=tick,
+            timeout_seconds=deadline,
+        )
         process = await asyncio.create_subprocess_exec(
             *command,
             cwd=str(workspace),
@@ -90,11 +106,11 @@ class CursorCliService(BaseInfraService):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        heartbeat = asyncio.create_task(self._heartbeat(process, on_progress))
+        heartbeat = asyncio.create_task(self._heartbeat(process, on_progress, tick))
         try:
             stdout, _ = await asyncio.wait_for(
                 process.communicate(),
-                timeout=self._settings.cursor_timeout_seconds,
+                timeout=deadline,
             )
         except asyncio.TimeoutError as exc:
             process.kill()
@@ -116,11 +132,13 @@ class CursorCliService(BaseInfraService):
         self,
         process: asyncio.subprocess.Process,
         on_progress: Optional[ProgressCallback],
+        heartbeat_seconds: float,
     ) -> None:
         if on_progress is None:
             return
+        interval = max(0.05, float(heartbeat_seconds))
         while process.returncode is None:
-            await asyncio.sleep(self._settings.heartbeat_seconds)
+            await asyncio.sleep(interval)
             if process.returncode is None:
                 await on_progress("Cursor CLI still running")
 

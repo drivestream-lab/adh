@@ -5,8 +5,21 @@ from typing import Any, Optional, Type, TypeVar
 from injector import Injector
 
 from src.business_services.buzz_service import BuzzService
+from src.business_services.hermes.collaboration.brief_service import HermesBriefService
+from src.business_services.hermes.execution.dispatch_service import HermesDispatchService
+from src.business_services.hermes.runtime.navigator_service import HermesNavigatorService
+from src.business_services.hermes.programmes.authoring_programme import (
+    AuthoringProgrammeService,
+)
+from src.business_services.hermes.programmes.meta_pm_programme import MetaPmProgrammeService
+from src.business_services.hermes.runtime.orchestrator_service import HermesCollaboratorService
+from src.business_services.hermes.runtime.session_store import HermesSessionStoreService
+from src.business_services.hermes.understanding.understand_service import (
+    HermesUnderstandService,
+)
 from src.business_services.hermes_service import HermesService
 from src.business_services.orchestrator_service import OrchestratorService
+from src.infra_services.forge_action_service import ForgeActionService
 from src.infra_services.github_app_service import GitHubAppService
 from src.infra_services.hermes_store_service import HermesStoreService
 from src.infra_services.litellm_service import LiteLLMService
@@ -14,6 +27,7 @@ from src.infra_services.pm_skill_runner_service import PmSkillRunnerService
 from src.infra_services.pm_workspace_service import PmWorkspaceService
 from src.infra_services.prompt_service import PromptService
 from src.infra_services.tenant_registry_service import TenantRegistryService
+from src.infra_services.workflow_catalogue_service import WorkflowCatalogueService
 from src.configs.app_settings import AppSettings
 from src.infra_services.postgres_service import PostgresService
 from src.infra_services.redis_service import RedisService
@@ -32,13 +46,27 @@ _INFRA_SERVICE_TYPES: tuple[type, ...] = (
     PromptService,
     HermesStoreService,
     GitHubAppService,
+    ForgeActionService,
     TenantRegistryService,
     PmWorkspaceService,
     PmSkillRunnerService,
+    WorkflowCatalogueService,
     TelemetryService,
 )
 
-_BUSINESS_SERVICE_TYPES: tuple[type, ...] = (BuzzService, HermesService, OrchestratorService)
+_BUSINESS_SERVICE_TYPES: tuple[type, ...] = (
+    BuzzService,
+    HermesUnderstandService,
+    HermesSessionStoreService,
+    HermesBriefService,
+    HermesNavigatorService,
+    HermesDispatchService,
+    HermesCollaboratorService,
+    MetaPmProgrammeService,
+    AuthoringProgrammeService,
+    HermesService,
+    OrchestratorService,
+)
 
 
 def configure_container() -> Injector:

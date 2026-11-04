@@ -5,7 +5,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-_HEADING = re.compile(r"^##\s+(Critical|Should Fix|Verify|Gaps)\s*$", re.I | re.M)
+# Live validate-requirements reports use titled sections, e.g.
+# "## Critical (MUST FIX — …)" / "## Should Fix (reframe, …)".
+_HEADING = re.compile(
+    r"^##\s+(Critical|Should Fix|Verify|Gaps)\b.*$",
+    re.I | re.M,
+)
 _VF = re.compile(r"\bVF-?(\d+)\b", re.I)
 
 
@@ -61,16 +66,32 @@ def parse_validation_findings(body: str) -> list[dict[str, Any]]:
             if not vf:
                 continue
             fid = f"VF-{int(vf.group(1)):02d}"
+            finding_text, location, recommendation = _row_fields(line)
             findings.append(
                 {
                     "id": fid,
                     "severity": severity,
-                    "location": "",
-                    "finding": line.strip(),
-                    "recommendation": "",
+                    "location": location,
+                    "finding": finding_text,
+                    "recommendation": recommendation,
                 }
             )
     return _unique(findings)
+
+
+def _row_fields(line: str) -> tuple[str, str, str]:
+    """Pull finding / location / recommendation from a markdown table row when present."""
+    stripped = line.strip()
+    if "|" not in stripped:
+        return stripped, "", ""
+    cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+    if not cells or not _VF.search(cells[0]):
+        return stripped, "", ""
+    # Critical / Should Fix / Verify / Gaps share: VF | Type | Location | Target | Check | Finding | …
+    location = cells[2] if len(cells) > 2 else ""
+    finding = cells[5] if len(cells) > 5 else stripped
+    recommendation = cells[-1] if len(cells) > 6 else ""
+    return finding or stripped, location, recommendation
 
 
 def _unique(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

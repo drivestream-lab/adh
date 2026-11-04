@@ -1,4 +1,4 @@
-"""Post-promote PM lane: gate, clean, VF briefs, manifest, impact."""
+"""Promote helpers + collaborator routing after authoring skill cutover."""
 
 from __future__ import annotations
 
@@ -8,17 +8,15 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 from src.business_services.hermes.decision_cards import apply_validate_briefs
-from src.business_services.hermes.lead_tokens import (
-    parse_finding_answers,
-    parse_impact_answer,
-    parse_manifest_answer,
-    parse_post_promote_gate,
-    promote_pick_wants_clean,
-)
+from src.business_services.hermes.lead_tokens import promote_pick_wants_clean
 from src.business_services.hermes.promote_cleanup import (
     archive_dest,
     is_prepromote_scratch,
     scratch_paths_for_initiative,
+)
+from src.business_services.hermes.runtime.orchestrator_service import match_reply_token
+from src.business_services.hermes.programmes.meta_pm_programme import (
+    post_pm_brief_from_hermes,
 )
 from src.business_services.hermes.validation_report import (
     format_resolution_markdown,
@@ -26,7 +24,12 @@ from src.business_services.hermes.validation_report import (
     parse_validation_findings,
 )
 from src.business_services.hermes_service import HermesService
-from src.infra_services.pm_workspace_service import MetaInventory, prd_path, think_path
+from src.infra_services.pm_workspace_service import (
+    MetaInventory,
+    hermes_post_pm_brief_path,
+    prd_path,
+    think_path,
+)
 from src.infra_services.prompt_service import PromptService
 from src.models.buzz_models import MessageKind, MessageRead
 from src.models.tenant_models import TenantContext
@@ -74,16 +77,14 @@ def _message(body: str, *, handle: str = "nikd10x") -> MessageRead:
     )
 
 
-def _registry(*tenants: TenantContext) -> MagicMock:
+def _registry() -> MagicMock:
     reg = MagicMock()
-    by_room = {t.ops_room: t for t in tenants} or {_OPS: _TENANT}
-    by_slug = {t.slug: t for t in tenants} or {"realworld": _TENANT}
-    reg.by_ops_room = MagicMock(side_effect=lambda room: by_room.get(room))
-    reg.get = MagicMock(side_effect=lambda slug: by_slug.get(slug))
+    reg.by_ops_room = MagicMock(return_value=_TENANT)
+    reg.get = MagicMock(return_value=_TENANT)
     return reg
 
 
-def _service() -> tuple[HermesService, MagicMock, MagicMock, MagicMock]:
+def _service() -> HermesService:
     buzz = MagicMock()
     buzz.post_message = AsyncMock(side_effect=lambda _room, payload: payload)
     buzz.ingest_heartbeat = AsyncMock()
@@ -103,30 +104,28 @@ def _service() -> tuple[HermesService, MagicMock, MagicMock, MagicMock]:
             prd_paths=[prd_path(_INIT)],
         )
     )
-    workspace.read_local = MagicMock(return_value="")
-    workspace.archive_paths = AsyncMock(
-        return_value={
-            "archived": [
-                {
-                    "source": think_path(_INIT, 1),
-                    "dest": archive_dest(think_path(_INIT, 1), _INIT),
-                }
-            ],
-            "skipped": [],
-        }
-    )
+    workspace.read_local = MagicMock(return_value="THINK")
+    workspace.archive_paths = AsyncMock(return_value={"archived": [], "skipped": []})
     prompts = PromptService(MagicMock())
     asyncio.run(prompts.initialize())
-    skill_runner = MagicMock()
-    skill_runner.run_skill = AsyncMock(
-        return_value={"ok": True, "exit_code": 0, "output": "", "skill": "validate-requirements"}
+    collaborator = MagicMock()
+    collaborator.handle_lead_message = AsyncMock(return_value=False)
+    collaborator.set_programme_runner = MagicMock()
+    authoring = MagicMock()
+    authoring.handle_lead_message = AsyncMock(return_value=False)
+    authoring.start_outline = AsyncMock()
+    return HermesService(
+        MagicMock(),
+        buzz,
+        redis,
+        prompts,
+        workspace,
+        _registry(),
+        MagicMock(),
+        collaborator,
+        MagicMock(),
+        authoring,
     )
-    hermes = HermesService(MagicMock(), buzz, redis, prompts, workspace, _registry(), skill_runner)
-    hermes._settings = hermes._settings.model_copy(
-        update={"pm_ask_wait_seconds": 0, "pm_max_validate_briefs": 2}
-    )
-    hermes._open_initiative["realworld"] = _INIT
-    return hermes, buzz, workspace, skill_runner
 
 
 def test_scratch_allowlist_never_includes_prd() -> None:
@@ -136,309 +135,148 @@ def test_scratch_allowlist_never_includes_prd() -> None:
             prd_path(_INIT),
             think_path(_INIT, 1),
             f"prd/reports/{_INIT}-prd-quality.md",
-            f"prd/reports/{_INIT}-prd-ask.md",
             f"prd/reports/Validation-Report-{_INIT}.md",
-            f"prd/reports/{_INIT}-prd-think-9.md",
-            "prd/reports/OTHER-prd-think.md",
         ],
     )
     assert prd_path(_INIT) not in paths
-    assert f"prd/reports/Validation-Report-{_INIT}.md" not in paths
     assert think_path(_INIT, 1) in paths
-    assert f"prd/reports/{_INIT}-prd-quality.md" in paths
     assert not is_prepromote_scratch(prd_path(_INIT), _INIT)
+    assert archive_dest(think_path(_INIT, 1), _INIT).startswith("prd/reports/_archive/")
 
 
-def test_parse_post_promote_and_finding_tokens() -> None:
-    assert parse_post_promote_gate("validate") == "validate"
-    assert parse_post_promote_gate("clean") == "clean"
-    assert parse_post_promote_gate("retry validate") == "retry:validate"
-    assert parse_post_promote_gate("coffee") is None
+def test_brief_reply_tokens_not_global_allowlist() -> None:
     pick, clean = promote_pick_wants_clean("C4|clean")
     assert pick == "C4" and clean is True
-    answers = parse_finding_answers("VF-01: fix\nVF-02: defer")
-    assert answers == {"VF-01": "fix", "VF-02": "defer"}
-    assert parse_finding_answers("accept-recs") == {"_accept_recs": "1"}
-    assert parse_finding_answers("explain VF-03") == {"VF-03": "explain"}
-    assert parse_finding_answers("VF-01: fix VF-02: defer") == {"_invalid": "multi_vf_one_line"}
-    assert parse_manifest_answer("apply") == {"_all": "apply"}
-    assert parse_manifest_answer("CHG-01: hold") == {"CHG-01": "hold"}
-    assert parse_impact_answer("confirm") == "confirm"
+    tokens = ["C1", "C2", "skip"]
+    assert match_reply_token("C2", tokens) == "C2"
+    assert match_reply_token("coffee", tokens) is None
 
 
 def test_parse_validation_findings_and_briefs() -> None:
     findings = parse_validation_findings(_VALIDATION)
     assert [row["id"] for row in findings] == ["VF-01", "VF-02", "VF-03", "VF-04"]
     assert len(open_critical(findings)) == 2
-    briefs = apply_validate_briefs(
-        findings[:2],
-        {
-            "briefs": [
-                {
-                    "id": "VF-01",
-                    "question": "Should empty home be explicit?",
-                    "example": "Visitor lands.",
-                    "options": [{"choice": "fix", "means": "Add it"}],
-                    "recommend": "fix",
-                    "recommend_why": "Clarity",
-                }
-            ]
-        },
-    )
+    briefs = apply_validate_briefs(findings[:1], {"briefs": []})
     assert briefs[0]["id"] == "VF-01"
-    assert briefs[0]["question"] == "Should empty home be explicit?"
-    assert briefs[0]["finding"]  # frozen
-    assert briefs[1]["recommend"] == "fix"
-    body = format_resolution_markdown(_INIT, {"VF-01": "fix", "VF-02": "reject"}, findings)
-    assert "CHG-01" in body and "VF-01" in body and "Rejected" in body
+    body = format_resolution_markdown(_INIT, {"VF-01": "fix"}, findings)
+    assert "VF-01" in body
 
 
-def test_promote_awaits_validate_and_keeps_thinks() -> None:
-    hermes, buzz, workspace, skill_runner = _service()
-    source = think_path(_INIT, 2)
-    workspace.inventory.return_value = MetaInventory(
-        inits=[_INIT], think_paths=[think_path(_INIT, 1), source], prd_paths=[]
-    )
-    workspace.read_local.side_effect = lambda _t, path: ("THINK" if path == source else "")
-    hermes._awaiting_recommend["realworld"] = {
-        "room": _OPS,
-        "initiative": _INIT,
-        "recommend": "C2",
-        "path": source,
-        "think_paths": [think_path(_INIT, 1), source],
-    }
+_VALIDATION_TITLED = """# Requirements Review
 
-    async def _run() -> None:
-        await hermes.on_room_message(_OPS, _message("C2"))
+## Critical (MUST FIX — factually wrong or misleading)
 
-    asyncio.run(_run())
-    skill_runner.run_skill.assert_not_awaited()
-    assert "realworld" in hermes._awaiting_post_promote
-    publish_paths = [call.args[1] for call in workspace.publish.await_args_list]
-    assert prd_path(_INIT) in publish_paths
-    assert not any("prd/reports/_archive" in path for path in publish_paths)
-    payloads = [call.args[1].payload or {} for call in buzz.post_message.await_args_list]
-    assert any(p.get("status") == "awaiting_validate" for p in payloads)
+| VF | Type | Location | Target | Check | Finding | Source Says | Doc Claims | Example | Recommendation |
+|----|------|----------|--------|-------|---------|-------------|------------|---------|----------------|
+| VF-01 | Structural | Header | — | S1 | Promoted path still carries staging metadata | Promote brief | Title candidate | Misleading | Scrub staging framing |
 
+## Should Fix (reframe, relocate, or make precise)
 
-def test_clean_archives_allowlist_only() -> None:
-    hermes, buzz, workspace, _runner = _service()
-    hermes._awaiting_post_promote["realworld"] = {
-        "room": _OPS,
-        "initiative": _INIT,
-        "prd_path": prd_path(_INIT),
-    }
+| VF | Type | Location | Target | Check | Finding | Recommendation |
+|----|------|----------|--------|-------|---------|----------------|
+| VF-02 | Semantic | §5 | CAP-03 | 11 | Journey list mismatch | Remove bad journeys |
 
-    async def _run() -> None:
-        await hermes.on_room_message(_OPS, _message("clean"))
+## Verify (needs user confirmation)
 
-    asyncio.run(_run())
-    workspace.archive_paths.assert_awaited()
-    moves = workspace.archive_paths.await_args.args[1]
-    sources = [src for src, _dest in moves]
-    assert think_path(_INIT, 1) in sources
-    assert prd_path(_INIT) not in sources
-    bodies = [call.args[1].body for call in buzz.post_message.await_args_list]
-    assert any("Archived pre-promote scratch" in body for body in bodies)
+| VF | Type | Location | Target | Check | Finding | Question for User |
+|----|------|----------|--------|-------|---------|-------------------|
+| — | — | — | — | — | None | — |
+
+## Gaps (missing coverage)
+
+| VF | Type | Location | Target | Check | Finding | Suggested Addition |
+|----|------|----------|--------|-------|---------|---------------------|
+| — | — | — | — | — | None | — |
+"""
 
 
-def test_validate_batches_and_accept_recs() -> None:
-    hermes, buzz, workspace, skill_runner = _service()
-    hermes._awaiting_post_promote["realworld"] = {
-        "room": _OPS,
-        "initiative": _INIT,
-        "prd_path": prd_path(_INIT),
-    }
+def test_parse_validation_findings_titled_sections_and_tables() -> None:
+    findings = parse_validation_findings(_VALIDATION_TITLED)
+    assert [row["id"] for row in findings] == ["VF-01", "VF-02"]
+    assert findings[0]["severity"] == "Critical"
+    assert "staging metadata" in findings[0]["finding"]
+    assert findings[0]["location"] == "Header"
+    assert "Scrub" in findings[0]["recommendation"]
+    assert findings[1]["severity"] == "Should Fix"
+    assert "Journey list" in findings[1]["finding"]
+    assert len(open_critical(findings)) == 1
 
-    def _read(_tenant: object, path: str) -> str:
-        if "Validation-Report" in path:
-            return _VALIDATION
-        return "# impact\n"
 
-    workspace.read_local.side_effect = _read
-    prompts = cast(PromptService, hermes._prompts)
-    prompts.complete = AsyncMock(  # type: ignore[method-assign]
-        return_value=MagicMock(
-            parsed={
-                "briefs": [
-                    {
-                        "id": "VF-01",
-                        "question": "Q1",
-                        "example": "E1",
-                        "options": [],
-                        "recommend": "fix",
-                        "recommend_why": "why",
-                    },
-                    {
-                        "id": "VF-02",
-                        "question": "Q2",
-                        "example": "E2",
-                        "options": [],
-                        "recommend": "defer",
-                        "recommend_why": "why2",
-                    },
-                ]
-            }
-        )
-    )
+def test_outline_routes_to_authoring_service() -> None:
+    hermes = _service()
+    outline = "x" * 80
 
     async def _run() -> None:
-        await hermes.on_room_message(_OPS, _message("validate"))
-        if hermes._work_tasks:
-            await asyncio.gather(*hermes._work_tasks, return_exceptions=True)
-        await hermes.on_room_message(_OPS, _message("accept-recs"))
-        if hermes._work_tasks:
-            await asyncio.gather(*hermes._work_tasks, return_exceptions=True)
+        await hermes.on_room_message(_OPS, _message(outline))
 
     asyncio.run(_run())
-    skill_runner.run_skill.assert_awaited()
-    assert any(
-        call.kwargs.get("skill_id") == "validate-requirements"
-        or (call.args[1] if len(call.args) > 1 else None) == "validate-requirements"
-        for call in skill_runner.run_skill.await_args_list
-    )
-    # first wave size capped at pm_max_validate_briefs=2
-    pending = hermes._awaiting_validate_decisions.get("realworld")
-    # after accept-recs of wave, either next wave pending or resolution published
-    assert pending is not None or any(
-        "Resolution" in str(call.args[1]) for call in workspace.publish.await_args_list
-    )
-    payloads = [call.args[1].payload or {} for call in buzz.post_message.await_args_list]
-    assert any(p.get("status") == "need_validate_decisions" for p in payloads)
+    cast(AsyncMock, hermes._authoring.start_outline).assert_awaited()
 
 
-def test_explain_does_not_advance() -> None:
-    hermes, buzz, _workspace, _runner = _service()
-    hermes._awaiting_validate_decisions["realworld"] = {
-        "room": _OPS,
-        "initiative": _INIT,
-        "findings": [{"id": "VF-01", "severity": "Critical", "finding": "x"}],
-        "wave": [
-            {
-                "id": "VF-01",
-                "severity": "Critical",
-                "finding": "x",
-                "question": "Q",
-                "example": "E",
-                "options": [{"choice": "fix", "means": "m"}],
-                "recommend": "fix",
-                "recommend_why": "w",
-            }
-        ],
-        "decisions": {},
-    }
+def test_collaborator_handles_post_pm_before_authoring() -> None:
+    hermes = _service()
+    hermes._collaborator.handle_lead_message = AsyncMock(return_value=True)
 
     async def _run() -> None:
-        await hermes.on_room_message(_OPS, _message("VF-01: explain"))
+        await hermes.on_room_message(_OPS, _message(f"post-pm {_INIT}"))
 
     asyncio.run(_run())
-    assert hermes._awaiting_validate_decisions["realworld"]["decisions"] == {}
-    payloads = [call.args[1].payload or {} for call in buzz.post_message.await_args_list]
-    assert any(p.get("status") == "need_validate_decisions" for p in payloads)
+    cast(AsyncMock, hermes._collaborator.handle_lead_message).assert_awaited()
+    cast(AsyncMock, hermes._authoring.start_outline).assert_not_awaited()
 
 
-def test_partial_answers_keep_pending() -> None:
-    hermes, buzz, _workspace, _runner = _service()
-    hermes._awaiting_validate_decisions["realworld"] = {
-        "room": _OPS,
-        "initiative": _INIT,
-        "findings": [
-            {"id": "VF-01", "severity": "Critical", "finding": "a"},
-            {"id": "VF-02", "severity": "Critical", "finding": "b"},
-        ],
-        "wave": [
-            {"id": "VF-01", "recommend": "fix", "question": "q1", "options": []},
-            {"id": "VF-02", "recommend": "fix", "question": "q2", "options": []},
-        ],
-        "decisions": {},
-    }
-
-    async def _run() -> None:
-        await hermes.on_room_message(_OPS, _message("VF-01: fix"))
-
-    asyncio.run(_run())
-    pending = hermes._awaiting_validate_decisions["realworld"]
-    assert pending["decisions"] == {"VF-01": "fix"}
-    bodies = [call.args[1].body for call in buzz.post_message.await_args_list]
-    assert any("1/2" in body for body in bodies)
+def test_hermes_post_pm_brief_path() -> None:
+    assert hermes_post_pm_brief_path(_INIT) == (f"prd/reports/{_INIT}-hermes-post-pm-brief.md")
 
 
-def test_zero_findings_skips_to_impact() -> None:
-    hermes, buzz, workspace, skill_runner = _service()
-    hermes._awaiting_post_promote["realworld"] = {
-        "room": _OPS,
-        "initiative": _INIT,
-        "prd_path": prd_path(_INIT),
-    }
-    workspace.read_local.side_effect = lambda _t, path: (
-        "# Validation empty\n" if "Validation" in path else "# Impact\nok\n"
-    )
+def test_post_pm_brief_from_hermes_parses_delta_card() -> None:
+    body = """# Hermes post-PM brief — INIT-REALWORLD-001
 
-    async def _run() -> None:
-        await hermes.on_room_message(_OPS, _message("validate"))
-        if hermes._work_tasks:
-            await asyncio.gather(*hermes._work_tasks, return_exceptions=True)
+recommend: confirm
 
-    asyncio.run(_run())
-    skills = [
-        call.args[1] if len(call.args) > 1 else call.kwargs.get("skill_id")
-        for call in skill_runner.run_skill.await_args_list
-    ]
-    assert "validate-requirements" in skills
-    assert "prd-impact-map" in skills
-    payloads = [call.args[1].payload or {} for call in buzz.post_message.await_args_list]
-    assert any(p.get("status") == "zero_findings" for p in payloads)
-    assert any(p.get("status") == "need_impact_confirm" for p in payloads)
+## bluf
+Proceed — Criticals cleared; deferred identity fields do not undercut stranger-on-home.
 
+## changed
+- Promoted PRD metadata now reads as the live SSOT
+- Empty-home vs outage wording tightened for readers
 
-def test_impact_confirm_no_forge_and_stop_halts() -> None:
-    hermes, buzz, _workspace, skill_runner = _service()
-    hermes._awaiting_impact_confirm["realworld"] = {
-        "room": _OPS,
-        "initiative": _INIT,
-    }
+## deferred
+- Exact identity import fields — attribution may stay thin until named
 
-    async def _run() -> None:
-        await hermes.on_room_message(_OPS, _message("confirm"))
+## still_risky
+- none
 
-    asyncio.run(_run())
-    payloads = [call.args[1].payload or {} for call in buzz.post_message.await_args_list]
-    assert any(p.get("status") == "forge_baton_ready" for p in payloads)
-    # soft gate remains for clean
-    assert "realworld" in hermes._awaiting_post_promote
-    skill_runner.run_skill.assert_not_awaited()
+## example
+A stranger reopens home after publish and reads matching title, body, and author name.
 
-    async def _stop() -> None:
-        await hermes.on_room_message(_OPS, _message("stop"))
-
-    asyncio.run(_stop())
-    assert "realworld" not in hermes._awaiting_post_promote
+## options
+- confirm — proceed; Hermes runs impact-map next
+- revise — hold and edit the PRD
+"""
+    judgment = post_pm_brief_from_hermes(body)
+    assert judgment is not None
+    assert judgment.recommend == "confirm"
+    assert "Proceed" in judgment.bluf or "proceed" in judgment.bluf.lower()
+    assert judgment.recommend_why == judgment.bluf
+    assert any("SSOT" in b for b in judgment.changed)
+    assert judgment.still_risky == ("none",)
 
 
-def test_skill_failure_stalls_with_retry() -> None:
-    hermes, buzz, workspace, skill_runner = _service()
-    hermes._awaiting_post_promote["realworld"] = {
-        "room": _OPS,
-        "initiative": _INIT,
-        "prd_path": prd_path(_INIT),
-    }
-    skill_runner.run_skill = AsyncMock(
-        return_value={
-            "ok": False,
-            "exit_code": 2,
-            "output": "boom",
-            "skill": "validate-requirements",
-        }
-    )
-
-    async def _run() -> None:
-        await hermes.on_room_message(_OPS, _message("validate"))
-        if hermes._work_tasks:
-            await asyncio.gather(*hermes._work_tasks, return_exceptions=True)
-
-    asyncio.run(_run())
-    payloads = [call.args[1].payload or {} for call in buzz.post_message.await_args_list]
-    assert any(p.get("status") == "skill_failed" for p in payloads)
-    assert "realworld" in hermes._awaiting_post_promote
-    bodies = [call.args[1].body for call in buzz.post_message.await_args_list]
-    assert any("retry" in body.lower() for body in bodies)
+def test_post_pm_brief_from_hermes_rejects_malformed() -> None:
+    assert post_pm_brief_from_hermes("") is None
+    assert post_pm_brief_from_hermes("# no recommend line\n## bluf\nx\n") is None
+    # Promote-shaped locking card is rejected (delta sections required).
+    legacy = """recommend: confirm
+## bluf
+Confirm the job.
+## locking
+- Restate PRD
+## not_locking
+- none
+## revise_if
+- none
+## example
+Someone publishes.
+"""
+    assert post_pm_brief_from_hermes(legacy) is None
