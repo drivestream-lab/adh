@@ -52,7 +52,7 @@ class PostPromoteWalkMixin:
         token = parse_post_promote_gate(message.body)
         if token is None:
             self.logger.info(
-                "Ignored Lead chatter while awaiting post-promote validate/clean",
+                "Ignored Lead chatter while awaiting post-pm/clean",
                 slug=tenant.slug,
             )
             return True
@@ -71,11 +71,18 @@ class PostPromoteWalkMixin:
                 self._work_tasks.add(task)
                 task.add_done_callback(self._work_tasks.discard)
             return True
-        # validate
-        await self._clear_pending_post_promote(tenant.slug)
-        task = asyncio.create_task(self._run_post_promote(tenant, room, initiative))
-        self._work_tasks.add(task)
-        task.add_done_callback(self._work_tasks.discard)
+        # post-pm (and legacy validate alias via parser) — full programme walk
+        if token == "post-pm":
+            await self._clear_pending_post_promote(tenant.slug)
+            task = asyncio.create_task(self._run_post_promote(tenant, room, initiative))
+            self._work_tasks.add(task)
+            task.add_done_callback(self._work_tasks.discard)
+            return True
+        self.logger.info(
+            "Ignored unknown post-promote gate token",
+            slug=tenant.slug,
+            token=token,
+        )
         return True
 
     async def _try_finding_answers(
@@ -276,7 +283,7 @@ class PostPromoteWalkMixin:
             ),
             EventType.PROGRESS,
             {
-                "status": "awaiting_validate",
+                "status": "awaiting_post_pm",
                 "hop": "promote",
                 "initiative": initiative,
                 "path": dest,

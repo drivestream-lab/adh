@@ -928,9 +928,9 @@ def test_promote_copies_think_to_prd() -> None:
     assert "realworld" in hermes._awaiting_post_promote
     bodies = [call.args[1].body for call in buzz.post_message.await_args_list]
     assert any("Forge is not drafting" in body for body in bodies)
-    assert any("Reply `validate`" in body for body in bodies)
+    assert any("Reply `post-pm`" in body for body in bodies)
     payloads = [call.args[1].payload or {} for call in buzz.post_message.await_args_list]
-    assert any(payload.get("status") == "awaiting_validate" for payload in payloads)
+    assert any(payload.get("status") == "awaiting_post_pm" for payload in payloads)
 
 
 def test_promote_recovery_without_pending_recommend() -> None:

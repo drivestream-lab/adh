@@ -39,6 +39,17 @@ class PmSkillRunnerService(BaseInfraService):
         self._workspace = workspace
         self._prompts = prompts
         self._settings = HermesSettings.get_instance()
+        self._initialized = False
+
+    async def initialize(self) -> None:
+        self._initialized = True
+        logger.info("Created PmSkillRunnerService")
+
+    async def close(self) -> None:
+        self._initialized = False
+
+    async def health_check(self) -> bool:
+        return self._initialized
 
     async def run_skill(
         self,

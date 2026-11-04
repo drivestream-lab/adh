@@ -150,10 +150,17 @@ def test_scratch_allowlist_never_includes_prd() -> None:
 
 
 def test_parse_post_promote_and_finding_tokens() -> None:
-    assert parse_post_promote_gate("validate") == "validate"
+    assert parse_post_promote_gate("post-pm") == "post-pm"
+    assert parse_post_promote_gate("go ahead with post pm") == "post-pm"
+    assert parse_post_promote_gate("Run post promote") == "post-pm"
+    assert parse_post_promote_gate("validate") == "post-pm"  # legacy alias
+    assert parse_post_promote_gate("post-pm.") == "post-pm"
     assert parse_post_promote_gate("clean") == "clean"
+    assert parse_post_promote_gate("clean scratch") == "clean"
     assert parse_post_promote_gate("retry validate") == "retry:validate"
     assert parse_post_promote_gate("coffee") is None
+    assert parse_post_promote_gate("do not validate yet") is None
+    assert parse_post_promote_gate("post-pm\nand more") is None
     pick, clean = promote_pick_wants_clean("C4|clean")
     assert pick == "C4" and clean is True
     answers = parse_finding_answers("VF-01: fix\nVF-02: defer")
@@ -218,7 +225,7 @@ def test_promote_awaits_validate_and_keeps_thinks() -> None:
     assert prd_path(_INIT) in publish_paths
     assert not any("prd/reports/_archive" in path for path in publish_paths)
     payloads = [call.args[1].payload or {} for call in buzz.post_message.await_args_list]
-    assert any(p.get("status") == "awaiting_validate" for p in payloads)
+    assert any(p.get("status") == "awaiting_post_pm" for p in payloads)
 
 
 def test_clean_archives_allowlist_only() -> None:
@@ -240,6 +247,34 @@ def test_clean_archives_allowlist_only() -> None:
     assert prd_path(_INIT) not in sources
     bodies = [call.args[1].body for call in buzz.post_message.await_args_list]
     assert any("Archived pre-promote scratch" in body for body in bodies)
+
+
+def test_post_pm_phrase_starts_full_programme() -> None:
+    hermes, _buzz, workspace, skill_runner = _service()
+    hermes._awaiting_post_promote["realworld"] = {
+        "room": _OPS,
+        "initiative": _INIT,
+        "prd_path": prd_path(_INIT),
+    }
+    workspace.read_local.return_value = _VALIDATION
+    prompts = cast(PromptService, hermes._prompts)
+    prompts.complete = AsyncMock(  # type: ignore[method-assign]
+        return_value=MagicMock(parsed={"briefs": []})
+    )
+
+    async def _run() -> None:
+        await hermes.on_room_message(_OPS, _message("go ahead with post pm"))
+        if hermes._work_tasks:
+            await asyncio.gather(*hermes._work_tasks, return_exceptions=True)
+
+    asyncio.run(_run())
+    assert "realworld" not in hermes._awaiting_post_promote
+    skill_runner.run_skill.assert_awaited()
+    assert any(
+        call.kwargs.get("skill_id") == "validate-requirements"
+        or (call.args[1] if len(call.args) > 1 else None) == "validate-requirements"
+        for call in skill_runner.run_skill.await_args_list
+    )
 
 
 def test_validate_batches_and_accept_recs() -> None:

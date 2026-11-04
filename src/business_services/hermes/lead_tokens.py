@@ -149,14 +149,67 @@ def promote_pick_wants_clean(pick: str) -> tuple[str, bool]:
     return raw, False
 
 
+_EDGE_PUNCT = re.compile(r"^[\s\"'`]+|[\s\"'`.!?]+$")
+
+
+def _normalize_gate_phrase(body: str) -> str:
+    """Lowercase, collapse whitespace, strip edge punctuation — whole message only."""
+    text = " ".join((body or "").strip().lower().split())
+    return _EDGE_PUNCT.sub("", text).strip()
+
+
+# Exact whole-message phrases → start full post-PM programme (not validate-only).
+_POST_PM_START_PHRASES = frozenset(
+    {
+        "post-pm",
+        "post pm",
+        "start post-pm",
+        "start post pm",
+        "start post pm lane",
+        "run post-pm",
+        "run post pm",
+        "run post promote",
+        "run post-promote",
+        "go ahead with post pm",
+        "go ahead with post-pm",
+        "go ahead post pm",
+        "continue post pm",
+        "continue post-pm",
+        "continue post promote",
+        "validate",  # legacy alias
+    }
+)
+
+_POST_PM_CLEAN_PHRASES = frozenset(
+    {
+        "clean",
+        "clean scratch",
+        "archive scratch",
+    }
+)
+
+
 def parse_post_promote_gate(body: str) -> Optional[str]:
-    """Lead tokens after promote: validate / clean / retry <hop>."""
+    """Lead gate after promote: start post-PM / clean / stop / retry <hop>.
+
+    Matching is an exact whole-message phrase allowlist (option A). No LLM.
+    Start phrases return ``post-pm`` (full programme). ``validate`` remains an alias.
+    """
     text = (body or "").strip()
     if not text:
         return None
-    lowered = text.lower()
-    if lowered in {"validate", "clean", "stop"}:
-        return lowered
+    # Multi-line bodies are not gate phrases (avoids outline / VF packs).
+    if "\n" in text:
+        return None
+    lowered = _normalize_gate_phrase(text)
+    if not lowered:
+        return None
+    if lowered == "stop":
+        return "stop"
+    if lowered in _POST_PM_CLEAN_PHRASES:
+        return "clean"
+    if lowered in _POST_PM_START_PHRASES:
+        return "post-pm"
     if lowered.startswith("retry "):
         hop = lowered[6:].strip()
         if hop in {"validate", "update", "impact"}:

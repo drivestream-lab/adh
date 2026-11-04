@@ -15,10 +15,15 @@ Hermes relates to those skills **today**.
 
 After Lead names a think and Hermes copies `prd/{INIT}.md`:
 
-1. Lead replies `validate` (scratch kept until `clean`).
+1. Lead starts the **full post-PM programme** with `post-pm` (aliases: `validate`,
+   and whole-message phrases such as `go ahead with post pm` / `run post promote`).
+   Matching is an exact phrase allowlist only — no LLM at the gate. Scratch stays
+   until Lead `clean` / `clean scratch`.
 2. Hermes runs prayog skills via `PmSkillRunnerService` (Cursor CLI in meta_root).
+   First hop is `/validate-requirements`; the Lead command is the programme, not
+   that single skill.
 3. Hermes posts **ask-shaped decision briefs** for VF findings (question, real life, options, we-recommend + why).
-4. Lead answers in Buzz (`VF-01: fix`, `explain`, `accept-recs`, …).
+4. Lead answers in Buzz (`VF-01: fix`, `explain`, `accept-recs`, …) — structured tokens.
 5. Hermes writes `Resolution-{INIT}.md`, runs update/impact skills, awaits manifest/`confirm`.
 6. Hermes **never** opens Forge; status says baton ready.
 
@@ -33,5 +38,5 @@ After Lead names a think and Hermes copies `prd/{INIT}.md`:
   change the pick. While ask is open, naming `C4` does not promote — Lead
   must `skip` (or answer forks) then name the file.
 - In-band promote copies the named think file to `prd/{INIT}.md`. Forge does
-  not draft; Hermes does not merge; validate starts only when Lead says
-  `validate`.
+  not draft; Hermes does not merge; post-PM starts only when Lead says
+  `post-pm` (or an allowlisted alias phrase).
