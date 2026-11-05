@@ -41,6 +41,7 @@ Mirror authoring (`pm_max_think_runs` → quality → Hermes promote-brief → o
 3. **Post-pass proceed/hold card** — after the validate budget (or clean), Hermes writes `prd/reports/{INIT}-hermes-post-pm-brief.md` as a **delta readout** (changed / deferred / still risky) from Validation + Resolution — **not** a re-pitch of the job. Human PM **confirm** (proceed) or **revise** (hold / fix PRD offline).
 4. **`confirm` auto-runs Impact-Map** — accepting the brief means the post-PM lane is good; Hermes runs `/prd-impact-map` immediately (no second Buzz hop). Impact-Map means the PRD is ready for draft PR.
 5. **Draft PR auth** — after Impact-Map, Hermes opens `prd-pr-action` (`open_draft_pr`, `authorization: explicit`). Never auto-runs. On authorize, forge seeds `body_path` / `head_branch`, pushes the local PRD + reports onto the draft head via **GitHub App Contents API**, then opens the draft PR via the **Pulls API** (no `gh` CLI). Mid-lane artefacts stay **local-only** until that hop.
+6. **Engg / Gate‑1 onward** — multi-agent team on Buzz (`adh.pe`, `adh.read`, `adh.kb`, …). See [`adh-agents-team-os.md`](adh-agents-team-os.md) and [ADR 0002](../adr/0002-adh-agents-team-os.md). PM emits a PE baton after draft PR; does not in-process dig repos.
 
 ## Cutover debt (must delete)
 
