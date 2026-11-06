@@ -121,6 +121,82 @@ class MetaPmProgrammeService(BaseBusinessService):
         await self._store.save(session)
         await self._run_validate_cycle(tenant, room, session, pass_number=1)
 
+    async def resume_programme(self, tenant: TenantContext, room: str, initiative: str) -> None:
+        """Rebuild the latest human gate from local artefacts after session TTL loss.
+
+        Prefer: Impact-Map → draft-PR authorize; else post-PM brief → confirm/revise;
+        else promoted PRD → start validate (same as ``post-pm INIT-…``).
+        """
+        init = (initiative or "").strip().upper()
+        if not init:
+            await self._poster.post_status(
+                room,
+                "Resume needs an INIT-… id (example: `resume INIT-REALWORLD-001`).",
+                EventType.STALL,
+            )
+            return
+        session = HermesSession(
+            tenant_slug=tenant.slug,
+            room=room,
+            initiative=init,
+            programme=_PROGRAMME,
+        )
+        impact_body = (self._workspace.read_local(tenant, impact_map_path(init)) or "").strip()
+        post_pm_body = (
+            self._workspace.read_local(tenant, hermes_post_pm_brief_path(init)) or ""
+        ).strip()
+        prd_body = (self._workspace.read_local(tenant, prd_path(init)) or "").strip()
+
+        if impact_body:
+            await self._poster.post_status(
+                room,
+                (
+                    f"Resuming {init} at **draft-PR authorize** "
+                    f"(found `{impact_map_path(init)}`)."
+                ),
+                EventType.PROGRESS,
+                {"status": "resume_authorize", "initiative": init},
+            )
+            await self._open_forge_auth(tenant, room, session)
+            return
+
+        if post_pm_body:
+            await self._poster.post_status(
+                room,
+                (
+                    f"Resuming {init} at **post-PM confirm** "
+                    f"(found `{hermes_post_pm_brief_path(init)}`). "
+                    "Reply `confirm` or `revise`."
+                ),
+                EventType.PROGRESS,
+                {"status": "resume_post_pm", "initiative": init},
+            )
+            await self._reopen_post_pm_brief(tenant, room, session)
+            return
+
+        if prd_body:
+            await self._poster.post_status(
+                room,
+                (
+                    f"Resuming {init} via **post-pm / validate** "
+                    f"(PRD present; no post-PM brief or Impact-Map yet)."
+                ),
+                EventType.PROGRESS,
+                {"status": "resume_validate", "initiative": init},
+            )
+            await self.start_programme(tenant, room, session)
+            return
+
+        await self._poster.post_status(
+            room,
+            (
+                f"Cannot resume {init} — missing PRD (`{prd_path(init)}`). "
+                "Promote a think file first, or start a new outline."
+            ),
+            EventType.STALL,
+            {"status": "resume_missing_prd", "initiative": init},
+        )
+
     async def after_judgment(
         self, tenant: TenantContext, room: str, session: HermesSession, token: str
     ) -> None:
@@ -640,6 +716,14 @@ class MetaPmProgrammeService(BaseBusinessService):
                 EventType.STALL,
             )
             return
+        await self._reopen_post_pm_brief(tenant, room, session)
+
+    async def _reopen_post_pm_brief(
+        self, tenant: TenantContext, room: str, session: HermesSession
+    ) -> None:
+        """Open/re-open the post-PM confirm gate from the on-disk Hermes brief."""
+        initiative = session.initiative or ""
+        brief_path = hermes_post_pm_brief_path(initiative)
         judgment = post_pm_brief_from_hermes(self._workspace.read_local(tenant, brief_path))
         if judgment is None:
             judgment = decision_card(
@@ -657,6 +741,8 @@ class MetaPmProgrammeService(BaseBusinessService):
                 revise_if=("PRD still wrong after validate — hold and edit before impact-map",),
                 card_kind=CARD_POSTPM,
             )
+        session.programme = _PROGRAMME
+        session.room = room
         session.stage = "prd-impact-acceptance"
         session.open_brief = self._briefs.build_brief(
             purpose="prd-impact-acceptance",
