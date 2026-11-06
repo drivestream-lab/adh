@@ -1,8 +1,22 @@
 # Implementation plan — ADH Agents Team OS
 
-**Status:** Plan for review  
+**Status:** Wave 0a on `develop` (PRs #6–#12 merged 2026-11-06). Wave 0b not started.  
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md)  
 **Product:** [adh-agents-team-os.md](../product/adh-agents-team-os.md)
+
+## Develop merge ledger (Wave 0a)
+
+| PR | Summary |
+|----|---------|
+| #6 | `BaseHermesAgent` + `PMAgent` cutover; batons; memory-room retire; `pe.review` emit after draft PR |
+| #7 | Buzz SSE parse hotfix |
+| #8 | Ops-only Buzz room list |
+| #9 | Session TTL ≥ 2 days for Lead gates |
+| #10 | Resume after TTL (artefact reopen) |
+| #11 | Per-(tenant, initiative) sessions; ask-back when ambiguous; parallel outlines |
+| #12 | Initiative identity from `tenant.init_prefix` only |
+
+**UAT remaining:** RealWorld INIT-001 pressure-test (confirm → impact-map → authorize → parked `pe.review`).
 
 ## Locked decisions
 
