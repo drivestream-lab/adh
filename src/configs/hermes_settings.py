@@ -77,6 +77,14 @@ class HermesSettings(BaseSettings):
         ge=60,
         description="Cover think C1 + C2 + quality, each up to wait_budget",
     )
+    session_ttl_seconds: int = Field(
+        default=172800,
+        ge=3600,
+        description=(
+            "Redis TTL for HermesSession (judgment/authorize gates). "
+            "Default 2 days so Lead confirm/authorize is not silently dropped."
+        ),
+    )
     pm_max_think_runs: int = Field(
         default=4,
         ge=2,

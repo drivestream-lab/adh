@@ -25,7 +25,7 @@ class HermesSessionStoreService(BaseBusinessService):
     def __init__(self, redis: RedisService) -> None:
         super().__init__()
         self._redis = redis
-        self._ttl = HermesSettings.get_instance().outline_lock_seconds
+        self._ttl = HermesSettings.get_instance().session_ttl_seconds
 
     async def load(self, slug: str) -> Optional[HermesSession]:
         raw = await self._redis.get(session_key(slug), as_json=True)
