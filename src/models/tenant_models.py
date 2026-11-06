@@ -70,6 +70,8 @@ class TenantContext(BaseCreateModel):
             self.ops_room = f"{self.slug}-ops"
         if not self.memory_room:
             self.memory_room = memory_room_for_repo(self.meta_repo)
+        # Fallback only when programme.yaml omitted init_prefix — callers must
+        # still treat whatever value is set as the sole initiative spelling.
         if not self.init_prefix:
             self.init_prefix = f"INIT-{self.slug.upper()}-"
         return self

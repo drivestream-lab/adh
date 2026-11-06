@@ -102,7 +102,7 @@ class MetaPmProgrammeService(BaseBusinessService):
         if not initiative:
             await self._poster.post_status(
                 room,
-                "meta-pm needs an INIT-… id before skills run.",
+                "meta-pm needs an initiative id before skills run.",
                 EventType.STALL,
             )
             return
@@ -169,7 +169,7 @@ class MetaPmProgrammeService(BaseBusinessService):
         if not init:
             await self._poster.post_status(
                 room,
-                "Which initiative should I resume? Reply with an INIT-… id.",
+                "Which initiative should I resume? Reply with the programme initiative id.",
                 EventType.STALL,
             )
             return
@@ -828,7 +828,7 @@ class MetaPmProgrammeService(BaseBusinessService):
                 room,
                 (
                     f"Revise requested for {session.initiative} — update the PRD "
-                    "offline, then re-run meta-pm (`post-pm INIT-…`)."
+                    "offline, then re-run meta-pm (`post-pm` with the initiative bound)."
                 ),
                 EventType.STALL,
             )

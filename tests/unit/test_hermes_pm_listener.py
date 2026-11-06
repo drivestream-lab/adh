@@ -101,11 +101,17 @@ def test_outline_fingerprint_normalizes_whitespace() -> None:
 
 
 def test_coerce_init_uses_programme_slug() -> None:
+    from src.business_services.hermes.lead_tokens import coerce_init, extract_initiative
+
     assert _coerce_init("INIT-001", "realworld").startswith("INIT-REALWORLD-")
+    assert coerce_init("001", "PROG-ACME-") == "PROG-ACME-001"
+    assert extract_initiative("please use prog-acme-002 today", "PROG-ACME-") == "PROG-ACME-002"
+    assert extract_initiative("INIT-REALWORLD-001", "PROG-ACME-") is None
 
 
 def test_empty_meta_allocates_next_numbered_init() -> None:
     assert next_programme_init("INIT-REALWORLD-", []) == "INIT-REALWORLD-001"
+    assert next_programme_init("PROG-ACME-", ["PROG-ACME-001"]) == "PROG-ACME-002"
 
 
 def test_ask_shaped_body_is_not_an_outline() -> None:
