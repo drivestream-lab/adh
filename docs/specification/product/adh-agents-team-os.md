@@ -8,8 +8,8 @@ ADH runs a **software-engineering team of Hermes agents**. Buzz is the talking f
 
 | Role | Buzz id (PoC) | Owns | Hire order |
 |------|---------------|------|------------|
-| PM | `adh.pm` | Requirements lane → draft PRD PR; product answers; PRD merge | **Live** |
-| PE | `adh.pe` | Gate‑1: fan-out reads, ≤10 Q / ≤4 rounds, attest, ping PM merge | 1 |
+| PM | `adh.pm` | Requirements lane → draft PRD PR; product answers; PRD merge | **Live** (`PMAgent` on `BaseHermesAgent`, develop) |
+| PE | `adh.pe` | Gate‑1: fan-out reads, ≤10 Q / ≤4 rounds, attest, ping PM merge | Next (Wave 0b) |
 | Read | `adh.read` | Walk one repo with tools; Buzz rollup | 2 |
 | KB | `adh.kb` | Patch OKF `knowledge/` heads when triggered | 3 |
 | Dev | `adh.dev.*` | Implement / open app PRs by dependency-DAG tier | later |

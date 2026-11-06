@@ -1,7 +1,7 @@
 # ADR 0002 — ADH Agents Team OS (Buzz multi-agent delivery)
 
-- **Status:** Proposed (plan lock)
-- **Date:** 2026-11-05
+- **Status:** Accepted for Wave 0a (PM on base); Wave 0b+ still planned
+- **Date:** 2026-11-05 (Wave 0a landed on develop 2026-11-06, PRs #6–#12)
 - **Context:** PM Hermes lane is live (catalogue collaborator, draft PRD PR). Engg/Gate‑1 and later QA/IaC/SRE need a **scalable multi-agent team**, not more logic bolted into `MetaPmProgrammeService`. Humans and agents collaborate on Buzz; individuals are hired incrementally into the tenant ops channel.
 
 ## Decision
