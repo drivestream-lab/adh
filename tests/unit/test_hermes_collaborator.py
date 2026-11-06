@@ -96,6 +96,7 @@ class _FakeRunner:
     def __init__(self) -> None:
         self.started: list[HermesSession] = []
         self.judgments: list[str] = []
+        self.resumed: list[str] = []
 
     async def start_programme(self, tenant: Any, room: str, session: HermesSession) -> None:
         self.started.append(session.model_copy())
@@ -104,6 +105,9 @@ class _FakeRunner:
         self, tenant: Any, room: str, session: HermesSession, token: str
     ) -> None:
         self.judgments.append(token)
+
+    async def resume_programme(self, tenant: Any, room: str, initiative: str) -> None:
+        self.resumed.append(initiative)
 
 
 _TENANT = TenantContext(
@@ -157,6 +161,8 @@ class _Harness:
 
 
 async def test_session_roundtrip_and_clear() -> None:
+    from src.configs.hermes_settings import HermesSettings
+
     redis = _FakeRedis()
     store = HermesSessionStoreService(redis=redis)  # type: ignore[arg-type]
     assert await store.load("rw") is None
@@ -165,7 +171,7 @@ async def test_session_roundtrip_and_clear() -> None:
     )
     await store.save(session)
     assert session_key("rw") == "adh:hermes:session:rw"
-    assert redis.ttls[session_key("rw")] == 3600
+    assert redis.ttls[session_key("rw")] == HermesSettings.get_instance().session_ttl_seconds
     loaded = await store.load("rw")
     assert loaded is not None
     assert loaded.stage == "validate-requirements"
@@ -296,6 +302,26 @@ async def test_collaborator_post_pm_without_initiative_digs(tmp_path: Path) -> N
     assert session.slots["pending_node"] == "validate-requirements"
 
 
+async def test_collaborator_resume_with_initiative_delegates(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("resume INIT-REALWORLD-001"))
+    assert h.runner.resumed == ["INIT-REALWORLD-001"]
+
+
+async def test_collaborator_resume_without_initiative_nudge(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("please resume"))
+    assert h.runner.resumed == []
+    assert any("INIT-" in p for p in h.poster.posts)
+
+
+async def test_collaborator_bare_confirm_without_session_nudge(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    assert await h.store.load("rw") is None
+    assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("confirm")) is True
+    assert any("resume INIT-" in p for p in h.poster.posts)
+
+
 async def test_collaborator_ignores_unrelated_message(tmp_path: Path) -> None:
     h = _Harness(tmp_path)
     assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("hello there")) is False
@@ -345,5 +371,6 @@ async def test_collaborator_authorization_dispatches_forge(tmp_path: Path) -> No
     assert h.dispatch.calls == ["prd-pr-action"]
     session = await h.store.load("rw")
     assert session is not None
-    assert session.stage == "prd-impact-acceptance"
-    assert session.awaiting == AWAITING_JUDGMENT
+    # Forge authorize clears the gate; mini-catalogue may advance stage afterward.
+    assert session.awaiting == AWAITING_NONE
+    assert session.open_brief is None

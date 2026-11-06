@@ -30,6 +30,11 @@ from src.models.tenant_models import TenantContext
 
 # Free-text hint only; routing to the entrypoint still comes from the catalogue.
 _POST_PM_HINT = re.compile(r"\bpost[-\s]?pm\b", re.I)
+_RESUME_HINT = re.compile(r"\bresume\b", re.I)
+_BARE_GATE_TOKEN = re.compile(
+    r"^(confirm|revise|go ahead|authorize(?:\s+\S+)?)$",
+    re.I,
+)
 _STOP = "stop"
 _PENDING_NODE = "pending_node"
 _PM_ENTRYPOINT = HermesProgrammeType.META_PM
@@ -45,6 +50,8 @@ class ProgrammeRunner(Protocol):
     async def after_judgment(
         self, tenant: TenantContext, room: str, session: HermesSession, token: str
     ) -> None: ...
+
+    async def resume_programme(self, tenant: TenantContext, room: str, initiative: str) -> None: ...
 
 
 class HermesCollaboratorService(BaseBusinessService):
@@ -83,8 +90,34 @@ class HermesCollaboratorService(BaseBusinessService):
             if session is not None:
                 await self._say(room, "Stopped. Session cleared.", EventType.DONE)
             return True
+        # Recover human gates after Redis TTL / worker restart (like `post-pm INIT-…`).
+        if _RESUME_HINT.search(body):
+            initiative = self._understand.extract_initiative(body)
+            if initiative is None:
+                await self._say(
+                    room,
+                    "Resume needs an INIT-… id (example: `resume INIT-REALWORLD-001`).",
+                )
+                return True
+            if self._runner is None:
+                await self._say(room, "Resume is unavailable (no programme runner).")
+                return True
+            await self._runner.resume_programme(tenant, room, initiative)
+            return True
         if session is None:
             session = HermesSession(tenant_slug=tenant.slug, room=room)
+            # Bare confirm/authorize after TTL loss — do not silent-drop.
+            if _BARE_GATE_TOKEN.match(body):
+                await self._say(
+                    room,
+                    (
+                        "No open brief (session may have expired). "
+                        "Say `resume INIT-…` to reopen the last gate, "
+                        "or `post-pm INIT-…` to re-enter meta-pm."
+                    ),
+                    EventType.STALL,
+                )
+                return True
         # Authoring programme owns its promote/init briefs — do not steal C-label replies.
         if session.programme == HermesProgrammeType.AUTHORING:
             return False
