@@ -81,7 +81,7 @@ class HermesSettings(BaseSettings):
         default=172800,
         ge=3600,
         description=(
-            "Redis TTL for HermesSession (judgment/authorize gates). "
+            "Redis TTL for AgentWorkSession (judgment/authorize gates). "
             "Default 2 days so Lead confirm/authorize is not silently dropped."
         ),
     )

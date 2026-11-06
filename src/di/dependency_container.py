@@ -5,21 +5,22 @@ from typing import Any, Optional, Type, TypeVar
 from injector import Injector
 
 from src.business_services.buzz_service import BuzzService
-from src.business_services.hermes.collaboration.brief_service import HermesBriefService
-from src.business_services.hermes.execution.dispatch_service import HermesDispatchService
-from src.business_services.hermes.runtime.navigator_service import HermesNavigatorService
-from src.business_services.hermes.programmes.authoring_programme import (
+from src.adh_agents.collaboration.brief_service import HermesBriefService
+from src.adh_agents.execution.dispatch_service import HermesDispatchService
+from src.adh_agents.catalogue.navigator import HermesNavigatorService
+from src.adh_agents.programmes.pm.authoring import (
     AuthoringProgrammeService,
 )
-from src.business_services.hermes.programmes.meta_pm_programme import MetaPmProgrammeService
-from src.business_services.hermes.runtime.orchestrator_service import HermesCollaboratorService
-from src.business_services.hermes.runtime.session_store import HermesSessionStoreService
-from src.business_services.hermes.understanding.understand_service import (
+from src.adh_agents.programmes.pm.meta_pm import MetaPmProgrammeService
+from src.adh_agents.runtime.orchestrator import Orchestrator
+from src.adh_agents.runtime.work_store import AgentWorkStore
+from src.adh_agents.understanding.understand_service import (
     HermesUnderstandService,
 )
-from src.business_services.hermes_service import HermesService
-from src.business_services.orchestrator_service import OrchestratorService
-from src.adh_agents.agents.pm_agent import PMAgent
+from src.adh_agents.programmes.kb.enrich import KbEnrichProgramme
+from src.adh_agents.programmes.pe.review import PeReviewProgramme
+from src.adh_agents.programmes.pm.http_lanes import PmHttpLanesService
+from src.adh_agents.programmes.read.walk import ReadWalkProgramme
 from src.infra_services.forge_action_service import ForgeActionService
 from src.infra_services.github_app_service import GitHubAppService
 from src.infra_services.hermes_store_service import HermesStoreService
@@ -58,16 +59,19 @@ _INFRA_SERVICE_TYPES: tuple[type, ...] = (
 _BUSINESS_SERVICE_TYPES: tuple[type, ...] = (
     BuzzService,
     HermesUnderstandService,
-    HermesSessionStoreService,
+    AgentWorkStore,
     HermesBriefService,
     HermesNavigatorService,
     HermesDispatchService,
-    HermesCollaboratorService,
+    Orchestrator,
     MetaPmProgrammeService,
     AuthoringProgrammeService,
-    HermesService,
-    PMAgent,
-    OrchestratorService,
+    PeReviewProgramme,
+    ReadWalkProgramme,
+    KbEnrichProgramme,
+    PmHttpLanesService,
+    # Role agents are NOT auto-initialized — each adh_*_worker provides+initialize
+    # its own agent so processes never double-listen.
 )
 
 

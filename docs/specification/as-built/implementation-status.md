@@ -1,31 +1,39 @@
-# As-built — Hermes collaborator
+# As-built — ADH Agents Team OS
 
-## Done (ADR 0001 cutover + authoring slice)
+**Tracker SSOT:** [adh-agents-implementation-plan.md](../plans/adh-agents-implementation-plan.md)
+
+## Spine
+
+| Item | Status |
+|------|--------|
+| 0 / 0a — ADR + PM on `BaseHermesAgent` + baton emit | ✅ `develop` (#6–#14); INIT-001 guinea pig done |
+| 0b — Greenfield control plane + delete legacy | ✅ [PR #15](https://github.com/drivestream-lab/adh/pull/15) |
+| V1 — PM live on new OS | ⬜ post-merge |
+| V2 — PE claims `pe.review` → read.walk | ⬜ |
+| D1–D5 — PE/PM/read/kb depth + harden | ⬜ |
+
+## Landed (0b)
 
 | Capability | Status |
 |------------|--------|
-| Spec + ADR + catalogue projection | live (docs) |
-| Catalogue / understand / brief / session / navigator / dispatch / forge | unit-tested |
-| `HermesCollaboratorService` + `MetaPmProgrammeService` | wired; `post_promote_walk` **deleted** |
-| Validate / post-PM loop | Pass = validate→review→update (cap `pm_max_post_validate_passes`); auto decide+apply inside `pm_auto_decide_validate_passes`; then delta brief → confirm auto-runs impact-map → forge auth. Mid-lane artefacts **local-only** (no GitHub Contents until forge) |
-| Authorized forge (`open_draft_pr`) | **live-proven** — fill draft slots, push local PRD/Impact-Map/Resolution/Validation onto `chore/{INIT}-prd` via GitHub App Contents API, then open draft PR via Pulls API (no `gh` CLI). PM lane complete |
-| ADH Agents Team OS (`adh_agents`) | **planned** — ADR 0002 + [implementation plan](../plans/adh-agents-implementation-plan.md). Greenfield baton OS; hire `pe` → `read` → `kb`; leverage PM. Codegraph MCP = tool hole on reader |
-| PE / Gate‑1 swarm | **not started** — coordinator on Buzz; readers as agents; attest + PM merge |
-| KB OKF heads | **not started** — see [adh-kb-heads](../references/adh-kb-heads.md); kb agent writes |
-| Validation-Report parse | titled sections (`## Critical (…)` ) + table Finding/Recommendation cells |
-| `AuthoringProgrammeService` | `/prd-think` + `/prd-quality` + Hermes-owned promote-judge hop → Buzz brief; no `/prd-critic` |
-| LiteLLM authoring prompts (`think`/`quality`/`ask`/`recommend` + cards) | **deleted** |
-| Ask/recommend Redis pending + authoring mixin | **deleted** |
-| Dual-track doc | **deleted** |
+| `adh_agents/runtime` Orchestrator + work store (`adh:agent:work:…`) | landed |
+| PM programmes under `adh_agents/programmes/pm/` | landed |
+| `PMAgent` embeds Orchestrator (no HermesService facade) | landed |
+| `make adh-pm` / `adh-pe` / `adh-read` / `adh-kb` | landed |
+| pe / read / kb hired (minimal baton claim + fan-out) | landed |
+| Hermes runtime twin / PendingMixin / pin OrchestratorService | deleted |
 
-## Verify
+## Commands
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest \
-  tests/unit/test_workflow_catalogue.py \
-  tests/unit/test_hermes_collaborator.py \
-  tests/unit/test_hermes_post_promote.py \
-  tests/unit/test_hermes_pm_listener.py \
-  tests/unit/test_quality_file_render.py \
-  tests/unit/test_prompt_service.py -q
+make adh-pm    # PMAgent + control plane
+make adh-pe    # PEAgent claims pe.review
+make adh-read  # ReadAgent claims read.walk
+make adh-kb    # KbAgent claims kb.enrich
+
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest tests/unit/ -q
 ```
+
+## Retired wording
+
+Do not track work as “Hermes enabler phases” or `make hermes-worker`. Enabler = `BaseHermesAgent`; router = Orchestrator; workers = `adh_*`.

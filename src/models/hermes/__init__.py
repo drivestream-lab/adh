@@ -1,4 +1,4 @@
-"""Hermes delivery-collaborator Pydantic models."""
+"""Hermes delivery-collaborator Pydantic models (catalogue / intent / execution)."""
 
 from src.models.hermes.catalogue_models import (
     CatalogueSnapshot,
@@ -19,7 +19,6 @@ from src.models.hermes.intent_models import (
     IntentCandidate,
     JudgmentRequest,
 )
-from src.models.hermes.session_models import HermesProgrammeType, HermesSession
 
 __all__ = [
     "AuthorizedAction",
@@ -29,8 +28,6 @@ __all__ = [
     "ForgeActionResult",
     "ForgePolicyDocument",
     "HarnessPinDocument",
-    "HermesProgrammeType",
-    "HermesSession",
     "IntentCandidate",
     "JudgmentRequest",
     "SkillDescriptor",

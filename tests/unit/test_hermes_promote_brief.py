@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.business_services.hermes.programmes.authoring_programme import (
+from src.adh_agents.programmes.pm.authoring import (
     promote_brief_from_hermes,
     promote_brief_from_quality,
 )

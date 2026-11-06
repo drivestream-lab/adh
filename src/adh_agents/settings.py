@@ -31,10 +31,26 @@ class AgentSettings(BaseSettings):
         ge=60,
         description="Redis baton key TTL",
     )
+    work_ttl_seconds: int = Field(
+        default=172800,
+        ge=60,
+        description="Redis agent work-session TTL (Lead gates; default 2d)",
+    )
+    network_retry_attempts: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Transient network retries before stall-keep",
+    )
+    network_retry_backoff_seconds: float = Field(
+        default=2.0,
+        ge=0.1,
+        description="Base backoff seconds between network retries",
+    )
 
 
 class PmAgentSettings(AgentSettings):
-    """PM lane agent settings (Team OS). Lane knobs still live on HermesSettings."""
+    """PM lane agent settings (Team OS)."""
 
     PREFIX: ClassVar[str] = "ADH_PM"
 
@@ -43,5 +59,20 @@ class PmAgentSettings(AgentSettings):
     wait_steps: int = Field(default=30, ge=1, le=120)
     emit_pe_review_baton: bool = Field(
         default=True,
-        description="After open_draft_pr success, emit pe.review baton (Wave 0a; PE consumes in 0b)",
+        description="After open_draft_pr success, emit pe.review baton",
     )
+
+
+class PeAgentSettings(AgentSettings):
+    PREFIX: ClassVar[str] = "ADH_PE"
+    role_id: str = Field(default="adh.pe")
+
+
+class ReadAgentSettings(AgentSettings):
+    PREFIX: ClassVar[str] = "ADH_READ"
+    role_id: str = Field(default="adh.read")
+
+
+class KbAgentSettings(AgentSettings):
+    PREFIX: ClassVar[str] = "ADH_KB"
+    role_id: str = Field(default="adh.kb")
