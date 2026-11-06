@@ -162,7 +162,7 @@ async function openRoom(slug: string) {
   if (!slug) return;
   currentSlug = slug;
   unread.set(slug, 0);
-  const rooms = await j<Room[]>("/rooms");
+  const rooms = (await j<Room[]>("/rooms")).filter((r) => r.kind !== "memory");
   renderRooms(rooms);
   await loadMessages();
   connectStream();
@@ -175,7 +175,7 @@ async function boot() {
   }
   identities = await j<Identity[]>("/identities");
   renderIdentities();
-  const rooms = await j<Room[]>("/rooms");
+  const rooms = (await j<Room[]>("/rooms")).filter((r) => r.kind !== "memory");
   renderRooms(rooms);
   await openRoom(currentSlug);
 }
