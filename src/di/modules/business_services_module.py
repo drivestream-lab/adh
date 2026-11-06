@@ -18,6 +18,8 @@ from src.business_services.hermes.understanding.understand_service import (
 )
 from src.business_services.hermes_service import HermesService
 from src.business_services.orchestrator_service import OrchestratorService
+from src.adh_agents.agents.pm_agent import PMAgent
+from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.logging import get_logger
 
 logger = get_logger()
@@ -27,6 +29,7 @@ class BusinessServicesModule(Module):
     def configure(self, binder: Binder) -> None:
         logger.info("Configuring business services module")
         binder.bind(BuzzService, to=BuzzService, scope=singleton)
+        binder.bind(RedisBatonStore, to=RedisBatonStore, scope=singleton)
         binder.bind(HermesUnderstandService, to=HermesUnderstandService, scope=singleton)
         binder.bind(HermesSessionStoreService, to=HermesSessionStoreService, scope=singleton)
         binder.bind(HermesBriefService, to=HermesBriefService, scope=singleton)
@@ -37,4 +40,5 @@ class BusinessServicesModule(Module):
         binder.bind(MetaPmProgrammeService, to=MetaPmProgrammeService, scope=singleton)
         binder.bind(AuthoringProgrammeService, to=AuthoringProgrammeService, scope=singleton)
         binder.bind(HermesService, to=HermesService, scope=singleton)
+        binder.bind(PMAgent, to=PMAgent, scope=singleton)
         binder.bind(OrchestratorService, to=OrchestratorService, scope=singleton)

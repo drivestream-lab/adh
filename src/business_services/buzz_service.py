@@ -21,7 +21,6 @@ from src.exceptions.app_exceptions import NotFoundError, ValidationError
 from src.infra_services.postgres_service import PostgresService
 from src.infra_services.redis_service import RedisService
 from src.infra_services.tenant_registry_service import TenantRegistryService
-from src.models.tenant_models import memory_room_for_repo
 from src.logging import get_logger
 from src.models.buzz_models import (
     EventType,
@@ -88,7 +87,7 @@ _SEED_IDENTITIES: tuple[IdentityCreate, ...] = (
 
 _SEED_ROOMS: tuple[RoomCreate, ...] = (
     RoomCreate(slug="adh-ops", title="ADH ops", kind=RoomKind.OPS),
-    RoomCreate(slug="adh-memory", title="ADH global memory", kind=RoomKind.MEMORY),
+    # Wave 0a: no Buzz memory floors — OKF knowledge/ + DB remain SSOT.
 )
 
 
@@ -394,8 +393,9 @@ class BuzzService(BaseBusinessService):
 
 
 def _tenant_rooms(tenants: TenantRegistryService) -> tuple[RoomCreate, ...]:
+    """Seed ops rooms only — memory rooms retired (Wave 0a)."""
     rooms: list[RoomCreate] = []
-    seen: set[str] = {"adh-ops", "adh-memory"}
+    seen: set[str] = {"adh-ops"}
     for tenant in tenants.active():
         if tenant.ops_room not in seen:
             rooms.append(
@@ -406,16 +406,4 @@ def _tenant_rooms(tenants: TenantRegistryService) -> tuple[RoomCreate, ...]:
                 )
             )
             seen.add(tenant.ops_room)
-    for repo in sorted(tenants.allowed_repos()):
-        slug = memory_room_for_repo(repo)
-        if slug in seen:
-            continue
-        rooms.append(
-            RoomCreate(
-                slug=slug,
-                title=f"{repo} memory",
-                kind=RoomKind.MEMORY,
-            )
-        )
-        seen.add(slug)
     return tuple(rooms)

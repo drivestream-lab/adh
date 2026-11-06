@@ -84,7 +84,6 @@ class HermesService(
         self._authoring = authoring
         self._settings = HermesSettings.get_instance()
         self._boot_task: Optional[asyncio.Task[None]] = None
-        self._listen_tasks: list[asyncio.Task[None]] = []
         self._work_tasks: set[asyncio.Task[None]] = set()
         self._inflight: dict[str, str] = {}
         self._outline_tasks: dict[str, asyncio.Task[None]] = {}
@@ -93,18 +92,17 @@ class HermesService(
     async def initialize(self) -> None:
         await super().initialize()
         self._collaborator.set_programme_runner(self._meta_pm)
+        # Ops listen lives on PMAgent (BaseHermesAgent) — Wave 0a Phase1 #3A.
         if self._settings.listen_ops:
-            rooms = [tenant.ops_room for tenant in self._tenants.active()]
-            for room in rooms:
-                task = asyncio.create_task(self._listen_ops(room))
-                self._listen_tasks.append(task)
-            self.logger.info("Hermes PM listener scheduled", rooms=rooms)
+            self.logger.info(
+                "HermesService listen_ops ignored; PMAgent owns tenant ops listen",
+            )
         if self._settings.run_boot_jobs:
             self._boot_task = asyncio.create_task(self._boot_jobs())
             self.logger.info("Hermes boot jobs scheduled")
 
     async def close(self) -> None:
-        tasks = [*self._listen_tasks, self._boot_task, *self._work_tasks]
+        tasks = [self._boot_task, *self._work_tasks]
         for task in tasks:
             if task is not None:
                 task.cancel()
@@ -115,7 +113,6 @@ class HermesService(
                 await task
             except asyncio.CancelledError:
                 pass
-        self._listen_tasks = []
         self._boot_task = None
         self._work_tasks.clear()
         await super().close()
@@ -176,8 +173,9 @@ class HermesService(
             "artifact": parsed,
             "raw": raw[:32000],
         }
+        # Wave 0a: post briefs on ops only (Buzz memory rooms retired).
         posted = await self._post(
-            GLOBAL_MEMORY_ROOM,
+            self._settings.ops_room,
             "adh.pm",
             body,
             payload,
@@ -372,34 +370,8 @@ class HermesService(
 
         self._track_outline_task(tenant.slug, asyncio.create_task(_run()))
 
-    async def _listen_ops(self, room: str) -> None:
-        delay = 1.0
-        while True:
-            stream = self._buzz.stream_room(room)
-            try:
-                await anext(stream)
-                delay = 1.0
-                self.logger.info("Hermes PM listener subscribed", room=room)
-                catch = asyncio.create_task(self._catch_up_ops(room))
-                self._work_tasks.add(catch)
-                catch.add_done_callback(self._work_tasks.discard)
-                async for raw in stream:
-                    message = _parse_stream_message(raw)
-                    if message is not None:
-                        await self.on_room_message(room, message)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                self.logger.exception("PM outline listener stopped", room=room)
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, 30.0)
-            finally:
-                try:
-                    await stream.aclose()
-                except Exception:
-                    self.logger.exception("PM outline listener stream close failed", room=room)
-
-    async def _catch_up_ops(self, room: str) -> None:
+    async def catch_up_ops(self, room: str) -> None:
+        """Public for PMAgent boot — replay recent unacked Lead outlines."""
         rows = await self._buzz.list_messages(room, limit=200)
         seen: set[str] = set()
         pending: list[MessageRead] = []

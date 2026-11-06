@@ -179,9 +179,10 @@ def test_memory_rooms_are_global_and_per_repo() -> None:
     )
 
 
-def test_buzz_seeds_repo_memory_not_programme_memory(
+def test_buzz_seeds_ops_only_no_memory_rooms(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Wave 0a: Buzz seed is ops-only; memory floors retired."""
     workspace = _workspace(tmp_path, active_slugs=["realworld"])
     monkeypatch.setenv("ORCH_WORKSPACE_ROOT", str(workspace))
     monkeypatch.setenv("ORCH_META_ROOT", str(workspace / "adh-meta"))
@@ -192,10 +193,7 @@ def test_buzz_seeds_repo_memory_not_programme_memory(
     rooms = _tenant_rooms(registry)
     slugs = {room.slug for room in rooms}
     assert "realworld-ops" in slugs
-    assert "realworld-memory" not in slugs
-    assert "realworld-meta-memory" in slugs
-    assert "realworld-api-memory" in slugs
-    assert "realworld-web-memory" in slugs
-    assert "adh-repo-memory" in slugs
-    assert all(room.kind == RoomKind.MEMORY for room in rooms if room.slug.endswith("-memory"))
+    assert not any(slug.endswith("-memory") for slug in slugs)
+    assert "adh-memory" not in slugs
+    assert all(room.kind == RoomKind.OPS for room in rooms)
     _reset()
