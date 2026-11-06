@@ -1,23 +1,61 @@
 # Implementation plan — ADH Agents Team OS
 
-**Status:** Wave 0b greenfield control plane — single PR from `develop` (`feat/adh-agents-team-os-greenfield`).  
+**Status:** Wave 0b greenfield spine in [PR #15](https://github.com/drivestream-lab/adh/pull/15); next = verify gates then programme depth.  
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md)  
-**Product:** [adh-agents-team-os.md](../product/adh-agents-team-os.md)
+**Product:** [adh-agents-team-os.md](../product/adh-agents-team-os.md)  
+**As-built:** [implementation-status.md](../as-built/implementation-status.md)
+
+This is the **work tracker**. Do not follow older “Hermes enabler + responsibility agents” phase lists that assumed a Hermes facade router.
+
+---
+
+## Work tracker (follow this)
+
+```text
+ADH Agents Team OS
+
+0.  Product / ADR lock                              ✅
+0a. PM on BaseHermesAgent + baton emit              ✅  PRs #6–#14
+0b. Greenfield control plane + delete legacy        ✅  PR #15 (merge)
+    - Orchestrator + work store + workers
+    - PM programmes on plane
+    - pe / read / kb hired (minimal)
+
+── verify gate (block treating PE as “done”) ──
+V1. PM live on new OS (RealWorld guinea pig)        ⬜  post-merge
+V2. PE claims pe.review → read.walk                 ⬜
+
+── depth (same OS — not new architecture) ──
+D1. PE: Q caps (≤10 / ≤4 rounds), Buzz+PR, attest   ⬜
+D2. PM glue: answer PE + prd_merge authorize        ⬜
+D3. Read: real repo walks / richer ports            ⬜
+D4. KB: actual knowledge/ head patches              ⬜
+D5. Harden: dup batons, timeout, wrong authorize    ⬜
+
+── later hires ──
+dev / qa / iac / sre / obs + codegraph MCP          ⬜
+```
+
+**Rule:** architecture is closed after 0b. Remaining work deepens programmes on this spine.
+
+---
 
 ## Develop merge ledger
 
-### Wave 0a (merged)
+### Wave 0a (merged on `develop`)
 
 | PR | Summary |
 |----|---------|
 | #6–#12 | PM on `BaseHermesAgent`; batons; TTL; resume; parallel sessions; `init_prefix` |
 | #13–#14 | Network retry / stall-keep / resume live session |
 
-**Wave 0a UAT:** RealWorld INIT-001 confirm → impact-map → authorize → draft PR → parked `pe.review` — **done** (guinea pig).
+**Wave 0a UAT (guinea pig):** RealWorld INIT-001 confirm → impact-map → authorize → draft PR → parked `pe.review` — **done**.
 
-### Wave 0b (this train)
+### Wave 0b (PR #15)
 
-Greenfield OS extraction + hire read/pe/kb. Verify **PM on new OS** before treating PE handoff as done.
+Greenfield OS extraction + minimal pe/read/kb hire. Delete Hermes facade / runtime twin / pin OrchestratorService.
+
+---
 
 ## Locked decisions
 
@@ -25,15 +63,18 @@ Greenfield OS extraction + hire read/pe/kb. Verify **PM on new OS** before treat
 |-------|--------|
 | Product | ADH Team OS; RealWorld = guinea pig only |
 | Package | `src/adh_agents/` only — no hermes runtime twin |
-| Control plane | Orchestrator + work store + runner registry in `adh_agents/runtime` |
-| Agents | Embed control plane; role-scoped ops filter |
-| Programmes | Register on plane; PM/PE/read/kb under `adh_agents/programmes/` |
+| Control plane | Orchestrator + work store + runner registry in `adh_agents/runtime` (**mandatory**) |
+| Enabler | `BaseHermesAgent` = listen / baton / forge ACL / progress (not the router) |
+| Agents | Embed control plane; role-scoped ops filter; one process per role |
+| Programmes | Register on plane; under `adh_agents/programmes/{pm,pe,read,kb}/` |
 | Redis work | `adh:agent:work:{tenant}:{role}:{work_id}` |
 | Workers | `make adh-pm` / `adh-pe` / `adh-read` / `adh-kb` |
-| Legacy | **Delete** — HermesService facade, HermesCollaborator, session store, PendingMixin, unused hermes router/store, pin/spawn OrchestratorService |
-| Sequence | OS → verify PM → read → PE handoff → PM merge glue → kb |
+| Legacy | **Deleted** in #15 — HermesService facade, collaborator/session store, PendingMixin, pin/spawn OrchestratorService |
+| Sequence | OS → **V1 PM verify** → **V2 PE handoff** → D1–D5 depth |
 
-## Target layout
+---
+
+## Layout (landed)
 
 ```text
 src/adh_agents/
@@ -50,45 +91,45 @@ src/adh_agents/
   forge_acl/
   base.py, settings.py
 
-src/adh_pm_worker.py
-src/adh_pe_worker.py
-src/adh_read_worker.py
-src/adh_kb_worker.py
+src/adh_pm_worker.py | adh_pe_worker.py | adh_read_worker.py | adh_kb_worker.py
 ```
 
-## Delete list (same PR — no shims)
+---
 
-- `business_services/hermes/runtime/*` (orchestrator, session_store, navigator → moved)
-- `business_services/hermes_service.py`
-- `business_services/hermes/pending.py`
-- Emptied `business_services/hermes/**` after moves
-- `models/hermes/session_models.py` (replaced by `runtime/work_models.py`)
-- Legacy `business_services/orchestrator_service.py` + `/orchestrator` API + tests if unused
-- `hermes_worker.py` / `make hermes-worker` (replaced by `adh_*`)
-- `hermes_router` / `hermes_store_service` when nothing remains that needs them
+## Next actions (in order)
 
-## Phases (single PR)
+### V1 — PM on new OS
+1. Merge PR #15; run `make adh-pm` (not `hermes-worker`).
+2. Guinea pig: parallel sessions, ask-back, resume after restart, confirm / go ahead gates on RealWorld.
+3. Confirm work keys under `adh:agent:work:…` (old `adh:hermes:session:` retired).
 
-| Phase | Exit |
-|-------|------|
-| A Docs | ADR/plan/product/as-built locked |
-| B Runtime | Unit tests: parallel work, ask-back, resume, stop |
-| C Move + PMAgent + make + DELETE legacy | `rg` clean; `make adh-pm` runs |
-| D Baton claim/expire + role filter | Baton tests green |
-| Verify PM | Guinea-pig pressure on new OS |
-| E read → pe handoff → PM glue → kb | Hired on same plane |
-| Tests / PR | `test_adh_*`; open PR to develop |
+**Exit:** Lead can drive PM lane end-to-end on the new plane.
 
-## Success bar (product)
+### V2 — PE handoff
+1. `make adh-pe` + `make adh-read`.
+2. After PM `open_draft_pr`, PE claims `pe.review`, emits `read.walk`, read posts rollup.
 
-1. One Orchestrator implementation under `adh_agents/runtime`  
-2. PM verified on new OS (parallel / resume / gates)  
-3. PE claims `pe.review`; read rollups; PM merge authorize  
-4. No HermesCollaborator / HermesService / dual session store left  
-5. `make adh-pm` / `adh-pe` / `adh-read` / `adh-kb` documented  
+**Exit:** baton path draft → PE → read visible on Buzz (questions/attest still D1).
 
-## Out of scope
+### D1–D5 — depth
+Programme richness only — no second control plane. See tracker above.
+
+---
+
+## Success bar
+
+| Gate | Bar |
+|------|-----|
+| 0b | One Orchestrator under `adh_agents/runtime`; legacy facades gone; `make adh-*` documented |
+| V1 | PM live-proven on new work store |
+| V2 | PE claims `pe.review`; read rollup |
+| D1–D2 | Gate‑1 questions + attest + PM merge authorize |
+| D4 | KB head diffs on Buzz after enrich |
+| Later | New roles plug into same Orchestrator + batons |
+
+## Out of scope (unchanged)
 
 - Stratum 20-repo production fan-out  
 - Full QA docker programme  
-- Codegraph MCP (port stub only)  
+- Codegraph MCP (port stub until later hire)  
+- Reviving HermesService / dual session stores  

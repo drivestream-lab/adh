@@ -78,4 +78,7 @@ See [`../references/adh-kb-heads.md`](../references/adh-kb-heads.md).
 
 ## Implementation
 
-See [`../plans/adh-agents-implementation-plan.md`](../plans/adh-agents-implementation-plan.md) and [ADR 0002](../adr/0002-adh-agents-team-os.md).
+**Work tracker (follow this):** [`../plans/adh-agents-implementation-plan.md`](../plans/adh-agents-implementation-plan.md)  
+**ADR:** [0002](../adr/0002-adh-agents-team-os.md) · **As-built:** [`../as-built/implementation-status.md`](../as-built/implementation-status.md)
+
+Retired framing: “Hermes enabler + responsibility agents” phase lists that assumed a Hermes facade router. Enabler = `BaseHermesAgent`; control plane = Orchestrator in `adh_agents/runtime`.

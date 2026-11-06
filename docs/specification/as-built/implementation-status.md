@@ -1,28 +1,29 @@
 # As-built — ADH Agents Team OS
 
-## Wave 0a (live-proven on guinea pig)
+**Tracker SSOT:** [adh-agents-implementation-plan.md](../plans/adh-agents-implementation-plan.md)
+
+## Spine
+
+| Item | Status |
+|------|--------|
+| 0 / 0a — ADR + PM on `BaseHermesAgent` + baton emit | ✅ `develop` (#6–#14); INIT-001 guinea pig done |
+| 0b — Greenfield control plane + delete legacy | ✅ [PR #15](https://github.com/drivestream-lab/adh/pull/15) |
+| V1 — PM live on new OS | ⬜ post-merge |
+| V2 — PE claims `pe.review` → read.walk | ⬜ |
+| D1–D5 — PE/PM/read/kb depth + harden | ⬜ |
+
+## Landed (0b)
 
 | Capability | Status |
 |------------|--------|
-| Validate / post-PM / impact-map / `open_draft_pr` | **live-proven** (RealWorld INIT-001) |
-| `pe.review` baton emit after draft PR | live (consumers = Wave 0b) |
-| Parallel sessions / ask-back / TTL / resume / network retry | proven on PM; now OS runtime |
+| `adh_agents/runtime` Orchestrator + work store (`adh:agent:work:…`) | landed |
+| PM programmes under `adh_agents/programmes/pm/` | landed |
+| `PMAgent` embeds Orchestrator (no HermesService facade) | landed |
+| `make adh-pm` / `adh-pe` / `adh-read` / `adh-kb` | landed |
+| pe / read / kb hired (minimal baton claim + fan-out) | landed |
+| Hermes runtime twin / PendingMixin / pin OrchestratorService | deleted |
 
-## Wave 0b (this train — greenfield)
-
-| Capability | Status |
-|------------|--------|
-| Control plane `adh_agents/runtime` (Orchestrator, work store, stall, catch_up) | **landed** |
-| Work Redis keys `adh:agent:work:{tenant}:{role}:{work_id}` | **landed** |
-| PM programmes under `adh_agents/programmes/pm/` | **landed** |
-| `PMAgent` embeds Orchestrator (no `HermesService` facade) | **landed** |
-| `make adh-pm` / `adh-pe` / `adh-read` / `adh-kb` | **landed** |
-| `adh.read` / `adh.pe` / `adh.kb` hire (baton claim programmes) | **landed** (minimal fan-out) |
-| Delete hermes runtime twin / PendingMixin / pin OrchestratorService API | **landed** |
-| PM verify on new OS (live guinea pig) | **next** after worker restart |
-| Full PE Q caps / attest / PM merge glue / KB head patches | incremental on same plane |
-
-## Verify
+## Commands
 
 ```bash
 make adh-pm    # PMAgent + control plane
@@ -31,7 +32,8 @@ make adh-read  # ReadAgent claims read.walk
 make adh-kb    # KbAgent claims kb.enrich
 
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest tests/unit/ -q
-
-# rg gate (agent path — must be empty of deleted facades):
-# HermesCollaboratorService|HermesSessionStoreService|class HermesService|PendingMixin
 ```
+
+## Retired wording
+
+Do not track work as “Hermes enabler phases” or `make hermes-worker`. Enabler = `BaseHermesAgent`; router = Orchestrator; workers = `adh_*`.
