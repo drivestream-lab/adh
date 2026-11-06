@@ -6,13 +6,18 @@ from typing import Optional
 
 from injector import inject
 
+from src.adh_agents.baton.models import Baton
+from src.adh_agents.baton.redis_store import RedisBatonStore
+from src.adh_agents.settings import PmAgentSettings
 from src.business_services.base_business_service import BaseBusinessService
+from src.business_services.buzz_service import BuzzService
 from src.exceptions.app_exceptions import ValidationError
 from src.infra_services.cursor_cli_service import ProgressCallback
 from src.infra_services.forge_action_service import ForgeActionService
 from src.infra_services.pm_skill_runner_service import PmSkillRunnerService
 from src.infra_services.pm_workspace_service import PmWorkspaceService
 from src.infra_services.workflow_catalogue_service import WorkflowCatalogueService
+from src.models.buzz_models import EventType, MessageCreate, MessageKind
 from src.models.hermes.catalogue_models import WorkflowNodeDocument
 from src.models.hermes.execution_models import (
     ForgeActionRequest,
@@ -32,12 +37,17 @@ class HermesDispatchService(BaseBusinessService):
         skills: PmSkillRunnerService,
         forge: ForgeActionService,
         workspace: PmWorkspaceService,
+        batons: RedisBatonStore,
+        buzz: BuzzService,
     ) -> None:
         super().__init__()
         self._catalogue = catalogue
         self._skills = skills
         self._forge = forge
         self._workspace = workspace
+        self._batons = batons
+        self._buzz = buzz
+        self._pm_settings = PmAgentSettings.get_instance()
 
     async def run_skill_node(
         self,
@@ -170,7 +180,7 @@ class HermesDispatchService(BaseBusinessService):
             draft=node.forge.draft if node.forge.draft is not None else True,
             labels=list(node.forge.apply_labels),
         )
-        return await self._forge.run_action(
+        result = await self._forge.run_action(
             tenant,
             action,
             app=request.app,
@@ -181,6 +191,69 @@ class HermesDispatchService(BaseBusinessService):
             labels=request.labels,
             repo=request.repo,
         )
+        if action == "open_draft_pr":
+            await self._emit_pe_review_baton(
+                tenant,
+                initiative=initiative,
+                pr_url=result.url or "",
+                artefact_refs=[filled.get("body_path") or "", filled.get("prd_path") or ""],
+            )
+        return result
+
+    async def _emit_pe_review_baton(
+        self,
+        tenant: TenantContext,
+        *,
+        initiative: str,
+        pr_url: str,
+        artefact_refs: list[str],
+    ) -> None:
+        """Wave 0a Phase1 #1B — park pe.review until PE worker exists."""
+        if not self._pm_settings.emit_pe_review_baton:
+            return
+        refs = [r for r in artefact_refs if r]
+        baton = Baton(
+            type="pe.review",
+            from_role="adh.pm",
+            to_role="adh.pe",
+            tenant=tenant.slug,
+            ops_room=tenant.ops_room,
+            initiative=initiative,
+            idempotency_key=f"pe.review:{tenant.slug}:{initiative}:{pr_url or 'draft'}",
+            payload={
+                "pr_url": pr_url,
+                "stage": "gate1_review",
+                "note": "PE worker not hired yet (Wave 0b); baton parked",
+            },
+            artefact_refs=refs,
+        )
+        ttl = int(self._pm_settings.baton_ttl_seconds)
+        stored, created = await self._batons.create_pending(baton, ttl=ttl)
+        notice = (
+            f"baton `pe.review` → `adh.pe` (init={initiative}; "
+            f"waiting for PE worker; correlation={stored.correlation_id})"
+        )
+        if not created:
+            notice = f"(idempotent) {notice}"
+        try:
+            await self._buzz.post_message(
+                tenant.ops_room,
+                MessageCreate(
+                    identity_handle="adh.pm",
+                    body=notice,
+                    kind=MessageKind.EVENT,
+                    event_type=EventType.PROGRESS,
+                    payload={
+                        "status": "baton_emitted",
+                        "baton_type": "pe.review",
+                        "baton_id": stored.id,
+                        "created": created,
+                        "correlation_id": stored.correlation_id,
+                    },
+                ),
+            )
+        except Exception:
+            self.logger.exception("pe.review baton notice failed", initiative=initiative)
 
     async def _ensure_prd_draft_slots(
         self,

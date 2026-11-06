@@ -1,6 +1,6 @@
-"""Host Hermes worker: listen on Buzz (shared Redis/Postgres), run skills via local Cursor agent.
+"""Host PM worker: PMAgent listens on Buzz; programmes via HermesService.
 
-Buzz API/UI stay in Docker. This process owns outline listening + catalogue skill dispatch
+Buzz API/UI stay in Docker. This process owns ops listening + catalogue skill dispatch
 so the Darwin ``agent`` CLI and keychain auth work on the Mac host.
 """
 
@@ -13,7 +13,7 @@ import uuid
 
 import dotenv
 
-from src.business_services.hermes_service import HermesService
+from src.adh_agents.agents.pm_agent import PMAgent
 from src.configs.app_settings import AppSettings
 from src.di.dependency_container import (
     close_all_services,
@@ -34,12 +34,12 @@ _SHUTDOWN_BUDGET_SECONDS = 8.0
 async def _run() -> None:
     configure_container()
     await initialize_all_services()
-    hermes = provide_service(HermesService)
+    pm = provide_service(PMAgent)
     logger = get_logger()
     logger.info(
-        "Hermes host worker ready",
-        listen_ops=hermes._settings.listen_ops,
-        skill_runner=hermes._settings.pm_skill_runner_enabled,
+        "PMAgent host worker ready",
+        role=pm.role_id,
+        rooms=[t.ops_room for t in pm._tenants.active()],
     )
     stop = asyncio.Event()
     shutting_down = False
@@ -60,7 +60,7 @@ async def _run() -> None:
             signal.signal(sig, lambda *_: _stop())
 
     await stop.wait()
-    logger.info("Hermes host worker shutting down")
+    logger.info("PMAgent host worker shutting down")
     try:
         await asyncio.wait_for(close_all_services(), timeout=_SHUTDOWN_BUDGET_SECONDS)
     except asyncio.TimeoutError:
@@ -76,7 +76,7 @@ def main() -> None:
     logger = get_logger()
     correlation_id = str(uuid.uuid4())
     with LoggingContext(correlation_id):
-        logger.info("Starting Hermes host worker")
+        logger.info("Starting PMAgent host worker")
         asyncio.run(_run())
 
 

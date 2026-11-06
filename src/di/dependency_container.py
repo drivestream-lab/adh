@@ -19,6 +19,7 @@ from src.business_services.hermes.understanding.understand_service import (
 )
 from src.business_services.hermes_service import HermesService
 from src.business_services.orchestrator_service import OrchestratorService
+from src.adh_agents.agents.pm_agent import PMAgent
 from src.infra_services.forge_action_service import ForgeActionService
 from src.infra_services.github_app_service import GitHubAppService
 from src.infra_services.hermes_store_service import HermesStoreService
@@ -65,6 +66,7 @@ _BUSINESS_SERVICE_TYPES: tuple[type, ...] = (
     MetaPmProgrammeService,
     AuthoringProgrammeService,
     HermesService,
+    PMAgent,
     OrchestratorService,
 )
 
