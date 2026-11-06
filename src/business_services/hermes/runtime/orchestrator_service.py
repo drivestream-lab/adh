@@ -263,9 +263,48 @@ class HermesCollaboratorService(BaseBusinessService):
             )
             return True
 
+        # Live Redis sessions (stalled mid-hop or mid-programme) before artefacts.
+        live_resume = [
+            s
+            for s in meta_sessions
+            if (s.initiative or "").strip()
+            and (
+                bool(s.slots.get("stalled_hop"))
+                or (
+                    s.programme == HermesProgrammeType.META_PM
+                    and (s.stage or "").strip()
+                    and s.awaiting == AWAITING_NONE
+                )
+            )
+        ]
+        if len(live_resume) == 1:
+            init = (live_resume[0].initiative or "").strip().upper()
+            await self._runner.resume_programme(tenant, room, init)
+            return True
+        if len(live_resume) > 1:
+            return await self._ask_init_pick(
+                tenant,
+                room,
+                live_resume,
+                intent=body,
+                preface=(
+                    "Several live sessions can be resumed (Redis still holds them). "
+                    "Which initiative?"
+                ),
+            )
+
         resumable = self._runner.list_resumable(tenant)
         if len(resumable) == 1:
             init = resumable[0]["initiative"]
+            await self._say(
+                room,
+                (
+                    f"**Session expired or unbound** — resumable from artefacts: "
+                    f"`{init}` ({resumable[0].get('hint') or resumable[0].get('gate')}). "
+                    "Reopening that gate."
+                ),
+                EventType.PROGRESS,
+            )
             await self._runner.resume_programme(tenant, room, init)
             # If Lead sent a gate token, try to apply it on the reopened session.
             if _BARE_GATE_TOKEN.match(body) and not _RESUME_HINT.search(body):
@@ -274,12 +313,21 @@ class HermesCollaboratorService(BaseBusinessService):
                     return await self._dispatch_gate(tenant, room, session, body)
             return True
         if len(resumable) > 1:
+            await self._say(
+                room,
+                (
+                    "**Session expired or unbound** — highlight which initiative to resume "
+                    "(artefact-backed):"
+                ),
+                EventType.STALL,
+            )
             return await self._ask_resumable_pick(tenant, room, resumable, intent=body)
 
         await self._say(
             room,
             (
-                "I can't find an open gate or resumable initiative. "
+                "I can't find an open gate or resumable initiative "
+                "(Redis empty and no artefacts). "
                 "Paste a new outline, promote a think file, or say `post-pm` once a PRD exists. "
                 "If you know the initiative id, reply with it and I will try to bind it "
                 f"(example: `{initiative_example(tenant.init_prefix)}`)."
