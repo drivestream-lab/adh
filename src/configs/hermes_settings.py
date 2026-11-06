@@ -85,6 +85,17 @@ class HermesSettings(BaseSettings):
             "Default 2 days so Lead confirm/authorize is not silently dropped."
         ),
     )
+    network_retry_attempts: int = Field(
+        default=3,
+        ge=1,
+        le=8,
+        description="Attempts for transient network failures (GitHub / publish) before stall",
+    )
+    network_retry_backoff_seconds: float = Field(
+        default=2.0,
+        ge=0.05,
+        description="Initial backoff between network retries; doubles each attempt",
+    )
     pm_max_think_runs: int = Field(
         default=4,
         ge=2,

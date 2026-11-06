@@ -49,6 +49,8 @@ _SLOT_FINDINGS = "meta_pm_findings"
 _SLOT_DECISIONS = "meta_pm_decisions"
 _SLOT_WAVE = "meta_pm_wave"
 _SLOT_VALIDATE_PASS = "meta_pm_validate_pass"
+_SLOT_STALLED_HOP = "stalled_hop"
+_SLOT_STALLED_REASON = "stalled_reason"
 _PROGRAMME = HermesProgrammeType.META_PM
 
 
@@ -160,10 +162,10 @@ class MetaPmProgrammeService(BaseBusinessService):
         return rows
 
     async def resume_programme(self, tenant: TenantContext, room: str, initiative: str) -> None:
-        """Rebuild the latest human gate from local artefacts after session TTL loss.
+        """Continue a stalled session, or rebuild the latest gate from artefacts.
 
-        Prefer: Impact-Map → draft-PR authorize; else post-PM brief → confirm/revise;
-        else promoted PRD → start validate (same as ``post-pm`` once INIT is bound).
+        Order: live Redis session for this INIT → continue stage; else artefacts
+        (Impact-Map → authorize; post-PM brief → confirm; PRD → validate).
         """
         init = (initiative or "").strip().upper()
         if not init:
@@ -172,6 +174,12 @@ class MetaPmProgrammeService(BaseBusinessService):
                 "Which initiative should I resume? Reply with the programme initiative id.",
                 EventType.STALL,
             )
+            return
+        live = await self._store.load(tenant.slug, init)
+        # Live Redis wins even if programme field was omitted by an older stall path.
+        if live is not None and (live.programme == _PROGRAMME or bool((live.stage or "").strip())):
+            live.programme = _PROGRAMME
+            await self._continue_stalled(tenant, room, live)
             return
         session = HermesSession(
             tenant_slug=tenant.slug,
@@ -233,6 +241,130 @@ class MetaPmProgrammeService(BaseBusinessService):
             ),
             EventType.STALL,
             {"status": "resume_missing_prd", "initiative": init},
+        )
+
+    async def _continue_stalled(
+        self, tenant: TenantContext, room: str, session: HermesSession
+    ) -> None:
+        """Re-enter the programme from the live session stage after a stall / blip."""
+        init = (session.initiative or "").strip().upper()
+        hop = (session.slots.get(_SLOT_STALLED_HOP) or session.stage or "").strip()
+        session.slots.pop(_SLOT_STALLED_HOP, None)
+        session.slots.pop(_SLOT_STALLED_REASON, None)
+        session.room = room
+        await self._store.save(session)
+        await self._poster.post_status(
+            room,
+            f"Resuming {init} from live session at **{hop or session.stage or 'meta-pm'}**.",
+            EventType.PROGRESS,
+            {
+                "status": "resume_live_session",
+                "initiative": init,
+                "stage": session.stage,
+                "hop": hop,
+            },
+        )
+        if session.awaiting == AWAITING_JUDGMENT and session.open_brief is not None:
+            await self._poster.post_status(
+                room,
+                self._briefs.format_brief_markdown(session.open_brief),
+                EventType.PROGRESS,
+            )
+            return
+        if session.awaiting == AWAITING_AUTHORIZATION and session.open_brief is not None:
+            await self._poster.post_status(
+                room,
+                self._briefs.format_brief_markdown(session.open_brief),
+                EventType.PROGRESS,
+            )
+            return
+        stage = session.stage or hop
+        if stage in ("validate-requirements", "requirements-human-decision"):
+            pass_number = int(session.slots.get(_SLOT_VALIDATE_PASS) or "1")
+            await self._run_validate_cycle(tenant, room, session, pass_number=max(1, pass_number))
+            return
+        if stage == "update-documents":
+            await self._update_pass(tenant, room, session)
+            return
+        if stage in ("prd-impact-acceptance", "prd-impact-map"):
+            if (
+                stage == "prd-impact-acceptance"
+                and not (
+                    self._workspace.read_local(tenant, hermes_post_pm_brief_path(init)) or ""
+                ).strip()
+            ):
+                await self._write_post_pm_brief(tenant, room, session)
+                return
+            if stage == "prd-impact-acceptance":
+                await self._reopen_post_pm_brief(tenant, room, session)
+                return
+            await self._impact_pass(tenant, room, session)
+            return
+        if stage == "prd-pr-action":
+            await self._open_forge_auth(tenant, room, session)
+            return
+        # Unknown stage — fall through to artefact resume without wiping slots.
+        await self._poster.post_status(
+            room,
+            (
+                f"Live session for {init} is at `{stage or 'unknown'}` — "
+                "reopening from artefacts."
+            ),
+            EventType.PROGRESS,
+        )
+        # Clear programme briefly so artefact path runs on a fresh shell session.
+        shell = HermesSession(
+            tenant_slug=tenant.slug,
+            room=room,
+            initiative=init,
+            programme=_PROGRAMME,
+            slots=dict(session.slots),
+        )
+        impact_body = (self._workspace.read_local(tenant, impact_map_path(init)) or "").strip()
+        if impact_body:
+            await self._open_forge_auth(tenant, room, shell)
+            return
+        post_pm = (
+            self._workspace.read_local(tenant, hermes_post_pm_brief_path(init)) or ""
+        ).strip()
+        if post_pm:
+            await self._reopen_post_pm_brief(tenant, room, shell)
+            return
+        if (self._workspace.read_local(tenant, prd_path(init)) or "").strip():
+            await self.start_programme(tenant, room, shell)
+            return
+        await self._poster.post_status(
+            room,
+            f"Cannot continue {init} — no open gate and no resumable artefacts.",
+            EventType.STALL,
+        )
+
+    async def _mark_stalled(
+        self,
+        tenant: TenantContext,
+        room: str,
+        session: HermesSession,
+        *,
+        hop: str,
+        reason: str,
+        message: str,
+    ) -> None:
+        """Keep the INIT session so Lead can `resume` after a transient outage."""
+        del tenant  # session already tenant-scoped
+        session.slots[_SLOT_STALLED_HOP] = hop
+        session.slots[_SLOT_STALLED_REASON] = reason
+        session.awaiting = AWAITING_NONE
+        await self._store.save(session)
+        await self._poster.post_status(
+            room,
+            message,
+            EventType.STALL,
+            {
+                "status": "stalled",
+                "initiative": session.initiative,
+                "hop": hop,
+                "reason": reason,
+            },
         )
 
     async def after_judgment(
@@ -320,17 +452,29 @@ class MetaPmProgrammeService(BaseBusinessService):
             )
         except Exception as exc:
             self.logger.exception("validate skill failed", initiative=initiative)
-            await self._poster.post_status(
+            await self._mark_stalled(
+                tenant,
                 room,
-                f"Validate failed for {initiative}: {str(exc)[:200]}",
-                EventType.STALL,
+                session,
+                hop="validate-requirements",
+                reason=str(exc)[:200],
+                message=(
+                    f"Validate failed for {initiative}: {str(exc)[:200]}. "
+                    "Session kept — say `resume` when the network is back."
+                ),
             )
             return
         if not result.ok:
-            await self._poster.post_status(
+            await self._mark_stalled(
+                tenant,
                 room,
-                f"Validate exited {result.exit_code} for {initiative}.",
-                EventType.STALL,
+                session,
+                hop="validate-requirements",
+                reason=f"exit {result.exit_code}",
+                message=(
+                    f"Validate exited {result.exit_code} for {initiative}. "
+                    "Session kept — say `resume` to retry."
+                ),
             )
             return
         report = self._workspace.read_local(tenant, validation_report_path(initiative))
@@ -613,10 +757,16 @@ class MetaPmProgrammeService(BaseBusinessService):
             )
         except Exception as exc:
             self.logger.exception("update skill failed")
-            await self._poster.post_status(
+            await self._mark_stalled(
+                tenant,
                 room,
-                f"Update failed for {initiative}: {str(exc)[:200]}",
-                EventType.STALL,
+                session,
+                hop="update-documents",
+                reason=str(exc)[:200],
+                message=(
+                    f"Update failed for {initiative}: {str(exc)[:200]}. "
+                    "Session kept — say `resume` when the network is back."
+                ),
             )
             return
         if self._auto_owns_pass(pass_number):
@@ -700,12 +850,18 @@ class MetaPmProgrammeService(BaseBusinessService):
                     label="impact-map",
                 ),
             )
-        except Exception:
+        except Exception as exc:
             self.logger.exception("impact skill failed")
-            await self._poster.post_status(
+            await self._mark_stalled(
+                tenant,
                 room,
-                f"Impact map skill failed for {initiative}.",
-                EventType.STALL,
+                session,
+                hop="prd-impact-map",
+                reason=str(exc)[:200],
+                message=(
+                    f"Impact map skill failed for {initiative}: {str(exc)[:200]}. "
+                    "Session kept — say `resume` when the network is back."
+                ),
             )
             return
         await self._open_forge_auth(tenant, room, session)

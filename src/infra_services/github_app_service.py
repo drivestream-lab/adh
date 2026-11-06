@@ -42,6 +42,36 @@ class GitHubAppService(BaseInfraService):
     async def health_check(self) -> bool:
         return self._initialized and self._client is not None
 
+    async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        """HTTP call with transient retries (connect/timeout/5xx)."""
+        from src.configs.hermes_settings import HermesSettings
+        from src.utils.transient_retry import retry_transient
+
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        settings = HermesSettings.get_instance()
+        client = self._client
+
+        async def once() -> httpx.Response:
+            response = await client.request(method, url, **kwargs)
+            if response.status_code in (408, 425, 429, 500, 502, 503, 504):
+                raise httpx.HTTPStatusError(
+                    f"transient HTTP {response.status_code}",
+                    request=response.request,
+                    response=response,
+                )
+            return response
+
+        short = url
+        if "github.com" in url:
+            short = url.split("github.com", 1)[-1][:96]
+        return await retry_transient(
+            once,
+            attempts=int(settings.network_retry_attempts),
+            backoff_seconds=float(settings.network_retry_backoff_seconds),
+            label=f"github {method} {short}",
+        )
+
     async def installation_token(
         self,
         app: AppRole,
@@ -86,7 +116,8 @@ class GitHubAppService(BaseInfraService):
             f"{self._settings.github_api.rstrip('/')}"
             f"/app/installations/{installation_id}/access_tokens"
         )
-        response = await self._client.post(
+        response = await self._request(
+            "POST",
             url,
             headers={
                 "Authorization": f"Bearer {encoded}",
@@ -114,7 +145,8 @@ class GitHubAppService(BaseInfraService):
         if self._client is None:
             raise RuntimeError("GitHub App service has not been initialized")
         org = self._settings.github_org
-        response = await self._client.get(
+        response = await self._request(
+            "GET",
             f"{self._settings.github_api.rstrip('/')}/repos/{org}/{repo}",
             headers=_token_headers(token),
         )
@@ -128,13 +160,14 @@ class GitHubAppService(BaseInfraService):
         org = self._settings.github_org
         api = self._settings.github_api.rstrip("/")
         headers = _token_headers(token)
-        info = await self._client.get(f"{api}/repos/{org}/{repo}", headers=headers)
+        info = await self._request("GET", f"{api}/repos/{org}/{repo}", headers=headers)
         if info.status_code in {401, 403, 404}:
             logger.info("GitHub push probe skipped", repo=repo, status=info.status_code)
             return int(info.status_code)
         default = str((info.json() or {}).get("default_branch") or "master")
         encoded = base64.b64encode(b"adh-g0-probe-must-fail").decode()
-        response = await self._client.put(
+        response = await self._request(
+            "PUT",
             f"{api}/repos/{org}/{repo}/contents/.g0-kill-must-not-land",
             headers=headers,
             json={
@@ -147,7 +180,7 @@ class GitHubAppService(BaseInfraService):
         if response.status_code in {200, 201}:
             sha = ((response.json() or {}).get("content") or {}).get("sha")
             if sha:
-                await self._client.request(
+                await self._request(
                     "DELETE",
                     f"{api}/repos/{org}/{repo}/contents/.g0-kill-must-not-land",
                     headers=headers,
@@ -176,22 +209,24 @@ class GitHubAppService(BaseInfraService):
         api = self._settings.github_api.rstrip("/")
         headers = _token_headers(token)
         repo_url = f"{api}/repos/{org}/{repo}"
-        info = await self._client.get(repo_url, headers=headers)
+        info = await self._request("GET", repo_url, headers=headers)
         info.raise_for_status()
         default = str(info.json()["default_branch"])
-        ref = await self._client.get(f"{repo_url}/git/ref/heads/{default}", headers=headers)
+        ref = await self._request("GET", f"{repo_url}/git/ref/heads/{default}", headers=headers)
         ref.raise_for_status()
         sha = str(ref.json()["object"]["sha"])
-        existing = await self._client.get(f"{repo_url}/git/ref/heads/{branch}", headers=headers)
+        existing = await self._request("GET", f"{repo_url}/git/ref/heads/{branch}", headers=headers)
         if existing.status_code == 404:
-            created = await self._client.post(
+            created = await self._request(
+                "POST",
                 f"{repo_url}/git/refs",
                 headers=headers,
                 json={"ref": f"refs/heads/{branch}", "sha": sha},
             )
             created.raise_for_status()
         encoded = base64.b64encode(contents.encode()).decode()
-        file_resp = await self._client.get(
+        file_resp = await self._request(
+            "GET",
             f"{repo_url}/contents/{path}",
             headers=headers,
             params={"ref": branch},
@@ -203,7 +238,8 @@ class GitHubAppService(BaseInfraService):
         }
         if file_resp.status_code == 200:
             payload["sha"] = file_resp.json()["sha"]
-        put = await self._client.put(
+        put = await self._request(
+            "PUT",
             f"{repo_url}/contents/{path}",
             headers=headers,
             json=payload,
@@ -212,7 +248,8 @@ class GitHubAppService(BaseInfraService):
             logger.info(
                 "Kill PR content put", repo=repo, status=put.status_code, body=put.text[:300]
             )
-        pulls = await self._client.get(
+        pulls = await self._request(
+            "GET",
             f"{repo_url}/pulls",
             headers=headers,
             params={"state": "open", "head": f"{org}:{branch}"},
@@ -222,7 +259,8 @@ class GitHubAppService(BaseInfraService):
             number = int(rows[0]["number"])
             url = str(rows[0].get("html_url") or f"https://github.com/{org}/{repo}/pull/{number}")
             return number, url
-        created_pr = await self._client.post(
+        created_pr = await self._request(
+            "POST",
             f"{repo_url}/pulls",
             headers=headers,
             json={
@@ -265,7 +303,8 @@ class GitHubAppService(BaseInfraService):
         api = self._settings.github_api.rstrip("/")
         headers = _token_headers(token)
         repo_url = f"{api}/repos/{org}/{repo}"
-        created = await self._client.post(
+        created = await self._request(
+            "POST",
             f"{repo_url}/pulls",
             headers=headers,
             json={"title": title, "head": head, "base": base, "body": body, "draft": draft},
@@ -282,7 +321,8 @@ class GitHubAppService(BaseInfraService):
         number = int(payload["number"])
         url = str(payload.get("html_url") or f"https://github.com/{org}/{repo}/pull/{number}")
         if labels:
-            labelled = await self._client.post(
+            labelled = await self._request(
+                "POST",
                 f"{repo_url}/issues/{number}/labels",
                 headers=headers,
                 json={"labels": labels},
@@ -312,7 +352,7 @@ class GitHubAppService(BaseInfraService):
         encoded = base64.b64encode(contents.encode("utf-8")).decode("ascii")
         api_path = "/".join(quote(part, safe="") for part in path.split("/") if part)
         file_url = f"{repo_url}/contents/{api_path}"
-        existing = await self._client.get(file_url, headers=headers, params={"ref": branch})
+        existing = await self._request("GET", file_url, headers=headers, params={"ref": branch})
         payload: dict[str, Any] = {
             "message": message,
             "content": encoded,
@@ -320,7 +360,7 @@ class GitHubAppService(BaseInfraService):
         }
         if existing.status_code == 200:
             payload["sha"] = existing.json()["sha"]
-        response = await self._client.put(file_url, headers=headers, json=payload)
+        response = await self._request("PUT", file_url, headers=headers, json=payload)
         if response.status_code >= 400:
             logger.info(
                 "GitHub content put failed",
@@ -372,7 +412,7 @@ class GitHubAppService(BaseInfraService):
         await self._ensure_branch(repo_url, headers, branch)
         api_path = "/".join(quote(part, safe="") for part in path.split("/") if part)
         file_url = f"{repo_url}/contents/{api_path}"
-        existing = await self._client.get(file_url, headers=headers, params={"ref": branch})
+        existing = await self._request("GET", file_url, headers=headers, params={"ref": branch})
         if existing.status_code == 404:
             return None
         if existing.status_code >= 400:
@@ -380,7 +420,7 @@ class GitHubAppService(BaseInfraService):
         sha = str(existing.json().get("sha") or "")
         if not sha:
             return None
-        response = await self._client.request(
+        response = await self._request(
             "DELETE",
             file_url,
             headers=headers,
@@ -407,16 +447,17 @@ class GitHubAppService(BaseInfraService):
     async def _ensure_branch(self, repo_url: str, headers: dict[str, str], branch: str) -> None:
         if self._client is None:
             raise RuntimeError("GitHub App service has not been initialized")
-        ref = await self._client.get(f"{repo_url}/git/ref/heads/{branch}", headers=headers)
+        ref = await self._request("GET", f"{repo_url}/git/ref/heads/{branch}", headers=headers)
         if ref.status_code == 200:
             return
-        info = await self._client.get(repo_url, headers=headers)
+        info = await self._request("GET", repo_url, headers=headers)
         info.raise_for_status()
         default = str(info.json()["default_branch"])
-        base = await self._client.get(f"{repo_url}/git/ref/heads/{default}", headers=headers)
+        base = await self._request("GET", f"{repo_url}/git/ref/heads/{default}", headers=headers)
         base.raise_for_status()
         sha = str(base.json()["object"]["sha"])
-        created = await self._client.post(
+        created = await self._request(
+            "POST",
             f"{repo_url}/git/refs",
             headers=headers,
             json={"ref": f"refs/heads/{branch}", "sha": sha},
@@ -436,7 +477,8 @@ class GitHubAppService(BaseInfraService):
         if self._client is None:
             raise RuntimeError("GitHub App service has not been initialized")
         org = self._settings.github_org
-        response = await self._client.put(
+        response = await self._request(
+            "PUT",
             f"{self._settings.github_api.rstrip('/')}/repos/{org}/{repo}/pulls/{pr_number}/merge",
             headers=_token_headers(token),
             json={"merge_method": "squash", "commit_title": "adh-g0-probe-must-fail"},
@@ -453,7 +495,8 @@ class GitHubAppService(BaseInfraService):
         if self._client is None:
             raise RuntimeError("GitHub App service has not been initialized")
         org = self._settings.github_org
-        response = await self._client.get(
+        response = await self._request(
+            "GET",
             f"{self._settings.github_api.rstrip('/')}/repos/{org}/{repo}/pulls",
             headers=_token_headers(token),
             params={"state": "open", "per_page": 5},
@@ -472,7 +515,8 @@ class GitHubAppService(BaseInfraService):
     async def _installation_id(self, app_jwt: str, app_id: int) -> int:
         if self._client is None:
             raise RuntimeError("GitHub App service has not been initialized")
-        response = await self._client.get(
+        response = await self._request(
+            "GET",
             f"{self._settings.github_api.rstrip('/')}/app/installations",
             headers={
                 "Authorization": f"Bearer {app_jwt}",
