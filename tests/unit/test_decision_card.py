@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from src.business_services.hermes.collaboration.brief_service import HermesBriefService
-from src.business_services.hermes.decision_card import (
+from src.adh_agents.collaboration.brief_service import HermesBriefService
+from src.adh_agents.programmes.pm.decision_card import (
     CARD_POSTPM,
     CARD_PROMOTE,
     parse_bullets,

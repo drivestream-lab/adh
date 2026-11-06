@@ -1,0 +1,82 @@
+"""PE programme claims pe.review and emits read.walk."""
+
+from __future__ import annotations
+
+import json
+from typing import Any, Optional
+
+import pytest
+
+from src.adh_agents.baton.models import Baton, BatonStatus
+from src.adh_agents.baton.redis_store import RedisBatonStore
+from src.adh_agents.programmes.pe.review import PeReviewProgramme
+from src.adh_agents.runtime.work_store import AgentWorkStore
+from src.models.buzz_models import EventType
+
+
+class _FakeRedis:
+    def __init__(self) -> None:
+        self.data: dict[str, str] = {}
+
+    async def get(self, key: str, as_json: bool = False) -> Any:
+        raw = self.data.get(key)
+        if raw is not None and as_json:
+            return json.loads(raw)
+        return raw
+
+    async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
+        self.data[key] = value if isinstance(value, str) else json.dumps(value)
+        return True
+
+    async def set_if_absent(self, key: str, value: Any, ttl: Optional[int] = None) -> bool:
+        if key in self.data:
+            return False
+        await self.set(key, value, ttl=ttl)
+        return True
+
+    async def delete(self, key: str) -> int:
+        return 1 if self.data.pop(key, None) is not None else 0
+
+
+class _FakePoster:
+    def __init__(self) -> None:
+        self.posts: list[str] = []
+
+    async def post_status(
+        self,
+        room: str,
+        body: str,
+        event_type: EventType = EventType.PROGRESS,
+        payload: Optional[dict[str, Any]] = None,
+    ) -> None:
+        self.posts.append(body)
+
+
+@pytest.mark.asyncio
+async def test_pe_claims_and_emits_read_walk() -> None:
+    redis = _FakeRedis()
+    batons = RedisBatonStore(redis)  # type: ignore[arg-type]
+    store = AgentWorkStore(redis)  # type: ignore[arg-type]
+    pe = PeReviewProgramme(store=store, batons=batons, poster=_FakePoster())  # type: ignore[arg-type]
+    baton = Baton(
+        type="pe.review",
+        from_role="adh.pm",
+        to_role="adh.pe",
+        tenant="realworld",
+        ops_room="realworld-ops",
+        initiative="INIT-REALWORLD-001",
+        idempotency_key="pe.review:realworld:INIT-REALWORLD-001:draft",
+        payload={"pr_url": "https://example/pr/1"},
+    )
+    await batons.create_pending(baton, ttl=60)
+    rollup = await pe.handle_baton(baton, room="realworld-ops")
+    assert rollup.status == BatonStatus.DONE
+    walk = await batons.get(
+        tenant="realworld",
+        idempotency_key="read.walk:realworld:INIT-REALWORLD-001:meta",
+    )
+    assert walk is not None
+    assert walk.type == "read.walk"
+    live = await store.load("realworld", "adh.pe", "INIT-REALWORLD-001")
+    assert live is not None
+    assert live.programme == "pe"

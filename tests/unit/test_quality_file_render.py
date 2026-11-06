@@ -1,6 +1,6 @@
 """Quality/ask card helpers remain for meta-pm VF briefs; authoring file renders retired."""
 
-from src.business_services.hermes.cards import apply_ask_card, apply_quality_card
+from src.adh_agents.programmes.pm.cards import apply_ask_card, apply_quality_card
 
 
 def test_apply_quality_card_does_not_change_scores() -> None:

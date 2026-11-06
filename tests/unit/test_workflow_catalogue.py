@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.business_services.hermes.catalogue.resolve import resolve_next
-from src.business_services.hermes.understanding.understand_service import (
+from src.adh_agents.catalogue.resolve import resolve_next
+from src.adh_agents.understanding.understand_service import (
     HermesUnderstandService,
 )
 from src.exceptions.app_exceptions import ValidationError
@@ -120,17 +120,20 @@ def test_understand_mentions_catalogue_node(tmp_path: Path) -> None:
             return snap
 
     svc = HermesUnderstandService(catalogue=_Cat())  # type: ignore[arg-type]
-    candidates = svc.candidates_for_node_mention("run validate-requirements for INIT-RW-001")
+    candidates = svc.candidates_for_node_mention(
+        "run validate-requirements for INIT-RW-001",
+        init_prefix="INIT-RW-",
+    )
     assert candidates
     assert candidates[0].node_id == "validate-requirements"
     assert candidates[0].slots.get("initiative") == "INIT-RW-001"
-    assert svc.clarify_for(candidates) is None
+    assert svc.clarify_for(candidates, init_prefix="INIT-RW-") is None
 
-    dig = svc.candidates_for_node_mention("start validate-requirements")
+    dig = svc.candidates_for_node_mention("start validate-requirements", init_prefix="INIT-RW-")
     assert dig[0].missing_slots == ["initiative"]
-    clarify = svc.clarify_for(dig)
+    clarify = svc.clarify_for(dig, init_prefix="INIT-RW-")
     assert clarify is not None
-    assert "INIT-" in clarify.question
+    assert "INIT-RW-" in clarify.question
 
 
 def test_workflow_document_roundtrip() -> None:

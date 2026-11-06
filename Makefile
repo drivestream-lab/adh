@@ -1,4 +1,4 @@
-.PHONY: setup check check-ci format format-check lint lint-check types layers test run hermes-worker desktop-dev desktop-install orch-spawn orch-merge orch-kill
+.PHONY: setup check check-ci format format-check lint lint-check types layers test run adh-pm adh-pe adh-read adh-kb desktop-dev desktop-install
 
 # Quality ingress is Makefile-only: `make check` then `make test`.
 
@@ -33,17 +33,17 @@ test:
 run:
 	.venv/bin/python -m src.main
 
-hermes-worker:
-	@bash scripts/run_hermes_worker.sh
+adh-pm:
+	@bash scripts/run_adh_pm_worker.sh
 
-orch-spawn:
-	ORCH_ENABLE_SPAWN=true .venv/bin/python -m src.orchestrator spawn
+adh-pe:
+	@bash scripts/run_adh_pe_worker.sh
 
-orch-merge:
-	.venv/bin/python -m src.orchestrator merge
+adh-read:
+	@bash scripts/run_adh_read_worker.sh
 
-orch-kill:
-	ORCH_ENABLE_SPAWN=true ORCH_CURSOR_TIMEOUT_SECONDS=420 .venv/bin/python -m src.orchestrator kill
+adh-kb:
+	@bash scripts/run_adh_kb_worker.sh
 
 desktop-dev:
 	cd apps/buzz-desktop && npm install && npm run dev

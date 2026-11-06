@@ -76,3 +76,16 @@ class RedisBatonStore:
         baton.status = BatonStatus.FAILED if error else BatonStatus.DONE
         baton.error = error
         return await self.put(baton, ttl=ttl)
+
+    async def expire(self, baton: Baton) -> Baton:
+        """Mark expired and drop the Redis key (idempotency slot frees for retry)."""
+        baton.status = BatonStatus.EXPIRED
+        baton.updated_at = datetime.now(timezone.utc)
+        await self._redis.delete(self._key(baton))
+        logger.info(
+            "Baton expired",
+            tenant=baton.tenant,
+            key=baton.idempotency_key or baton.id,
+            baton_type=baton.type,
+        )
+        return baton

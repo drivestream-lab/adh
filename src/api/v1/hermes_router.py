@@ -1,9 +1,9 @@
-"""HTTP API for Hermes PM and after-PR lanes."""
+"""HTTP API for PM brief / eng grade / ledger (not Team OS control plane)."""
 
 from fastapi import APIRouter, Depends
 
-from src.api.dependencies import get_hermes_service
-from src.business_services.hermes_service import HermesService
+from src.api.dependencies import get_pm_http_lanes
+from src.adh_agents.programmes.pm.http_lanes import PmHttpLanesService
 from src.models.hermes_models import (
     HermesArtifactRead,
     HermesBriefRequest,
@@ -18,23 +18,23 @@ router = APIRouter(prefix="/hermes", tags=["Hermes"])
 @handle_api_errors("run PM brief", "Hermes")
 async def run_pm_brief(
     payload: HermesBriefRequest | None = None,
-    hermes: HermesService = Depends(get_hermes_service),
+    lanes: PmHttpLanesService = Depends(get_pm_http_lanes),
 ) -> HermesArtifactRead:
-    return await hermes.run_pm_brief(payload or HermesBriefRequest())
+    return await lanes.run_pm_brief(payload or HermesBriefRequest())
 
 
 @router.post("/eng/grade", response_model=HermesArtifactRead, status_code=201)
 @handle_api_errors("run eng grade", "Hermes")
 async def run_eng_grade(
     payload: HermesGradeRequest | None = None,
-    hermes: HermesService = Depends(get_hermes_service),
+    lanes: PmHttpLanesService = Depends(get_pm_http_lanes),
 ) -> HermesArtifactRead:
-    return await hermes.run_eng_grade(payload or HermesGradeRequest())
+    return await lanes.run_eng_grade(payload or HermesGradeRequest())
 
 
 @router.get("/ledger", response_model=list[HermesArtifactRead])
 @handle_api_errors("list ledger", "Hermes")
 async def list_ledger(
-    hermes: HermesService = Depends(get_hermes_service),
+    lanes: PmHttpLanesService = Depends(get_pm_http_lanes),
 ) -> list[HermesArtifactRead]:
-    return await hermes.list_ledger()
+    return await lanes.list_ledger()
