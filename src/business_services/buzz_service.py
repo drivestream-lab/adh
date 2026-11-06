@@ -191,9 +191,14 @@ class BuzzService(BaseBusinessService):
             return IdentityRead.model_validate(row)
 
     async def list_rooms(self) -> list[RoomRead]:
+        """Helpful rooms only — exclude retired Buzz memory floors (Wave 0a)."""
         async with self._postgres.get_session() as session:
             rows = await self._rooms().list_all(session, limit=500)
-            return [RoomRead.model_validate(row) for row in rows]
+            return [
+                RoomRead.model_validate(row)
+                for row in rows
+                if str(getattr(row, "kind", "") or "").lower() != RoomKind.MEMORY.value
+            ]
 
     async def create_room(self, payload: RoomCreate) -> RoomRead:
         async with self._postgres.get_session() as session:
