@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Optional
 from unittest.mock import MagicMock
-
 
 from src.business_services.hermes.collaboration.brief_service import HermesBriefService
 from src.business_services.hermes.programmes.meta_pm_programme import MetaPmProgrammeService
 from src.business_services.hermes.runtime.navigator_service import HermesNavigatorService
 from src.business_services.hermes.runtime.session_store import HermesSessionStoreService
 from src.business_services.hermes.validation_report import impact_map_path
-from src.infra_services.pm_workspace_service import hermes_post_pm_brief_path, prd_path
+from src.infra_services.pm_workspace_service import (
+    MetaInventory,
+    hermes_post_pm_brief_path,
+    prd_path,
+)
 from src.models.buzz_models import EventType
 from src.models.hermes.session_models import (
     AWAITING_AUTHORIZATION,
@@ -107,6 +111,18 @@ def _files(**paths: str) -> MagicMock:
         return paths.get(path, "")
 
     workspace.read_local = MagicMock(side_effect=_read)
+    found: set[str] = set()
+    for path in paths:
+        name = Path(path).name
+        if path.startswith("prd/") and "/" not in path[4:] and name.startswith("INIT-"):
+            found.add(name[: -len(".md")])
+        if name.startswith("Impact-Map-"):
+            found.add(name[len("Impact-Map-") :].replace(".md", ""))
+        if name.endswith("-hermes-post-pm-brief.md"):
+            found.add(name[: -len("-hermes-post-pm-brief.md")])
+    workspace.inventory = MagicMock(
+        return_value=MetaInventory(inits=sorted(found), think_paths=[], prd_paths=[])
+    )
     return workspace
 
 
@@ -139,12 +155,13 @@ async def test_resume_prefers_impact_map_authorize(tmp_path: Any) -> None:
     )
     svc, poster, store = _programme(tmp_path, workspace)
     await svc.resume_programme(_TENANT, _ROOM, _INIT)
-    session = await store.load("rw")
+    session = await store.load("rw", _INIT)
     assert session is not None
     assert session.awaiting == AWAITING_AUTHORIZATION
     assert session.stage == "prd-pr-action"
     assert session.programme == HermesProgrammeType.META_PM
     assert any((p or {}).get("status") == "resume_authorize" for _, _, p in poster.posts if p)
+    assert svc.list_resumable(_TENANT)[0]["gate"] == "authorize"
 
 
 async def test_resume_reopens_post_pm_confirm(tmp_path: Any) -> None:
@@ -156,7 +173,7 @@ async def test_resume_reopens_post_pm_confirm(tmp_path: Any) -> None:
     )
     svc, poster, store = _programme(tmp_path, workspace)
     await svc.resume_programme(_TENANT, _ROOM, _INIT)
-    session = await store.load("rw")
+    session = await store.load("rw", _INIT)
     assert session is not None
     assert session.awaiting == AWAITING_JUDGMENT
     assert session.stage == "prd-impact-acceptance"
@@ -169,5 +186,5 @@ async def test_resume_missing_prd_stalls(tmp_path: Any) -> None:
     workspace = _files()
     svc, poster, store = _programme(tmp_path, workspace)
     await svc.resume_programme(_TENANT, _ROOM, _INIT)
-    assert await store.load("rw") is None
+    assert await store.load("rw", _INIT) is None
     assert any((p or {}).get("status") == "resume_missing_prd" for _, _, p in poster.posts if p)
