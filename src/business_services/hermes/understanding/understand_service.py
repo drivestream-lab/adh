@@ -7,16 +7,16 @@ lookups and slot digs so orchestrator work can start without lead_tokens SSOT.
 
 from __future__ import annotations
 
-import re
-
 from injector import inject
 
 from src.business_services.base_business_service import BaseBusinessService
+from src.business_services.hermes.lead_tokens import (
+    extract_initiative as extract_initiative_for_prefix,
+    initiative_example,
+)
 from src.infra_services.workflow_catalogue_service import WorkflowCatalogueService
 from src.models.hermes.catalogue_models import CatalogueSnapshot, WorkflowNodeDocument
 from src.models.hermes.intent_models import ClarifyRequest, IntentCandidate
-
-_INIT_TOKEN = re.compile(r"\b(INIT-[A-Z0-9]+-\d+)\b", re.I)
 
 
 class HermesUnderstandService(BaseBusinessService):
@@ -30,12 +30,14 @@ class HermesUnderstandService(BaseBusinessService):
     def catalogue(self) -> CatalogueSnapshot:
         return self._catalogue.snapshot()
 
-    def candidates_for_node_mention(self, body: str) -> list[IntentCandidate]:
+    def candidates_for_node_mention(
+        self, body: str, *, init_prefix: str = ""
+    ) -> list[IntentCandidate]:
         """Exact / substring match on node_id or purpose — no phrase allowlist.
 
         Returns ranked candidates when Lead names a catalogue id or purpose
-        slug. Missing ``initiative`` is always listed when an INIT token is
-        absent so callers can dig.
+        slug. Missing ``initiative`` is listed when no prefix-matching token is
+        present so callers can dig.
         """
         text = (body or "").strip()
         if not text:
@@ -49,7 +51,7 @@ class HermesUnderstandService(BaseBusinessService):
                 continue
             slots: dict[str, str] = {}
             missing: list[str] = []
-            initiative = _extract_initiative(text)
+            initiative = extract_initiative_for_prefix(text, init_prefix) if init_prefix else None
             if initiative:
                 slots["initiative"] = initiative
             else:
@@ -66,20 +68,27 @@ class HermesUnderstandService(BaseBusinessService):
         found.sort(key=lambda c: c.confidence, reverse=True)
         return found
 
-    def extract_initiative(self, text: str) -> str | None:
-        """INIT-… token from free text (uppercased), or None."""
-        return _extract_initiative(text)
+    def extract_initiative(self, text: str, init_prefix: str = "") -> str | None:
+        """Programme-prefix initiative token from free text (uppercased), or None."""
+        if not init_prefix:
+            return None
+        return extract_initiative_for_prefix(text, init_prefix)
 
-    def clarify_for(self, candidates: list[IntentCandidate]) -> ClarifyRequest | None:
+    def clarify_for(
+        self, candidates: list[IntentCandidate], *, init_prefix: str = ""
+    ) -> ClarifyRequest | None:
         if not candidates:
             return None
         missing = sorted({slot for c in candidates for slot in c.missing_slots})
         if not missing:
             return None
         if "initiative" in missing:
+            example = (
+                initiative_example(init_prefix) if init_prefix else "the programme initiative id"
+            )
             question = (
-                "Which initiative should I use? Reply with an INIT-… id "
-                "(example: INIT-REALWORLD-001)."
+                "Which initiative should I use? Reply with the programme initiative id "
+                f"(example: {example})."
             )
         else:
             question = f"Need more detail for: {', '.join(missing)}."
@@ -107,10 +116,3 @@ def _mention_score(lowered_body: str, node: WorkflowNodeDocument) -> float:
     if spaced and spaced in lowered_body:
         return 0.9
     return 0.0
-
-
-def _extract_initiative(text: str) -> str | None:
-    match = _INIT_TOKEN.search(text)
-    if match is None:
-        return None
-    return match.group(1).upper()

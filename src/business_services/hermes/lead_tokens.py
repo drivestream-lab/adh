@@ -31,7 +31,7 @@ def ask_shaped_outline(body: str) -> bool:
 
 
 def is_lead_outline_body(body: str, *, min_chars: int) -> bool:
-    """Outline only if long enough and not ask-shaped (INIT-002 class)."""
+    """Outline only if long enough and not ask-shaped (fork-answer class)."""
     text = (body or "").strip()
     if len(text) < min_chars:
         return False
@@ -153,26 +153,70 @@ def lock_token(slug: str, fingerprint: str) -> str:
     return f"{slug}:{fingerprint}"
 
 
-def _is_numbered_init(token: str, tenant: TenantContext) -> bool:
-    prefix = tenant.init_prefix.upper()
+def init_prefix_base(prefix: str) -> str:
+    """Normalised programme initiative prefix without a trailing dash."""
+    return (prefix or "").strip().rstrip("-").upper()
+
+
+def initiative_example(prefix: str, number: int = 1) -> str:
+    """Example initiative id for Lead copy, derived from programme prefix."""
+    base = init_prefix_base(prefix)
+    if not base:
+        return f"INITIATIVE-{number:03d}"
+    return f"{base}-{number:03d}"
+
+
+def is_numbered_init(token: str, prefix: str) -> bool:
+    """True when token is ``{prefix}{digits}`` (prefix may include a trailing dash)."""
+    base = init_prefix_base(prefix)
     body = (token or "").strip().upper()
-    if not prefix or not body.startswith(prefix):
+    if not base or not body.startswith(base + "-"):
         return False
-    rest = body[len(prefix) :]
+    rest = body[len(base) + 1 :]
     return bool(rest) and rest.isdigit()
 
 
-def _coerce_init(proposed: str, slug: str) -> str:
-    prefix = f"INIT-{slug.upper()}-"
+def _is_numbered_init(token: str, tenant: TenantContext) -> bool:
+    """Back-compat wrapper — prefer :func:`is_numbered_init` with ``tenant.init_prefix``."""
+    return is_numbered_init(token, tenant.init_prefix)
+
+
+def extract_initiative(text: str, prefix: str) -> Optional[str]:
+    """Pull a numbered initiative matching the programme prefix from free text."""
+    base = init_prefix_base(prefix)
+    if not base:
+        return None
+    pattern = re.compile(rf"\b({re.escape(base)}-\d+)\b", re.I)
+    match = pattern.search(text or "")
+    if match is None:
+        return None
+    return match.group(1).upper()
+
+
+def coerce_init(proposed: str, prefix: str) -> str:
+    """Map a proposed id onto the programme prefix; PENDING when unusable."""
+    base = init_prefix_base(prefix)
+    if not base:
+        raise ValueError("programme initiative prefix is missing")
+    pending = f"{base}-PENDING"
     token = (proposed or "").strip().upper()
-    if not token.startswith("INIT-"):
-        return f"{prefix}PENDING"
-    rest = token[len("INIT-") :]
-    for drop in (f"{slug.upper()}-", "RW-", "ADH-"):
-        if rest.startswith(drop):
-            rest = rest[len(drop) :]
-            break
-    rest = re.sub(r"[^A-Z0-9-]", "", rest).strip("-")
-    if not rest or rest == "PENDING":
-        return f"{prefix}PENDING"
-    return f"{prefix}{rest}"
+    if not token:
+        return pending
+    if is_numbered_init(token, prefix):
+        return token
+    if token.isdigit():
+        return f"{base}-{int(token):03d}"
+    if token.startswith(base + "-"):
+        rest = token[len(base) + 1 :]
+        if rest.isdigit():
+            return f"{base}-{int(rest):03d}"
+        return pending
+    trailing = re.search(r"(\d+)$", token)
+    if trailing:
+        return f"{base}-{int(trailing.group(1)):03d}"
+    return pending
+
+
+def _coerce_init(proposed: str, slug: str) -> str:
+    """Back-compat for tests — derive prefix from slug via TenantContext default shape."""
+    return coerce_init(proposed, f"INIT-{slug.upper()}-")

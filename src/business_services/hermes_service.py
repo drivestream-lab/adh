@@ -156,7 +156,8 @@ class HermesService(
             )
         parsed, raw, model = result.parsed, result.raw, result.model
         proposed = str(parsed.get("proposed_init") or "").strip()
-        if proposed.startswith("INIT-"):
+        # Accept model-proposed initiative ids without assuming an INIT- spelling.
+        if proposed and "PENDING" not in proposed.upper():
             initiative = proposed
         scores = _as_float_map(parsed.get("scores"))
         overall = weighted_overall(scores, RUBRIC_PM)

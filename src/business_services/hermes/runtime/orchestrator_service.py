@@ -10,6 +10,7 @@ from injector import inject
 from src.business_services.base_business_service import BaseBusinessService
 from src.business_services.hermes.collaboration.brief_service import HermesBriefService
 from src.business_services.hermes.execution.dispatch_service import HermesDispatchService
+from src.business_services.hermes.lead_tokens import initiative_example
 from src.business_services.hermes.runtime.navigator_service import HermesNavigatorService
 from src.business_services.hermes.runtime.session_store import (
     UNBOUND_INITIATIVE,
@@ -161,7 +162,10 @@ class HermesCollaboratorService(BaseBusinessService):
         if any(s.programme == HermesProgrammeType.AUTHORING for s in active):
             # Only steal if this looks like meta-pm fresh intent.
             if not (
-                _POST_PM_HINT.search(body) or self._understand.candidates_for_node_mention(body)
+                _POST_PM_HINT.search(body)
+                or self._understand.candidates_for_node_mention(
+                    body, init_prefix=tenant.init_prefix
+                )
             ):
                 return False
 
@@ -277,11 +281,12 @@ class HermesCollaboratorService(BaseBusinessService):
             (
                 "I can't find an open gate or resumable initiative. "
                 "Paste a new outline, promote a think file, or say `post-pm` once a PRD exists. "
-                "If you know the INIT id, reply with it and I will try to bind it."
+                "If you know the initiative id, reply with it and I will try to bind it "
+                f"(example: `{initiative_example(tenant.init_prefix)}`)."
             ),
             EventType.STALL,
         )
-        # Keep Lead in a clarify loop so a named INIT can still bind.
+        # Keep Lead in a clarify loop so a named initiative can still bind.
         session = HermesSession(
             tenant_slug=tenant.slug,
             room=room,
@@ -360,7 +365,7 @@ class HermesCollaboratorService(BaseBusinessService):
         raw = session.slots.get(_RESUME_CANDIDATES) or ""
         options = [p.strip() for p in raw.split(",") if p.strip()]
         intent = session.slots.get(_RESUME_INTENT) or "resume"
-        initiative = self._understand.extract_initiative(body)
+        initiative = self._understand.extract_initiative(body, tenant.init_prefix)
         if initiative is None and options:
             # Exact option match (case-insensitive).
             lowered = body.strip().lower()
@@ -376,9 +381,13 @@ class HermesCollaboratorService(BaseBusinessService):
                     EventType.STALL,
                 )
             else:
+                example = initiative_example(tenant.init_prefix)
                 await self._say(
                     room,
-                    "Still need an INIT-… id, or paste an outline / say `post-pm` once a PRD exists.",
+                    (
+                        f"Still need an initiative id (example: `{example}`), "
+                        "or paste an outline / say `post-pm` once a PRD exists."
+                    ),
                     EventType.STALL,
                 )
             return True
@@ -423,11 +432,12 @@ class HermesCollaboratorService(BaseBusinessService):
     async def _on_clarify(
         self, tenant: TenantContext, room: str, session: HermesSession, body: str
     ) -> bool:
-        initiative = self._understand.extract_initiative(body)
+        initiative = self._understand.extract_initiative(body, tenant.init_prefix)
         if initiative is None:
+            example = initiative_example(tenant.init_prefix)
             await self._say(
                 room,
-                "I still need an INIT-… id (example: INIT-REALWORLD-001).",
+                f"I still need an initiative id (example: `{example}`).",
                 EventType.STALL,
             )
             return True
@@ -504,8 +514,9 @@ class HermesCollaboratorService(BaseBusinessService):
     async def _on_fresh(
         self, tenant: TenantContext, room: str, session: HermesSession, body: str
     ) -> bool:
-        candidates = self._understand.candidates_for_node_mention(body)
-        initiative = self._understand.extract_initiative(body) or session.initiative
+        prefix = tenant.init_prefix
+        candidates = self._understand.candidates_for_node_mention(body, init_prefix=prefix)
+        initiative = self._understand.extract_initiative(body, prefix) or session.initiative
         if not candidates and _POST_PM_HINT.search(body):
             entry = self._understand.entrypoint_node(_PM_ENTRYPOINT)
             candidates = [
@@ -526,7 +537,7 @@ class HermesCollaboratorService(BaseBusinessService):
                     "slots": {**top.slots, "initiative": initiative},
                 }
             )
-        clarify = self._understand.clarify_for([top])
+        clarify = self._understand.clarify_for([top], init_prefix=prefix)
         if clarify is not None:
             return await self._ask_clarify(room, session, top.node_id, clarify)
         return await self._begin(tenant, room, session, top.node_id, initiative or "")

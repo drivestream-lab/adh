@@ -19,14 +19,21 @@ from src.models.tenant_models import TenantContext
 logger = get_logger()
 
 _PM_APP_SLUG = "adh-dev-pm"
-_INIT_STEM = re.compile(
-    r"^(INIT-[A-Z0-9-]+?)(?:-PRD-THINK(?:-\d+)?|-PRD-QUALITY|-PRD-ASK|-PRD-RECOMMEND)?$"
+_REPORT_SUFFIX = re.compile(
+    r"(?:-PRD-THINK(?:-\d+)?|-PRD-QUALITY|-PRD-ASK|-PRD-RECOMMEND|"
+    r"-HERMES-PROMOTE-BRIEF|-HERMES-POST-PM-BRIEF)$",
+    re.I,
+)
+_REPORT_LEAD = (
+    "IMPACT-MAP-",
+    "VALIDATION-REPORT-",
+    "RESOLUTION-",
 )
 
 
 @dataclass
 class MetaInventory:
-    """T0 listing of INIT ids and think files already on the tenant meta repo."""
+    """T0 listing of initiative ids and think files already on the tenant meta repo."""
 
     inits: list[str] = field(default_factory=list)
     think_paths: list[str] = field(default_factory=list)
@@ -101,15 +108,15 @@ def skeleton_material_fails(file_body: str) -> list[str]:
 
 
 def next_programme_init(prefix: str, occupied: list[str]) -> str:
-    """Next INIT-{COMPONENT}-{NUMBER} from programme.yaml prefix + occupied meta ids.
+    """Next ``{prefix}{NUMBER}`` from programme.yaml prefix + occupied meta ids.
 
-    COMPONENT is the programme slug. NUMBER is the next unused integer among
-    occupied INIT-{COMPONENT}-{n} files (three digits). Job-shaped rest tokens
-    are ignored. Does not invent a slug from the outline.
+    Prefix comes from the tenant programme (``init_prefix``). NUMBER is the next
+    unused integer among occupied ``{prefix}{n}`` files (three digits). Job-shaped
+    rest tokens are ignored. Does not invent a slug from the outline.
     """
     base = (prefix or "").strip().rstrip("-").upper()
-    if not base.startswith("INIT-") or base == "INIT":
-        raise ValueError("programme INIT prefix is missing")
+    if not base:
+        raise ValueError("programme initiative prefix is missing")
     pattern = re.compile(rf"^{re.escape(base)}-(\d+)$")
     highest = 0
     for token in occupied:
@@ -147,8 +154,9 @@ class PmWorkspaceService(BaseInfraService):
         return self._initialized
 
     def inventory(self, tenant: TenantContext) -> MetaInventory:
-        """Read INIT ids from tenant meta prd/ and prd/reports/. Does not invent ids."""
+        """Read initiative ids from tenant meta prd/ and prd/reports/. Does not invent ids."""
         root = Path(tenant.meta_root).expanduser()
+        prefix = tenant.init_prefix
         inits: set[str] = set()
         think_paths: list[str] = []
         prd_paths: list[str] = []
@@ -161,7 +169,7 @@ class PmWorkspaceService(BaseInfraService):
             for path in sorted(folder.iterdir()):
                 if not path.is_file() or path.suffix.lower() != ".md":
                     continue
-                initiative = _init_from_filename(path.name)
+                initiative = initiative_from_filename(path.name, prefix)
                 if initiative is None:
                     continue
                 inits.add(initiative)
@@ -480,15 +488,23 @@ class PmWorkspaceService(BaseInfraService):
             return None
 
 
-def _init_from_filename(name: str) -> Optional[str]:
+def initiative_from_filename(name: str, prefix: str) -> Optional[str]:
+    """Parse an initiative id from a meta filename using the programme prefix."""
+    base = (prefix or "").strip().rstrip("-").upper()
+    if not base:
+        return None
     stem = Path(name).stem.upper()
-    match = _INIT_STEM.match(stem)
-    if match is None:
+    for lead in _REPORT_LEAD:
+        if stem.startswith(lead):
+            stem = stem[len(lead) :]
+            break
+    else:
+        stem = _REPORT_SUFFIX.sub("", stem)
+    if not stem or "PENDING" in stem:
         return None
-    token = match.group(1)
-    if not token or "PENDING" in token:
-        return None
-    return token
+    if stem == base or stem.startswith(base + "-"):
+        return stem
+    return None
 
 
 def _pm_app(roles_path: Path) -> AppRole:

@@ -35,7 +35,9 @@ class HermesSession(BaseModel):
 
     tenant_slug: str = Field(..., min_length=1)
     room: str = Field(..., min_length=1)
-    initiative: Optional[str] = Field(default=None, description="INIT-… once bound")
+    initiative: Optional[str] = Field(
+        default=None, description="Programme initiative id once bound (from tenant.init_prefix)"
+    )
     stage: str = Field(default="", description="Workflow node id (catalogue string)")
     awaiting: str = Field(
         default=AWAITING_NONE,

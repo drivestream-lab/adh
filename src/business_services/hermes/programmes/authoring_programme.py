@@ -25,8 +25,10 @@ from src.business_services.hermes.decision_card import (
 )
 from src.business_services.hermes.execution.dispatch_service import HermesDispatchService
 from src.business_services.hermes.lead_tokens import (
-    _coerce_init,
-    _is_numbered_init,
+    coerce_init,
+    extract_initiative,
+    initiative_example,
+    is_numbered_init,
     parse_promote_pick,
     promote_pick_wants_clean,
 )
@@ -63,7 +65,6 @@ _SLOT_THINKS = "authoring_think_paths"
 _SLOT_QUALITY = "authoring_quality_path"
 _SLOT_OUTLINE = "authoring_outline"
 _SLOT_PROMOTE_PATHS = "authoring_promote_paths"
-_INIT_TOKEN = re.compile(r"\b(INIT-[A-Z0-9]+-\d+)\b", re.I)
 
 
 class AuthoringProgrammeService(BaseBusinessService):
@@ -101,14 +102,14 @@ class AuthoringProgrammeService(BaseBusinessService):
         listing = self._workspace.inventory(tenant)
         try:
             resolved = (
-                _coerce_init(initiative, tenant.slug)
+                coerce_init(initiative, tenant.init_prefix)
                 if initiative
                 else next_programme_init(tenant.init_prefix, listing.inits)
             )
         except ValueError:
             await self._ask_for_init(tenant, room, outline, fingerprint, source_id)
             return
-        if not _is_numbered_init(resolved, tenant):
+        if not is_numbered_init(resolved, tenant.init_prefix):
             await self._ask_for_init(tenant, room, outline, fingerprint, source_id)
             return
         session = HermesSession(
@@ -225,8 +226,8 @@ class AuthoringProgrammeService(BaseBusinessService):
                 return True
         # Dig INIT while clarifying
         if session.awaiting == AWAITING_CLARIFY or not session.initiative:
-            match = _INIT_TOKEN.search(body)
-            if match:
+            picked = extract_initiative(body, tenant.init_prefix)
+            if picked:
                 outline = session.slots.get(_SLOT_OUTLINE) or ""
                 fingerprint = session.slots.get("fingerprint") or ""
                 source_id = session.slots.get("source_id") or ""
@@ -236,7 +237,7 @@ class AuthoringProgrammeService(BaseBusinessService):
                     outline,
                     fingerprint=fingerprint,
                     source_id=source_id,
-                    initiative=match.group(1).upper(),
+                    initiative=picked,
                 )
                 return True
         return True  # chatter while authoring open
@@ -249,7 +250,7 @@ class AuthoringProgrammeService(BaseBusinessService):
         fingerprint: str,
         source_id: str,
     ) -> None:
-        prefix = (tenant.init_prefix or f"INIT-{tenant.slug.upper()}-").rstrip("-") + "-"
+        example = initiative_example(tenant.init_prefix)
         session = HermesSession(
             tenant_slug=tenant.slug,
             room=room,
@@ -264,7 +265,7 @@ class AuthoringProgrammeService(BaseBusinessService):
         await self._store.save(session)
         await self._poster.post_status(
             room,
-            f"Name an initiative id (example `{prefix}001`) to start authoring.",
+            f"Name an initiative id (example `{example}`) to start authoring.",
             EventType.STALL,
             {"status": "need_init", "programme_slug": tenant.slug},
         )

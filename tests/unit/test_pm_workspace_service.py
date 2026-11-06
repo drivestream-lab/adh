@@ -243,11 +243,16 @@ def test_next_free_think_skips_existing() -> None:
 
 
 def test_next_programme_init_uses_harness_numbering() -> None:
+    from src.infra_services.pm_workspace_service import initiative_from_filename
+
     prefix = "INIT-REALWORLD-"
     assert next_programme_init(prefix, []) == "INIT-REALWORLD-001"
     assert next_programme_init(prefix, ["INIT-REALWORLD-001"]) == "INIT-REALWORLD-002"
     assert next_programme_init(prefix, ["INIT-REALWORLD-017"]) == "INIT-REALWORLD-018"
     assert next_programme_init(prefix, ["INIT-REALWORLD-HOME-PUBLISH-001"]) == "INIT-REALWORLD-001"
+    assert next_programme_init("TEAM-FOO-", []) == "TEAM-FOO-001"
+    assert initiative_from_filename("TEAM-FOO-003-prd-think.md", "TEAM-FOO-") == "TEAM-FOO-003"
+    assert initiative_from_filename("INIT-REALWORLD-001.md", "TEAM-FOO-") is None
 
 
 def test_skeleton_material_fails_empty_job_and_placeholders() -> None:
