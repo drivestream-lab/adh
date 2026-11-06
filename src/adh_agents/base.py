@@ -204,10 +204,21 @@ class BaseHermesAgent(BaseBusinessService, abc.ABC):
 
 
 def _parse_stream_message(raw: Any) -> Optional[MessageRead]:
-    if not isinstance(raw, dict) or raw.get("type") in {"ping", "subscribed"}:
+    """Buzz SSE yields JSON strings (same contract as former HermesService listener)."""
+    import json
+
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8")
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    elif isinstance(raw, dict):
+        data = raw
+    else:
         return None
-    data = raw.get("message") or raw.get("data") or raw
-    if not isinstance(data, dict):
+    if not isinstance(data, dict) or data.get("type") in {"ping", "subscribed"}:
         return None
     try:
         return MessageRead.model_validate(data)
