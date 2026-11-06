@@ -121,17 +121,55 @@ class MetaPmProgrammeService(BaseBusinessService):
         await self._store.save(session)
         await self._run_validate_cycle(tenant, room, session, pass_number=1)
 
+    def list_resumable(self, tenant: TenantContext) -> list[dict[str, str]]:
+        """Artefact-backed recovery candidates: initiative + gate label."""
+        listing = self._workspace.inventory(tenant)
+        rows: list[dict[str, str]] = []
+        for init in listing.inits:
+            impact = (self._workspace.read_local(tenant, impact_map_path(init)) or "").strip()
+            if impact:
+                rows.append(
+                    {
+                        "initiative": init,
+                        "gate": "authorize",
+                        "hint": f"{init} — draft-PR authorize (Impact-Map present)",
+                    }
+                )
+                continue
+            post_pm = (
+                self._workspace.read_local(tenant, hermes_post_pm_brief_path(init)) or ""
+            ).strip()
+            if post_pm:
+                rows.append(
+                    {
+                        "initiative": init,
+                        "gate": "post-pm-confirm",
+                        "hint": f"{init} — post-PM confirm/revise",
+                    }
+                )
+                continue
+            prd = (self._workspace.read_local(tenant, prd_path(init)) or "").strip()
+            if prd:
+                rows.append(
+                    {
+                        "initiative": init,
+                        "gate": "validate",
+                        "hint": f"{init} — post-pm / validate (PRD present)",
+                    }
+                )
+        return rows
+
     async def resume_programme(self, tenant: TenantContext, room: str, initiative: str) -> None:
         """Rebuild the latest human gate from local artefacts after session TTL loss.
 
         Prefer: Impact-Map → draft-PR authorize; else post-PM brief → confirm/revise;
-        else promoted PRD → start validate (same as ``post-pm INIT-…``).
+        else promoted PRD → start validate (same as ``post-pm`` once INIT is bound).
         """
         init = (initiative or "").strip().upper()
         if not init:
             await self._poster.post_status(
                 room,
-                "Resume needs an INIT-… id (example: `resume INIT-REALWORLD-001`).",
+                "Which initiative should I resume? Reply with an INIT-… id.",
                 EventType.STALL,
             )
             return

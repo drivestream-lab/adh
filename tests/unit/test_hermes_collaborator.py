@@ -17,6 +17,7 @@ from src.business_services.hermes.runtime.orchestrator_service import (
 from src.business_services.hermes.runtime.session_store import (
     HermesSessionStoreService,
     session_key,
+    sessions_index_key,
 )
 from src.business_services.hermes.understanding.understand_service import (
     HermesUnderstandService,
@@ -97,6 +98,7 @@ class _FakeRunner:
         self.started: list[HermesSession] = []
         self.judgments: list[str] = []
         self.resumed: list[str] = []
+        self.resumable: list[dict[str, str]] = []
 
     async def start_programme(self, tenant: Any, room: str, session: HermesSession) -> None:
         self.started.append(session.model_copy())
@@ -108,6 +110,9 @@ class _FakeRunner:
 
     async def resume_programme(self, tenant: Any, room: str, initiative: str) -> None:
         self.resumed.append(initiative)
+
+    def list_resumable(self, tenant: Any) -> list[dict[str, str]]:
+        return list(self.resumable)
 
 
 _TENANT = TenantContext(
@@ -165,19 +170,26 @@ async def test_session_roundtrip_and_clear() -> None:
 
     redis = _FakeRedis()
     store = HermesSessionStoreService(redis=redis)  # type: ignore[arg-type]
-    assert await store.load("rw") is None
+    assert await store.load("rw", "INIT-RW-001") is None
     session = HermesSession(
-        tenant_slug="rw", room=_ROOM, stage="validate-requirements", slots={"a": "b"}
+        tenant_slug="rw",
+        room=_ROOM,
+        initiative="INIT-RW-001",
+        stage="validate-requirements",
+        slots={"a": "b"},
     )
     await store.save(session)
-    assert session_key("rw") == "adh:hermes:session:rw"
-    assert redis.ttls[session_key("rw")] == HermesSettings.get_instance().session_ttl_seconds
-    loaded = await store.load("rw")
+    key = session_key("rw", "INIT-RW-001")
+    assert key == "adh:hermes:session:rw:INIT-RW-001"
+    assert redis.ttls[key] == HermesSettings.get_instance().session_ttl_seconds
+    assert await store.has_active("rw") is True
+    loaded = await store.load("rw", "INIT-RW-001")
     assert loaded is not None
     assert loaded.stage == "validate-requirements"
     assert loaded.slots == {"a": "b"}
-    await store.clear("rw")
-    assert await store.load("rw") is None
+    await store.clear("rw", "INIT-RW-001")
+    assert await store.load("rw", "INIT-RW-001") is None
+    assert sessions_index_key("rw") not in redis.data or not await store.has_active("rw")
 
 
 def test_session_awaiting_rejects_unknown_value() -> None:
@@ -262,7 +274,7 @@ async def test_collaborator_defers_authoring_programme_sessions(tmp_path: Path) 
         )
     )
     assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("C2")) is False
-    session = await h.store.load("rw")
+    session = await h.store.load("rw", "INIT-RW-001")
     assert session is not None
     assert session.awaiting == AWAITING_JUDGMENT
     assert session.open_brief is not None
@@ -270,21 +282,29 @@ async def test_collaborator_defers_authoring_programme_sessions(tmp_path: Path) 
 
 async def test_collaborator_stop_clears_session(tmp_path: Path) -> None:
     h = _Harness(tmp_path)
-    await h.store.save(HermesSession(tenant_slug="rw", room=_ROOM, awaiting=AWAITING_CLARIFY))
+    await h.store.save(
+        HermesSession(
+            tenant_slug="rw",
+            room=_ROOM,
+            initiative="INIT-RW-001",
+            programme=HermesProgrammeType.META_PM,
+            awaiting=AWAITING_CLARIFY,
+        )
+    )
     assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg(" Stop ")) is True
-    assert await h.store.load("rw") is None
+    assert await h.store.load("rw", "INIT-RW-001") is None
 
 
 async def test_collaborator_clarify_then_init_starts_programme(tmp_path: Path) -> None:
     h = _Harness(tmp_path)
     assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("start validate-requirements"))
-    session = await h.store.load("rw")
+    session = await h.store.load_unbound("rw")
     assert session is not None
     assert session.awaiting == AWAITING_CLARIFY
     assert "INIT-" in h.poster.posts[-1]
 
     assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("it's init-rw-001"))
-    session = await h.store.load("rw")
+    session = await h.store.load("rw", "INIT-RW-001")
     assert session is not None
     assert session.awaiting == AWAITING_NONE
     assert session.initiative == "INIT-RW-001"
@@ -296,30 +316,78 @@ async def test_collaborator_clarify_then_init_starts_programme(tmp_path: Path) -
 async def test_collaborator_post_pm_without_initiative_digs(tmp_path: Path) -> None:
     h = _Harness(tmp_path)
     assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("let's do post-pm now"))
-    session = await h.store.load("rw")
+    session = await h.store.load_unbound("rw")
     assert session is not None
     assert session.awaiting == AWAITING_CLARIFY
     assert session.slots["pending_node"] == "validate-requirements"
 
 
-async def test_collaborator_resume_with_initiative_delegates(tmp_path: Path) -> None:
+async def test_collaborator_resume_single_candidate_auto_binds(tmp_path: Path) -> None:
     h = _Harness(tmp_path)
-    assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("resume INIT-REALWORLD-001"))
+    h.runner.resumable = [
+        {
+            "initiative": "INIT-REALWORLD-001",
+            "gate": "post-pm-confirm",
+            "hint": "INIT-REALWORLD-001 — post-PM confirm",
+        }
+    ]
+    assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("resume"))
     assert h.runner.resumed == ["INIT-REALWORLD-001"]
 
 
-async def test_collaborator_resume_without_initiative_nudge(tmp_path: Path) -> None:
+async def test_collaborator_resume_many_candidates_asks_back(tmp_path: Path) -> None:
     h = _Harness(tmp_path)
+    h.runner.resumable = [
+        {"initiative": "INIT-RW-001", "gate": "post-pm-confirm", "hint": "001 confirm"},
+        {"initiative": "INIT-RW-002", "gate": "authorize", "hint": "002 authorize"},
+    ]
     assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("please resume"))
     assert h.runner.resumed == []
-    assert any("INIT-" in p for p in h.poster.posts)
+    assert any("Several initiatives" in p for p in h.poster.posts)
+    unbound = await h.store.load_unbound("rw")
+    assert unbound is not None and unbound.awaiting == AWAITING_CLARIFY
+
+    assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("INIT-RW-002"))
+    assert h.runner.resumed == ["INIT-RW-002"]
 
 
-async def test_collaborator_bare_confirm_without_session_nudge(tmp_path: Path) -> None:
+async def test_collaborator_bare_confirm_zero_candidates_asks_back(tmp_path: Path) -> None:
     h = _Harness(tmp_path)
-    assert await h.store.load("rw") is None
+    assert await h.store.has_active("rw") is False
     assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("confirm")) is True
-    assert any("resume INIT-" in p for p in h.poster.posts)
+    assert any("can't find" in p.lower() or "cannot find" in p.lower() for p in h.poster.posts)
+    unbound = await h.store.load_unbound("rw")
+    assert unbound is not None and unbound.awaiting == AWAITING_CLARIFY
+
+
+async def test_collaborator_ambiguous_confirm_asks_which_init(tmp_path: Path) -> None:
+    h = _Harness(tmp_path)
+    brief = h.briefs.build_brief(
+        purpose="prd-impact-acceptance",
+        node_id="prd-impact-acceptance",
+        question="Proceed?",
+        example="confirm",
+        options=["confirm", "revise"],
+        recommend="confirm",
+        reply_tokens=["confirm", "revise"],
+    )
+    for init in ("INIT-RW-001", "INIT-RW-002"):
+        await h.store.save(
+            HermesSession(
+                tenant_slug="rw",
+                room=_ROOM,
+                initiative=init,
+                programme=HermesProgrammeType.META_PM,
+                stage="prd-impact-acceptance",
+                awaiting=AWAITING_JUDGMENT,
+                open_brief=brief,
+            )
+        )
+    assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("confirm")) is True
+    assert h.runner.judgments == []
+    assert any(
+        "more than one" in p.lower() or "which initiative" in p.lower() for p in h.poster.posts
+    )
 
 
 async def test_collaborator_ignores_unrelated_message(tmp_path: Path) -> None:
@@ -334,17 +402,19 @@ async def test_collaborator_matches_judgment_token(tmp_path: Path) -> None:
         HermesSession(
             tenant_slug="rw",
             room=_ROOM,
+            initiative="INIT-RW-001",
+            programme=HermesProgrammeType.META_PM,
             stage="requirements-human-decision",
             awaiting=AWAITING_JUDGMENT,
             open_brief=brief,
         )
     )
     assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("what?")) is True
-    session = await h.store.load("rw")
+    session = await h.store.load("rw", "INIT-RW-001")
     assert session is not None and session.awaiting == AWAITING_JUDGMENT
 
     assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("VF-01: fix"))
-    session = await h.store.load("rw")
+    session = await h.store.load("rw", "INIT-RW-001")
     assert session is not None
     assert session.awaiting == AWAITING_NONE
     assert session.open_brief is None
@@ -359,6 +429,7 @@ async def test_collaborator_authorization_dispatches_forge(tmp_path: Path) -> No
             tenant_slug="rw",
             room=_ROOM,
             initiative="INIT-RW-001",
+            programme=HermesProgrammeType.META_PM,
             stage="prd-pr-action",
             awaiting=AWAITING_AUTHORIZATION,
             open_brief=brief,
@@ -369,7 +440,7 @@ async def test_collaborator_authorization_dispatches_forge(tmp_path: Path) -> No
 
     assert await h.collab.handle_lead_message(_TENANT, _ROOM, _msg("Go ahead please"))
     assert h.dispatch.calls == ["prd-pr-action"]
-    session = await h.store.load("rw")
+    session = await h.store.load("rw", "INIT-RW-001")
     assert session is not None
     # Forge authorize clears the gate; mini-catalogue may advance stage afterward.
     assert session.awaiting == AWAITING_NONE

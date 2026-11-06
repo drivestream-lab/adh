@@ -291,34 +291,22 @@ class HermesService(
         if not self._is_lead_outline(message):
             return
         fingerprint = outline_fingerprint(message.body)
-        if self._tenant_has_open_work(tenant.slug):
-            token = _lock_token(tenant.slug, fingerprint)
-            if token in self._inflight:
-                owner = self._inflight.get(token) or await self._redis.get(
-                    self._lock_key(tenant.slug, fingerprint)
-                )
-                await self._status(
-                    room,
-                    self._copy("hermes.pm.status.duplicate"),
-                    EventType.STALL,
-                    {
-                        "status": "duplicate",
-                        "outline_fingerprint": fingerprint,
-                        "programme_slug": tenant.slug,
-                        "source_message_id": str(message.id) if message.id else "",
-                        "in_progress_source": owner,
-                    },
-                )
-                return
+        # Parallel initiatives allowed: only the same outline fingerprint is a duplicate.
+        token = _lock_token(tenant.slug, fingerprint)
+        if token in self._inflight:
+            owner = self._inflight.get(token) or await self._redis.get(
+                self._lock_key(tenant.slug, fingerprint)
+            )
             await self._status(
                 room,
-                self._copy("hermes.pm.status.busy"),
+                self._copy("hermes.pm.status.duplicate"),
                 EventType.STALL,
                 {
-                    "status": "busy",
+                    "status": "duplicate",
                     "outline_fingerprint": fingerprint,
                     "programme_slug": tenant.slug,
                     "source_message_id": str(message.id) if message.id else "",
+                    "in_progress_source": owner,
                 },
             )
             return
@@ -368,10 +356,25 @@ class HermesService(
             finally:
                 await self._release_outline(tenant.slug, fingerprint)
 
-        self._track_outline_task(tenant.slug, asyncio.create_task(_run()))
+        self._track_outline_task(tenant.slug, fingerprint, asyncio.create_task(_run()))
 
     async def catch_up_ops(self, room: str) -> None:
-        """Public for PMAgent boot — replay recent unacked Lead outlines."""
+        """Public for PMAgent boot — replay recent unacked Lead outlines.
+
+        Skip when any initiative session is already active so catch-up cannot
+        mint INIT-N+1 over an open authoring/meta-pm gate (parallel pressure-test).
+        """
+        tenant = self._tenants.by_ops_room(room)
+        if tenant is not None:
+            store = getattr(self._collaborator, "_store", None)
+            has_active = getattr(store, "has_active", None) if store is not None else None
+            if has_active is not None and await has_active(tenant.slug):
+                self.logger.info(
+                    "catch_up_ops skipped — active Hermes sessions present",
+                    room=room,
+                    slug=tenant.slug,
+                )
+                return
         rows = await self._buzz.list_messages(room, limit=200)
         seen: set[str] = set()
         pending: list[MessageRead] = []
@@ -398,15 +401,16 @@ class HermesService(
             return False
         return is_lead_outline_body(message.body, min_chars=int(self._settings.outline_min_chars))
 
-    def _track_outline_task(self, slug: str, task: asyncio.Task[None]) -> None:
-        prior = self._outline_tasks.pop(slug, None)
+    def _track_outline_task(self, slug: str, fingerprint: str, task: asyncio.Task[None]) -> None:
+        key = f"{slug}:{fingerprint}"
+        prior = self._outline_tasks.pop(key, None)
         if prior is not None and not prior.done():
             prior.cancel()
-        self._outline_tasks[slug] = task
+        self._outline_tasks[key] = task
 
         def _done(done: asyncio.Task[None]) -> None:
-            if self._outline_tasks.get(slug) is done:
-                self._outline_tasks.pop(slug, None)
+            if self._outline_tasks.get(key) is done:
+                self._outline_tasks.pop(key, None)
 
         task.add_done_callback(_done)
 

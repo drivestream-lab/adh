@@ -18,6 +18,11 @@ class PendingMixin:
     """Outline inflight locks only — programme waits live on HermesSession."""
 
     def _tenant_has_open_work(self, slug: str) -> bool:
+        """True when an outline for this tenant is already running (same-fingerprint busy).
+
+        Parallel initiatives are allowed: callers must only treat this as busy for the
+        duplicate-outline path, not as a global tenant lock.
+        """
         if any(token.startswith(f"{slug}:") for token in self._inflight):
             return True
         return False
@@ -66,6 +71,11 @@ class PendingMixin:
         slug = tenant.slug
         for token in [key for key in list(self._inflight) if key.startswith(f"{slug}:")]:
             self._inflight.pop(token, None)
+        for key in [k for k in list(self._outline_tasks) if k.startswith(f"{slug}:")]:
+            task = self._outline_tasks.pop(key, None)
+            if task is not None and not task.done():
+                task.cancel()
+        # Legacy single-slug task key (pre-parallel).
         task = self._outline_tasks.pop(slug, None)
         if task is not None and not task.done():
             task.cancel()
@@ -94,7 +104,26 @@ class PendingMixin:
             return False
         if (message.identity_handle or "") != self._settings.lead_handle:
             return False
-        if (message.body or "").strip().lower() != "stop":
+        body = (message.body or "").strip().lower()
+        if body == "stop all":
+            await self._halt_programme(tenant, str(room))
+            return True
+        if body != "stop":
             return False
+        # Multiple active sessions → collaborator asks which INIT; single → halt all work.
+        collaborator = getattr(self, "_collaborator", None)
+        store = getattr(collaborator, "_store", None) if collaborator is not None else None
+        list_active = getattr(store, "list_active", None) if store is not None else None
+        if callable(list_active):
+            try:
+                result = list_active(tenant.slug)
+                if hasattr(result, "__await__"):
+                    active = await result  # type: ignore[misc]
+                else:
+                    active = result
+            except TypeError:
+                active = []
+            if isinstance(active, list) and len(active) > 1:
+                return False
         await self._halt_programme(tenant, str(room))
         return True

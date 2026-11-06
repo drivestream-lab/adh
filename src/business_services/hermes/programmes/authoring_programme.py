@@ -34,7 +34,10 @@ from src.business_services.hermes.promote_cleanup import (
     archive_dest,
     scratch_paths_for_initiative,
 )
-from src.business_services.hermes.runtime.session_store import HermesSessionStoreService
+from src.business_services.hermes.runtime.session_store import (
+    UNBOUND_INITIATIVE,
+    HermesSessionStoreService,
+)
 from src.business_services.hermes.surface.buzz_poster import HermesBuzzPoster
 from src.configs.hermes_settings import HermesSettings
 from src.infra_services.pm_workspace_service import (
@@ -130,15 +133,88 @@ class AuthoringProgrammeService(BaseBusinessService):
         if message.kind != MessageKind.MESSAGE:
             return False
         body = (message.body or "").strip()
-        session = await self._store.load(tenant.slug)
-        if session is None or session.programme != _PROGRAMME:
+        authoring = [
+            s for s in await self._store.list_active(tenant.slug) if s.programme == _PROGRAMME
+        ]
+        unbound = await self._store.load_unbound(tenant.slug)
+        if unbound is not None and unbound.programme == _PROGRAMME and unbound not in authoring:
+            authoring.append(unbound)
+        if not authoring:
             # Promote recovery without session: C-label after prior recommend slot
             if parse_promote_pick(body) is not None:
                 return await self._promote_without_session(tenant, room, body)
             return False
         if body.lower() == "stop":
-            await self._store.clear(tenant.slug)
-            await self._poster.post_status(room, "Authoring stopped.", EventType.STALL)
+            if len(authoring) == 1:
+                init = authoring[0].initiative or UNBOUND_INITIATIVE
+                await self._store.clear(tenant.slug, init)
+                await self._poster.post_status(
+                    room,
+                    f"Authoring stopped for {authoring[0].initiative or 'unbound'}.",
+                    EventType.STALL,
+                )
+                return True
+            options = [s.initiative or "unbound" for s in authoring]
+            await self._poster.post_status(
+                room,
+                (
+                    "Several authoring sessions are open. "
+                    f"Reply with an INIT id to stop (`{'` / `'.join(options)}`), "
+                    "or `stop all`."
+                ),
+                EventType.STALL,
+                {"status": "need_stop_pick", "initiatives": options},
+            )
+            return True
+        if body.lower() == "stop all":
+            for session in authoring:
+                await self._store.clear(tenant.slug, session.initiative or UNBOUND_INITIATIVE)
+            await self._poster.post_status(room, "All authoring sessions stopped.", EventType.STALL)
+            return True
+        # Prefer the session whose open brief matches this reply.
+        matched = [
+            s
+            for s in authoring
+            if s.open_brief is not None
+            and s.slots.get(_SLOT_PROMOTE_PATHS)
+            and (s.stage == "authoring-promote" or s.awaiting == AWAITING_JUDGMENT)
+        ]
+        from src.business_services.hermes.runtime.orchestrator_service import match_reply_token
+
+        token_hits = [
+            s
+            for s in matched
+            if s.open_brief is not None
+            and match_reply_token(body, s.open_brief.reply_tokens) is not None
+        ]
+        if len(token_hits) > 1:
+            options = [s.initiative or "?" for s in token_hits]
+            await self._poster.post_status(
+                room,
+                (
+                    "That reply matches more than one promote gate. "
+                    f"Which initiative? (`{'` / `'.join(options)}`)"
+                ),
+                EventType.STALL,
+                {"status": "need_init_pick", "initiatives": options},
+            )
+            return True
+        session = (
+            token_hits[0] if len(token_hits) == 1 else (matched[0] if len(matched) == 1 else None)
+        )
+        if session is None and len(authoring) == 1:
+            session = authoring[0]
+        if session is None:
+            options = [s.initiative or "unbound" for s in authoring]
+            await self._poster.post_status(
+                room,
+                (
+                    "Several authoring sessions are open. "
+                    f"Name the INIT (`{'` / `'.join(options)}`) or finish one gate first."
+                ),
+                EventType.STALL,
+                {"status": "need_init_pick", "initiatives": options},
+            )
             return True
         # Promote gate: open brief, or recover after collaborator ate the judgment.
         if session.slots.get(_SLOT_PROMOTE_PATHS) and (
@@ -421,7 +497,7 @@ class AuthoringProgrammeService(BaseBusinessService):
         pick, clean = promote_pick_wants_clean(pick_raw if token is None else token)
         lowered = pick.lower()
         if lowered in {"skip", "none", "iterate", "stop"}:
-            await self._store.clear(tenant.slug)
+            await self._store.clear(tenant.slug, session.initiative or UNBOUND_INITIATIVE)
             await self._poster.post_status(
                 room,
                 f"No promote for {session.initiative} (`{pick}`).",
@@ -442,7 +518,7 @@ class AuthoringProgrammeService(BaseBusinessService):
             await self._poster.post_status(room, f"Empty think file `{source}`.", EventType.STALL)
             return True
         self._workspace.write_local(tenant, dest, contents)
-        await self._store.clear(tenant.slug)
+        await self._store.clear(tenant.slug, initiative)
         await self._poster.post_status(
             room,
             self._poster.copy(

@@ -11,7 +11,10 @@ from src.business_services.base_business_service import BaseBusinessService
 from src.business_services.hermes.collaboration.brief_service import HermesBriefService
 from src.business_services.hermes.execution.dispatch_service import HermesDispatchService
 from src.business_services.hermes.runtime.navigator_service import HermesNavigatorService
-from src.business_services.hermes.runtime.session_store import HermesSessionStoreService
+from src.business_services.hermes.runtime.session_store import (
+    UNBOUND_INITIATIVE,
+    HermesSessionStoreService,
+)
 from src.business_services.hermes.surface.buzz_poster import HermesBuzzPoster
 from src.business_services.hermes.understanding.understand_service import (
     HermesUnderstandService,
@@ -36,7 +39,10 @@ _BARE_GATE_TOKEN = re.compile(
     re.I,
 )
 _STOP = "stop"
+_STOP_ALL = "stop all"
 _PENDING_NODE = "pending_node"
+_RESUME_CANDIDATES = "resume_candidates"
+_RESUME_INTENT = "resume_intent"
 _PM_ENTRYPOINT = HermesProgrammeType.META_PM
 
 
@@ -53,9 +59,11 @@ class ProgrammeRunner(Protocol):
 
     async def resume_programme(self, tenant: TenantContext, room: str, initiative: str) -> None: ...
 
+    def list_resumable(self, tenant: TenantContext) -> list[dict[str, str]]: ...
+
 
 class HermesCollaboratorService(BaseBusinessService):
-    """Stateful Lead conversation over the workflow catalogue."""
+    """Stateful Lead conversation over the workflow catalogue (parallel INIT-safe)."""
 
     @inject
     def __init__(
@@ -84,58 +92,344 @@ class HermesCollaboratorService(BaseBusinessService):
     ) -> bool:
         """True when this service consumed the message."""
         body = (message.body or "").strip()
-        session = await self._store.load(tenant.slug)
-        if body.lower() == _STOP:
+        active = await self._store.list_active(tenant.slug)
+        unbound = await self._store.load_unbound(tenant.slug)
+
+        if body.lower() == _STOP_ALL:
             await self._store.clear(tenant.slug)
-            if session is not None:
-                await self._say(room, "Stopped. Session cleared.", EventType.DONE)
+            await self._say(room, "Stopped. All sessions cleared.", EventType.DONE)
             return True
-        # Recover human gates after Redis TTL / worker restart (like `post-pm INIT-…`).
-        if _RESUME_HINT.search(body):
-            initiative = self._understand.extract_initiative(body)
-            if initiative is None:
+        if body.lower() == _STOP:
+            return await self._on_stop(tenant, room, active)
+
+        # Resume-pick / post-pm clarify on unbound session.
+        if unbound is not None and unbound.awaiting == AWAITING_CLARIFY:
+            if unbound.slots.get(_RESUME_CANDIDATES):
+                return await self._on_resume_pick(tenant, room, unbound, body)
+            return await self._on_clarify(tenant, room, unbound, body)
+
+        meta_sessions = [s for s in active if s.programme != HermesProgrammeType.AUTHORING]
+
+        # Hot path: reply token matches exactly one open meta-pm gate.
+        open_gates = [
+            s
+            for s in meta_sessions
+            if s.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION)
+            and s.open_brief is not None
+        ]
+        gate_hits = self._sessions_matching_gate(meta_sessions, body)
+        if len(gate_hits) == 1:
+            return await self._dispatch_gate(tenant, room, gate_hits[0], body)
+        if len(gate_hits) > 1:
+            return await self._ask_init_pick(
+                tenant,
+                room,
+                gate_hits,
+                intent=body,
+                preface="That reply matches more than one open gate.",
+            )
+        if len(open_gates) == 1 and not gate_hits:
+            # Unmatched reply on the only open gate — ask back (do not clear).
+            return await self._dispatch_gate(tenant, room, open_gates[0], body)
+        if len(open_gates) > 1 and not gate_hits:
+            return await self._ask_init_pick(
+                tenant,
+                room,
+                open_gates,
+                intent=body,
+                preface="Several open gates — which initiative is this reply for?",
+            )
+
+        # Recovery / orphan gate / resume — never silent-drop.
+        if _RESUME_HINT.search(body) or _BARE_GATE_TOKEN.match(body):
+            return await self._recover(tenant, room, body, meta_sessions)
+
+        # Per-session clarify (bound INIT, pending catalogue node).
+        clarifying = [s for s in meta_sessions if s.awaiting == AWAITING_CLARIFY]
+        if len(clarifying) == 1:
+            return await self._on_clarify(tenant, room, clarifying[0], body)
+        if len(clarifying) > 1:
+            return await self._ask_init_pick(
+                tenant,
+                room,
+                clarifying,
+                intent=body,
+                preface="Several programmes are waiting for clarification.",
+            )
+
+        # Authoring owns promote / init — do not steal C-label replies.
+        if any(s.programme == HermesProgrammeType.AUTHORING for s in active):
+            # Only steal if this looks like meta-pm fresh intent.
+            if not (
+                _POST_PM_HINT.search(body) or self._understand.candidates_for_node_mention(body)
+            ):
+                return False
+
+        # Fresh catalogue / post-pm intent.
+        focus = self._focus_session(meta_sessions, room, tenant.slug)
+        return await self._on_fresh(tenant, room, focus, body)
+
+    def _focus_session(
+        self, meta_sessions: list[HermesSession], room: str, slug: str
+    ) -> HermesSession:
+        if len(meta_sessions) == 1:
+            return meta_sessions[0]
+        return HermesSession(tenant_slug=slug, room=room)
+
+    def _sessions_matching_gate(
+        self, sessions: list[HermesSession], body: str
+    ) -> list[HermesSession]:
+        hits: list[HermesSession] = []
+        for session in sessions:
+            brief = session.open_brief
+            if brief is None:
+                continue
+            if session.awaiting == AWAITING_JUDGMENT:
+                if match_reply_token(body, brief.reply_tokens) is not None:
+                    hits.append(session)
+            elif session.awaiting == AWAITING_AUTHORIZATION:
+                lowered = body.lower()
+                if any(t.lower() in lowered for t in brief.reply_tokens):
+                    hits.append(session)
+        return hits
+
+    async def _dispatch_gate(
+        self, tenant: TenantContext, room: str, session: HermesSession, body: str
+    ) -> bool:
+        brief = session.open_brief
+        if brief is None:
+            return False
+        if session.awaiting == AWAITING_JUDGMENT:
+            return await self._on_judgment(tenant, room, session, brief, body)
+        if session.awaiting == AWAITING_AUTHORIZATION:
+            return await self._on_authorization(tenant, room, session, brief, body)
+        return False
+
+    async def _on_stop(self, tenant: TenantContext, room: str, active: list[HermesSession]) -> bool:
+        meta = [s for s in active if s.programme != HermesProgrammeType.AUTHORING]
+        if not meta:
+            # Let authoring / hermes halt handle empty or authoring-only.
+            if not active:
+                await self._say(room, "Nothing to stop.", EventType.DONE)
+                return True
+            return False
+        if len(meta) == 1:
+            init = meta[0].initiative or UNBOUND_INITIATIVE
+            await self._store.clear(tenant.slug, init)
+            await self._say(room, f"Stopped. Cleared session for {init}.", EventType.DONE)
+            return True
+        return await self._ask_init_pick(
+            tenant,
+            room,
+            meta,
+            intent=_STOP,
+            preface="Several sessions are open. Which should I stop? (or say `stop all`)",
+        )
+
+    async def _recover(
+        self,
+        tenant: TenantContext,
+        room: str,
+        body: str,
+        meta_sessions: list[HermesSession],
+    ) -> bool:
+        """Ask back / auto-bind when gate or resume cannot resolve a single session."""
+        open_gates = [
+            s
+            for s in meta_sessions
+            if s.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION)
+            and s.open_brief is not None
+        ]
+        if len(open_gates) == 1:
+            return await self._dispatch_gate(tenant, room, open_gates[0], body)
+        if len(open_gates) > 1:
+            return await self._ask_init_pick(
+                tenant,
+                room,
+                open_gates,
+                intent=body,
+                preface="Several open gates — which initiative?",
+            )
+
+        if self._runner is None:
+            await self._say(
+                room,
+                "Nothing is bound right now, and resume is unavailable (no programme runner).",
+                EventType.STALL,
+            )
+            return True
+
+        resumable = self._runner.list_resumable(tenant)
+        if len(resumable) == 1:
+            init = resumable[0]["initiative"]
+            await self._runner.resume_programme(tenant, room, init)
+            # If Lead sent a gate token, try to apply it on the reopened session.
+            if _BARE_GATE_TOKEN.match(body) and not _RESUME_HINT.search(body):
+                session = await self._store.load(tenant.slug, init)
+                if session is not None and session.open_brief is not None:
+                    return await self._dispatch_gate(tenant, room, session, body)
+            return True
+        if len(resumable) > 1:
+            return await self._ask_resumable_pick(tenant, room, resumable, intent=body)
+
+        await self._say(
+            room,
+            (
+                "I can't find an open gate or resumable initiative. "
+                "Paste a new outline, promote a think file, or say `post-pm` once a PRD exists. "
+                "If you know the INIT id, reply with it and I will try to bind it."
+            ),
+            EventType.STALL,
+        )
+        # Keep Lead in a clarify loop so a named INIT can still bind.
+        session = HermesSession(
+            tenant_slug=tenant.slug,
+            room=room,
+            awaiting=AWAITING_CLARIFY,
+            slots={_RESUME_INTENT: body, _RESUME_CANDIDATES: ""},
+        )
+        await self._store.save(session)
+        return True
+
+    async def _ask_init_pick(
+        self,
+        tenant: TenantContext,
+        room: str,
+        sessions: list[HermesSession],
+        *,
+        intent: str,
+        preface: str,
+    ) -> bool:
+        options = sorted({(s.initiative or UNBOUND_INITIATIVE) for s in sessions})
+        hints = []
+        for s in sessions:
+            init = s.initiative or UNBOUND_INITIATIVE
+            gate = s.stage or s.awaiting
+            hints.append(f"- `{init}` — {s.programme or 'n/a'} / {gate}")
+        await self._say(
+            room,
+            (f"{preface}\n" + "\n".join(hints) + f"\nReply with one of: {_fmt(options)}."),
+            EventType.STALL,
+        )
+        session = HermesSession(
+            tenant_slug=tenant.slug,
+            room=room,
+            awaiting=AWAITING_CLARIFY,
+            slots={
+                _RESUME_CANDIDATES: ",".join(options),
+                _RESUME_INTENT: intent,
+            },
+        )
+        await self._store.save(session)
+        return True
+
+    async def _ask_resumable_pick(
+        self,
+        tenant: TenantContext,
+        room: str,
+        resumable: list[dict[str, str]],
+        *,
+        intent: str,
+    ) -> bool:
+        options = [row["initiative"] for row in resumable]
+        hints = [f"- {row['hint']}" for row in resumable]
+        await self._say(
+            room,
+            (
+                "Several initiatives look resumable. Which one?\n"
+                + "\n".join(hints)
+                + f"\nReply with one of: {_fmt(options)}."
+            ),
+            EventType.STALL,
+        )
+        session = HermesSession(
+            tenant_slug=tenant.slug,
+            room=room,
+            awaiting=AWAITING_CLARIFY,
+            slots={
+                _RESUME_CANDIDATES: ",".join(options),
+                _RESUME_INTENT: intent,
+            },
+        )
+        await self._store.save(session)
+        return True
+
+    async def _on_resume_pick(
+        self, tenant: TenantContext, room: str, session: HermesSession, body: str
+    ) -> bool:
+        raw = session.slots.get(_RESUME_CANDIDATES) or ""
+        options = [p.strip() for p in raw.split(",") if p.strip()]
+        intent = session.slots.get(_RESUME_INTENT) or "resume"
+        initiative = self._understand.extract_initiative(body)
+        if initiative is None and options:
+            # Exact option match (case-insensitive).
+            lowered = body.strip().lower()
+            for opt in options:
+                if opt.lower() == lowered:
+                    initiative = opt
+                    break
+        if initiative is None:
+            if options:
                 await self._say(
                     room,
-                    "Resume needs an INIT-… id (example: `resume INIT-REALWORLD-001`).",
-                )
-                return True
-            if self._runner is None:
-                await self._say(room, "Resume is unavailable (no programme runner).")
-                return True
-            await self._runner.resume_programme(tenant, room, initiative)
-            return True
-        if session is None:
-            session = HermesSession(tenant_slug=tenant.slug, room=room)
-            # Bare confirm/authorize after TTL loss — do not silent-drop.
-            if _BARE_GATE_TOKEN.match(body):
-                await self._say(
-                    room,
-                    (
-                        "No open brief (session may have expired). "
-                        "Say `resume INIT-…` to reopen the last gate, "
-                        "or `post-pm INIT-…` to re-enter meta-pm."
-                    ),
+                    f"Still need an initiative. Reply with one of: {_fmt(options)}.",
                     EventType.STALL,
                 )
-                return True
-        # Authoring programme owns its promote/init briefs — do not steal C-label replies.
-        if session.programme == HermesProgrammeType.AUTHORING:
-            return False
-        if session.awaiting == AWAITING_CLARIFY:
-            return await self._on_clarify(tenant, room, session, body)
-        brief = session.open_brief
-        if session.awaiting == AWAITING_JUDGMENT and brief is not None:
-            return await self._on_judgment(tenant, room, session, brief, body)
-        if session.awaiting == AWAITING_AUTHORIZATION and brief is not None:
-            return await self._on_authorization(tenant, room, session, brief, body)
-        return await self._on_fresh(tenant, room, session, body)
+            else:
+                await self._say(
+                    room,
+                    "Still need an INIT-… id, or paste an outline / say `post-pm` once a PRD exists.",
+                    EventType.STALL,
+                )
+            return True
+        if (
+            options
+            and initiative not in options
+            and initiative.upper() not in {o.upper() for o in options}
+        ):
+            await self._say(
+                room,
+                f"`{initiative}` is not in the list. Reply with one of: {_fmt(options)}.",
+                EventType.STALL,
+            )
+            return True
+        await self._store.clear(tenant.slug, UNBOUND_INITIATIVE)
+        if intent.lower() == _STOP:
+            await self._store.clear(tenant.slug, initiative)
+            await self._say(room, f"Stopped. Cleared session for {initiative}.", EventType.DONE)
+            return True
+        if self._runner is None:
+            await self._say(room, "Resume is unavailable (no programme runner).", EventType.STALL)
+            return True
+        # Prefer live session if still present; else artefact resume.
+        live = await self._store.load(tenant.slug, initiative)
+        if live is not None and live.open_brief is not None:
+            if _BARE_GATE_TOKEN.match(intent) or match_reply_token(
+                intent, live.open_brief.reply_tokens or []
+            ):
+                return await self._dispatch_gate(tenant, room, live, intent)
+            await self._say(
+                room,
+                f"Bound `{initiative}`. Reply with: {_fmt(live.open_brief.reply_tokens)}.",
+            )
+            return True
+        await self._runner.resume_programme(tenant, room, initiative)
+        if _BARE_GATE_TOKEN.match(intent) and not _RESUME_HINT.search(intent):
+            reopened = await self._store.load(tenant.slug, initiative)
+            if reopened is not None and reopened.open_brief is not None:
+                return await self._dispatch_gate(tenant, room, reopened, intent)
+        return True
 
     async def _on_clarify(
         self, tenant: TenantContext, room: str, session: HermesSession, body: str
     ) -> bool:
         initiative = self._understand.extract_initiative(body)
         if initiative is None:
-            await self._say(room, "I still need an INIT-… id (example: INIT-REALWORLD-001).")
+            await self._say(
+                room,
+                "I still need an INIT-… id (example: INIT-REALWORLD-001).",
+                EventType.STALL,
+            )
             return True
         session.awaiting = AWAITING_NONE
         node_id = session.slots.pop(_PENDING_NODE, "")
@@ -155,7 +449,11 @@ class HermesCollaboratorService(BaseBusinessService):
     ) -> bool:
         token = match_reply_token(body, brief.reply_tokens)
         if token is None:
-            await self._say(room, f"Reply with one of: {_fmt(brief.reply_tokens)} (or `stop`).")
+            await self._say(
+                room,
+                f"Reply with one of: {_fmt(brief.reply_tokens)} (or `stop`).",
+                EventType.STALL,
+            )
             return True
         session.handoff_outcome = token
         session.slots[f"reply:{brief.node_id}"] = token
@@ -178,7 +476,9 @@ class HermesCollaboratorService(BaseBusinessService):
         lowered = body.lower()
         if not any(t.lower() in lowered for t in brief.reply_tokens):
             await self._say(
-                room, f"Not authorized yet. Reply {_fmt(brief.reply_tokens)} (or `stop`)."
+                room,
+                f"Not authorized yet. Reply {_fmt(brief.reply_tokens)} (or `stop`).",
+                EventType.STALL,
             )
             return True
         node = self._navigator.current(session)
