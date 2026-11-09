@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Optional
 
 from injector import inject
@@ -32,18 +31,30 @@ from src.models.buzz_models import EventType, MessageRead
 from src.models.hermes.intent_models import ClarifyRequest, IntentCandidate, JudgmentRequest
 from src.models.tenant_models import TenantContext
 
-# Free-text hint only; routing to the entrypoint still comes from the catalogue.
-_POST_PM_HINT = re.compile(r"\bpost[-\s]?pm\b", re.I)
-_RESUME_HINT = re.compile(r"\bresume\b", re.I)
-_BARE_GATE_TOKEN = re.compile(
-    r"^(confirm|revise|go ahead|authorize(?:\s+\S+)?)$",
-    re.I,
-)
+# Free-text hints only (substring) — delivery vocabulary SSOT is catalogue / open brief.
 _STOP = "stop"
 _STOP_ALL = "stop all"
 _PENDING_NODE = "pending_node"
 _RESUME_CANDIDATES = "resume_candidates"
 _RESUME_INTENT = "resume_intent"
+
+
+def _mentions_resume(text: str) -> bool:
+    return "resume" in (text or "").lower()
+
+
+def _mentions_post_pm(text: str) -> bool:
+    lowered = (text or "").lower().replace("_", " ").replace("-", " ")
+    compact = "".join(ch for ch in lowered if ch.isalnum() or ch.isspace())
+    return "postpm" in compact.replace(" ", "") or "post pm" in compact
+
+
+def _looks_like_bare_gate(text: str) -> bool:
+    """UX helper for orphan resume — not delivery vocabulary SSOT (brief owns tokens)."""
+    line = (text or "").strip().lower()
+    if line in {"confirm", "revise", "go ahead", "authorize"}:
+        return True
+    return line.startswith("authorize ")
 
 
 class Orchestrator(BaseBusinessService):
@@ -142,7 +153,7 @@ class Orchestrator(BaseBusinessService):
             )
 
         # Recovery / orphan gate / resume — never silent-drop.
-        if _RESUME_HINT.search(body) or _BARE_GATE_TOKEN.match(body):
+        if _mentions_resume(body) or _looks_like_bare_gate(body):
             return await self._recover(tenant, room, body, meta_sessions)
 
         # Per-session clarify (bound INIT, pending catalogue node).
@@ -162,7 +173,7 @@ class Orchestrator(BaseBusinessService):
         if any(s.programme == PROGRAMME_AUTHORING for s in active):
             # Only steal if this looks like meta-pm fresh intent.
             if not (
-                _POST_PM_HINT.search(body)
+                _mentions_post_pm(body)
                 or self._understand.candidates_for_node_mention(
                     body, init_prefix=tenant.init_prefix
                 )
@@ -311,7 +322,7 @@ class Orchestrator(BaseBusinessService):
             )
             await runner.resume_programme(tenant, room, init)
             # If Lead sent a gate token, try to apply it on the reopened session.
-            if _BARE_GATE_TOKEN.match(body) and not _RESUME_HINT.search(body):
+            if _looks_like_bare_gate(body) and not _mentions_resume(body):
                 session = await self._store.load(tenant.slug, self.role_id, init)
                 if session is not None and session.open_brief is not None:
                     return await self._dispatch_gate(tenant, room, session, body)
@@ -469,7 +480,7 @@ class Orchestrator(BaseBusinessService):
         # Prefer live session if still present; else artefact resume.
         live = await self._store.load(tenant.slug, self.role_id, initiative)
         if live is not None and live.open_brief is not None:
-            if _BARE_GATE_TOKEN.match(intent) or match_reply_token(
+            if _looks_like_bare_gate(intent) or match_reply_token(
                 intent, live.open_brief.reply_tokens or []
             ):
                 return await self._dispatch_gate(tenant, room, live, intent)
@@ -479,7 +490,7 @@ class Orchestrator(BaseBusinessService):
             )
             return True
         await runner.resume_programme(tenant, room, initiative)
-        if _BARE_GATE_TOKEN.match(intent) and not _RESUME_HINT.search(intent):
+        if _looks_like_bare_gate(intent) and not _mentions_resume(intent):
             reopened = await self._store.load(tenant.slug, self.role_id, initiative)
             if reopened is not None and reopened.open_brief is not None:
                 return await self._dispatch_gate(tenant, room, reopened, intent)
@@ -586,7 +597,7 @@ class Orchestrator(BaseBusinessService):
         prefix = tenant.init_prefix
         candidates = self._understand.candidates_for_node_mention(body, init_prefix=prefix)
         initiative = self._understand.extract_initiative(body, prefix) or session.initiative
-        if not candidates and _POST_PM_HINT.search(body):
+        if not candidates and _mentions_post_pm(body):
             entry = self._understand.entrypoint_node(PROGRAMME_META_PM)
             candidates = [
                 IntentCandidate(

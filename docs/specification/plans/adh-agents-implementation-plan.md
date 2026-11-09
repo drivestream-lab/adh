@@ -1,6 +1,6 @@
 # Implementation plan — ADH Agents Team OS
 
-**Status:** D1–D2 merged ([PR #17](https://github.com/drivestream-lab/adh/pull/17)); **next = D3 → D4 → D5** (programme depth + OS harden).  
+**Status:** D1–D2 merged ([PR #17](https://github.com/drivestream-lab/adh/pull/17)); **D3–D5 in flight** on `feature/adh-agents-d3-d4-d5` (agentic locks #18–#19).  
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md)  
 **Product:** [adh-agents-team-os.md](../product/adh-agents-team-os.md)  
 **KB heads:** [adh-kb-heads.md](../references/adh-kb-heads.md)  
@@ -30,9 +30,9 @@ V2. PE claims pe.review → read.walk                 ✅  catch-up + live claim
 ── depth (same OS — not new architecture) ──
 D1. PE: Q caps (≤10 / ≤4 rounds), Buzz+PR, attest   ✅  PR #17; guinea pig PR #2
 D2. PM glue: answer PE + prd_merge authorize        ✅  PR #17; meta PR #2 merged
-D3. Read: real repo walks / richer ports            ⬜  locks below
-D4. KB: actual knowledge/ head patches              ⬜  locks below
-D5. Harden: dup batons, timeout, wrong authorize    ⬜  locks below
+D3. Read: real repo walks / richer ports            ✅  one-repo repo_ref + structured artefact
+D4. KB: actual knowledge/ head patches              ✅  stub+LLM + post-merge emit + enrich PR gate
+D5. Harden: dup batons, timeout, wrong authorize    ✅  reclaim + brief tokens + no regex SSOT + SSE-safe
 
 ── later hires ──
 dev / qa / iac / sre / obs + codegraph MCP          ⬜

@@ -12,9 +12,9 @@
 | V2 — PE claims `pe.review` → read.walk | ✅ baton catch-up + read rollup |
 | D1 — PE Q caps, Buzz+PR, attest + `impact-map-lgtm` | ✅ [PR #17](https://github.com/drivestream-lab/adh/pull/17); guinea pig PR #2 |
 | D2 — PM ack PE + `prd_merge` authorize | ✅ PR #17; meta PR #2 merged |
-| D3 — Read: one-repo walk / structured rollup | ⬜ locks in plan |
-| D4 — KB: `knowledge/` head patches + Buzz pointer | ⬜ locks in plan |
-| D5 — Harden: dup / timeout / authorize / forge / SSE | ⬜ locks in plan |
+| D3 — Read: one-repo walk / structured rollup | ✅ tenant `repo_ref` + artefact (Buzz BLUF) |
+| D4 — KB: `knowledge/` head patches + Buzz pointer | ✅ stub+LLM; post-merge `kb.enrich`; Lead authorize enrich PR |
+| D5 — Harden: dup / timeout / authorize / forge / SSE | ✅ reclaim; brief-token gates; no regex SSOT; SSE-safe authorize |
 
 ## Landed (0b)
 

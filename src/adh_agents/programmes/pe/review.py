@@ -175,7 +175,7 @@ class PeReviewProgramme(BaseBusinessService):
             {"status": "pe_claimed", "initiative": init, "baton_id": baton.id},
             identity_handle=self.role_id,
         )
-        await self._emit_read_walk(baton, init, room or baton.ops_room, ttl)
+        await self._emit_read_walk(tenant, baton, init, room or baton.ops_room, ttl)
         await self._post_questions(tenant, room or baton.ops_room, session, bump_round=True)
         done = await self._batons.mark_done(baton, ttl=ttl)
         return Rollup(
@@ -227,10 +227,18 @@ class PeReviewProgramme(BaseBusinessService):
             payload={"pr_url": pr_url, "stage": "gate1_review"},
         )
         ttl = int(self._settings.baton_ttl_seconds)
-        await self._emit_read_walk(parent, init, room, ttl)
+        await self._emit_read_walk(tenant, parent, init, room, ttl)
         await self._post_questions(tenant, room, session, bump_round=True)
 
-    async def _emit_read_walk(self, parent: Baton, init: str, room: str, ttl: int) -> None:
+    async def _emit_read_walk(
+        self,
+        tenant: TenantContext,
+        parent: Baton,
+        init: str,
+        room: str,
+        ttl: int,
+    ) -> None:
+        repo_ref = tenant.meta_repo
         walk = Baton(
             type="read.walk",
             from_role=self.role_id,
@@ -238,9 +246,9 @@ class PeReviewProgramme(BaseBusinessService):
             tenant=parent.tenant,
             ops_room=parent.ops_room or room,
             initiative=init,
-            idempotency_key=f"read.walk:{parent.tenant}:{init}:meta",
+            idempotency_key=f"read.walk:{parent.tenant}:{init}:{repo_ref}",
             payload={
-                "repo": "meta",
+                "repo_ref": repo_ref,
                 "reason": "gate1_pe_review",
                 "parent_baton": parent.id,
             },
