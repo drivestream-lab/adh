@@ -91,6 +91,7 @@ See [`../references/adh-kb-heads.md`](../references/adh-kb-heads.md).
 6. **No legacy / dead code** carried beside the new tree.
 7. **Buzz light** — BLUF + artefact pointer + single next step; no information overload.
 8. **No tenant/INIT/repo hardcoding** in programmes — resolve via tenant context + baton payload (RealWorld is guinea pig only).
+9. **Agentic + conversational** — LLM/understand maps Lead chat to catalogue outcomes; no regex/frozenset delivery SSOT; soft gates always wait for Lead; LLM-down → ask-back.
 
 ## Implementation
 
