@@ -54,6 +54,20 @@ Buzz message or baton
   → catalogue / next gate continues
 ```
 
+### Buzz UX (ops — no overload)
+
+Ops is for **human input and next steps**, not evidence dumps.
+
+| Field | Rule |
+|-------|------|
+| **What** | ≤3 lines BLUF |
+| **Evidence** | Link / path / PR only |
+| **Next** | One clear ask **or** “waiting on `{role}` / baton …” |
+| **Tokens** | Only when a Lead gate is open |
+| **Never** | Full walks, full diffs, raw forge JSON, multi-ask lists |
+
+Heavy evidence lives in artefacts / PRs / OKF `knowledge/` heads. Progress ticks while working; one short DONE rollup.
+
 ## Graphs (do not conflate)
 
 | Graph | SSOT | Use |
@@ -75,10 +89,13 @@ See [`../references/adh-kb-heads.md`](../references/adh-kb-heads.md).
 4. Missing agent on a catalogue node → fail closed on Buzz.
 5. Forge scoped per role.
 6. **No legacy / dead code** carried beside the new tree.
+7. **Buzz light** — BLUF + artefact pointer + single next step; no information overload.
+8. **No tenant/INIT/repo hardcoding** in programmes — resolve via tenant context + baton payload (RealWorld is guinea pig only).
 
 ## Implementation
 
 **Work tracker (follow this):** [`../plans/adh-agents-implementation-plan.md`](../plans/adh-agents-implementation-plan.md)  
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md) · **As-built:** [`../as-built/implementation-status.md`](../as-built/implementation-status.md)
 
-Retired framing: “Hermes enabler + responsibility agents” phase lists that assumed a Hermes facade router. Enabler = `BaseHermesAgent`; control plane = Orchestrator in `adh_agents/runtime`.
+Retired framing: “Hermes enabler + responsibility agents” **phase lists** that assumed a Hermes facade router. Enabler = `BaseHermesAgent`; control plane = Orchestrator in `adh_agents/runtime`.  
+**Still binding from that north star:** recommend + artefact, human conversational gates, Buzz light, ports over hardcoding — see plan D3–D5 locks.

@@ -10,9 +10,11 @@
 | 0b — Greenfield control plane + delete legacy | ✅ [PR #16](https://github.com/drivestream-lab/adh/pull/16) |
 | V1 — PM live on new OS | ✅ RealWorld INIT-001 ask-back/resume/gates/authorize |
 | V2 — PE claims `pe.review` → read.walk | ✅ baton catch-up + read rollup |
-| D1 — PE Q caps, Buzz+PR, attest + `impact-map-lgtm` | ✅ guinea pig on PR #2 |
-| D2 — PM ack PE + `prd_merge` authorize | ✅ meta PR #2 merged |
-| D3–D5 — read/kb depth + harden | ⬜ |
+| D1 — PE Q caps, Buzz+PR, attest + `impact-map-lgtm` | ✅ [PR #17](https://github.com/drivestream-lab/adh/pull/17); guinea pig PR #2 |
+| D2 — PM ack PE + `prd_merge` authorize | ✅ PR #17; meta PR #2 merged |
+| D3 — Read: one-repo walk / structured rollup | ⬜ locks in plan |
+| D4 — KB: `knowledge/` head patches + Buzz pointer | ⬜ locks in plan |
+| D5 — Harden: dup / timeout / authorize / forge / SSE | ⬜ locks in plan |
 
 ## Landed (0b)
 
