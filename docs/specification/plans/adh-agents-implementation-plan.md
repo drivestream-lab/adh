@@ -1,11 +1,13 @@
 # Implementation plan — ADH Agents Team OS
 
-**Status:** Wave 0b greenfield spine merged ([PR #16](https://github.com/drivestream-lab/adh/pull/16)); **V1+V2 verify done** — next = D1–D5 programme depth.  
+**Status:** D1–D2 merged ([PR #17](https://github.com/drivestream-lab/adh/pull/17)); **next = D3 → D4 → D5** (programme depth + OS harden).  
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md)  
 **Product:** [adh-agents-team-os.md](../product/adh-agents-team-os.md)  
+**KB heads:** [adh-kb-heads.md](../references/adh-kb-heads.md)  
 **As-built:** [implementation-status.md](../as-built/implementation-status.md)
 
-This is the **work tracker**. Do not follow older “Hermes enabler + responsibility agents” phase lists that assumed a Hermes facade router.
+This is the **work tracker SSOT**. Architecture framing: Team OS control plane + role workers — not a Hermes facade router.  
+**Collab UX** from the north-star “Hermes enabler + responsibility agents” plan still binds: recommend + artefact, human conversational gates, **Buzz light** (see below).
 
 ---
 
@@ -26,17 +28,69 @@ V1. PM live on new OS (RealWorld guinea pig)        ✅  ask-back/resume/gates/a
 V2. PE claims pe.review → read.walk                 ✅  catch-up + live claim → read rollup
 
 ── depth (same OS — not new architecture) ──
-D1. PE: Q caps (≤10 / ≤4 rounds), Buzz+PR, attest   ⬜
-D2. PM glue: answer PE + prd_merge authorize        ⬜
-D3. Read: real repo walks / richer ports            ⬜
-D4. KB: actual knowledge/ head patches              ⬜
-D5. Harden: dup batons, timeout, wrong authorize    ⬜
+D1. PE: Q caps (≤10 / ≤4 rounds), Buzz+PR, attest   ✅  PR #17; guinea pig PR #2
+D2. PM glue: answer PE + prd_merge authorize        ✅  PR #17; meta PR #2 merged
+D3. Read: real repo walks / richer ports            ⬜  locks below
+D4. KB: actual knowledge/ head patches              ⬜  locks below
+D5. Harden: dup batons, timeout, wrong authorize    ⬜  locks below
 
 ── later hires ──
 dev / qa / iac / sre / obs + codegraph MCP          ⬜
 ```
 
-**Rule:** architecture is closed after 0b. Remaining work deepens programmes on this spine.
+**Rule:** architecture is closed after 0b. Remaining work deepens programmes on this spine.  
+**Product rule:** ADH is the product; RealWorld is a guinea pig only — no tenant/INIT/repo hardcoding in programmes.
+
+---
+
+## Buzz UX contract (all roles — D3+)
+
+Ops channel is for **human input and next steps**, not evidence dumps.
+
+| Field | Rule |
+|-------|------|
+| **What** | ≤3 lines BLUF |
+| **Evidence** | Link / path / PR only (`artefact_refs`) |
+| **Next** | Exactly one: Lead reply tokens **or** “waiting on `{role}` / baton …” |
+| **Tokens** | Only when a human gate is open |
+| **Never** | Full walk trees, full KB diffs, raw forge JSON, multi-ask laundry lists |
+
+Progress ticks while working (still-working); one short DONE rollup. Same DecisionCard / brief pattern as PM for any fork.
+
+---
+
+## Locked decisions
+
+### Spine (unchanged)
+
+| Topic | Choice |
+|-------|--------|
+| Product | ADH Team OS; RealWorld = guinea pig only |
+| Package | `src/adh_agents/` only — no hermes runtime twin |
+| Control plane | Orchestrator + work store + runner registry in `adh_agents/runtime` (**mandatory**) |
+| Enabler | `BaseHermesAgent` = listen / baton / forge ACL / progress (not the router) |
+| Agents | Embed control plane; role-scoped ops filter; one process per role |
+| Programmes | Register on plane; under `adh_agents/programmes/{pm,pe,read,kb}/` |
+| Redis work | `adh:agent:work:{tenant}:{role}:{work_id}` |
+| Workers | `make adh-pm` / `adh-pe` / `adh-read` / `adh-kb` |
+| Legacy | **Deleted** in #16 — HermesService facade, collaborator/session store, PendingMixin, pin/spawn OrchestratorService |
+| Sequence | OS → V1 → V2 → D1–D5 depth → later hires |
+
+### D3–D5 locks (2026-11-09)
+
+| # | Topic | Choice |
+|---|-------|--------|
+| D3.1 | Walk model | **One repo per `read.walk` baton**; `repo_ref` in payload, resolved via **tenant context** (not `workspace_root` dump, not RealWorld literals) |
+| D3.2 | First emit | PE may emit meta first (`tenant.meta_repo`); later fan-out follows Impact-Map — same baton shape |
+| D3.3 | Rollup | **Structured sketch** (caps, entrypoints, ADR index signals) → `artefact_refs`; Buzz = BLUF + link + next |
+| D3.4 | Codegraph | **Filesystem port only** this wave; keep `CodegraphPort` Protocol / degraded stub; MCP = later hire |
+| D4.1 | Trigger | Emit `kb.enrich` on **post-merge success** (catalogue-aware / PM path) — not PE-at-attest, not silent side effect |
+| D4.2 | Heads | OKF under `{tenant-meta}/knowledge/` only — `foundation/` · `stacks/` · `repos/` · `contracts/` — **no** `initiatives/` tree |
+| D4.3 | Durability | Patch + **Buzz pointer** + forge **draft PR** under `knowledge/**` (KB forge ACL); Lead authorizes on forge/ops |
+| D4.4 | Authoring | **Deterministic stubs** from read rollup first; LLM fill later behind the same writer interface |
+| D5.1 | Scope | Dup baton claim · baton/work **timeout reclaim** · wrong-stage authorize/resume · forge 422 → idempotent PR · authorize/forge errors **must not kill SSE** |
+| D5.2 | Verify | Unit/contract tests for OS + **one** RealWorld guinea pig proof — guinea pig is not the design oracle |
+| UX | Buzz | BLUF + artefact link + **single next step** (see contract above) |
 
 ---
 
@@ -51,26 +105,17 @@ dev / qa / iac / sre / obs + codegraph MCP          ⬜
 
 **Wave 0a UAT (guinea pig):** RealWorld INIT-001 confirm → impact-map → authorize → draft PR → parked `pe.review` — **done**.
 
-### Wave 0b (PR #15)
+### Wave 0b
 
-Greenfield OS extraction + minimal pe/read/kb hire. Delete Hermes facade / runtime twin / pin OrchestratorService.
+| PR | Summary |
+|----|---------|
+| #16 | Greenfield OS + minimal pe/read/kb; delete Hermes facade (#15 closed for branch rename) |
 
----
+### Depth D1–D2
 
-## Locked decisions
-
-| Topic | Choice |
-|-------|--------|
-| Product | ADH Team OS; RealWorld = guinea pig only |
-| Package | `src/adh_agents/` only — no hermes runtime twin |
-| Control plane | Orchestrator + work store + runner registry in `adh_agents/runtime` (**mandatory**) |
-| Enabler | `BaseHermesAgent` = listen / baton / forge ACL / progress (not the router) |
-| Agents | Embed control plane; role-scoped ops filter; one process per role |
-| Programmes | Register on plane; under `adh_agents/programmes/{pm,pe,read,kb}/` |
-| Redis work | `adh:agent:work:{tenant}:{role}:{work_id}` |
-| Workers | `make adh-pm` / `adh-pe` / `adh-read` / `adh-kb` |
-| Legacy | **Deleted** in #15 — HermesService facade, collaborator/session store, PendingMixin, pin/spawn OrchestratorService |
-| Sequence | OS → **V1 PM verify** → **V2 PE handoff** → D1–D5 depth |
+| PR | Summary |
+|----|---------|
+| #17 | Gate‑1 PE questions/attest + PM pe_glue / `prd_merge`; baton catch-up; forge ports |
 
 ---
 
@@ -98,21 +143,30 @@ src/adh_pm_worker.py | adh_pe_worker.py | adh_read_worker.py | adh_kb_worker.py
 
 ## Next actions (in order)
 
-### V1 — PM on new OS
-1. Merge PR #15; run `make adh-pm` (not `hermes-worker`).
-2. Guinea pig: parallel sessions, ask-back, resume after restart, confirm / go ahead gates on RealWorld.
-3. Confirm work keys under `adh:agent:work:…` (old `adh:hermes:session:` retired).
+### D3 — Read depth
+1. Fix baton contract: `read.walk` payload `repo_ref` (+ reason); resolve checkout via tenant — remove PE/`walk` hardcode on magic `"meta"` / blind `workspace_root`.
+2. Deepen filesystem port: structured sketch (entrypoints, caps) → artefact; Buzz UX contract.
+3. Unit tests for resolve + rollup shape; guinea pig: walk visible as BLUF + next (PE continues / no Lead action unless error).
 
-**Exit:** Lead can drive PM lane end-to-end on the new plane.
+**Exit:** One-repo walk + structured rollup on Buzz without path dumps; ready for PE fan-out of N repos later.
 
-### V2 — PE handoff
-1. `make adh-pe` + `make adh-read`.
-2. After PM `open_draft_pr`, PE claims `pe.review`, emits `read.walk`, read posts rollup.
+### D4 — KB depth
+1. Emit `kb.enrich` after successful `prd_merge` (catalogue-aware).
+2. Writer: deterministic head stubs from rollup → local `knowledge/**` → Buzz BLUF + diff/PR link.
+3. Forge ACL for `adh.kb` (paths under `knowledge/**` only); draft enrich PR; Lead next-step tokens if authorize required.
+4. Identity `adh.kb` on Buzz posts.
 
-**Exit:** baton path draft → PE → read visible on Buzz (questions/attest still D1).
+**Exit:** Head diff pointer on Buzz after enrich; durable proposal on meta forge; no initiative folders.
 
-### D1–D5 — depth
-Programme richness only — no second control plane. See tracker above.
+### D5 — Harden
+1. Close gaps: dup claim, timeout reclaim, illegal authorize stage, forge 422 reuse, SSE survival on authorize/forge errors.
+2. Contract tests for the matrix; short Buzz failure notices with **one** recovery next step.
+3. Apply harden fixes anytime D3/D4 touch shared baton/forge/orchestrator code; focused D5 pass to close the bar.
+
+**Exit:** OS survives redelivery, stall, and wrong-token without silent worker death.
+
+### Order
+**D3 → D4 → D5** (harden opportunistically while touching shared code).
 
 ---
 
@@ -124,7 +178,9 @@ Programme richness only — no second control plane. See tracker above.
 | V1 | PM live-proven on new work store |
 | V2 | PE claims `pe.review`; read rollup |
 | D1–D2 | Gate‑1 questions + attest + PM merge authorize |
-| D4 | KB head diffs on Buzz after enrich |
+| D3 | Tenant-resolved one-repo walk; structured artefact; Buzz BLUF + next |
+| D4 | KB head patch + Buzz pointer (+ enrich draft PR); heads-only policy |
+| D5 | Dup/timeout/wrong-authorize/forge-idempotent/SSE-safe |
 | Later | New roles plug into same Orchestrator + batons |
 
 ## Out of scope (unchanged)
@@ -133,3 +189,4 @@ Programme richness only — no second control plane. See tracker above.
 - Full QA docker programme  
 - Codegraph MCP (port stub until later hire)  
 - Reviving HermesService / dual session stores  
+- TaskGraph as a separate hire (Impact-Map remains SSOT for repo DAG until then)
