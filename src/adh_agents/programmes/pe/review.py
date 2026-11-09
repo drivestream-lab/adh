@@ -11,13 +11,19 @@ from src.adh_agents.baton.models import Baton, BatonStatus, Rollup
 from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.collaboration.brief_service import HermesBriefService
 from src.adh_agents.forge_acl import forge_allowed
+from src.adh_agents.programmes.pe.gate1_brief import (
+    build_gate1_decision_card,
+    format_gate1_brief_markdown,
+    format_gate1_buzz_bluf,
+    hermes_gate1_brief_path,
+)
 from src.adh_agents.programmes.pe.questions import (
     build_product_questions,
     format_questions_document,
     impact_map_path,
 )
+from src.adh_agents.programmes.pm.temp_papers import gate1_temp_paths
 from src.adh_agents.runtime.work_models import (
-    AWAITING_JUDGMENT,
     AWAITING_NONE,
     PROGRAMME_PE,
     AgentWorkSession,
@@ -59,6 +65,10 @@ class PeReviewProgramme(BaseBusinessService):
         self._workspace = workspace
         self._tenants = tenants
         self._settings = PeAgentSettings.get_instance()
+
+    async def list_active(self, tenant_slug: str) -> list[AgentWorkSession]:
+        """Active PE work sessions (for conversational Gate‑1 forks)."""
+        return await self._store.list_active(tenant_slug, self.role_id)
 
     async def start_programme(
         self, tenant: TenantContext, room: str, session: AgentWorkSession
@@ -324,17 +334,45 @@ class PeReviewProgramme(BaseBusinessService):
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(doc, encoding="utf-8")
 
+        # Full recommendation paper (PM promote/post-pm parity) — Buzz stays light.
+        card = build_gate1_decision_card(
+            initiative=init,
+            round_number=round_n,
+            max_rounds=max_rounds,
+            questions=questions,
+            recommend="await_pm",
+        )
+        brief_rel = hermes_gate1_brief_path(init)
+        brief_md = format_gate1_brief_markdown(
+            card,
+            initiative=init,
+            round_number=round_n,
+            max_rounds=max_rounds,
+            questions_path=rel,
+            pr_url=pr_url,
+            questions=questions,
+        )
+        (meta_root / brief_rel).write_text(brief_md, encoding="utf-8")
+
         session.slots["question_round"] = str(round_n)
         session.slots["questions_path"] = rel
+        session.slots["gate1_brief_path"] = brief_rel
         session.slots["question_count"] = str(len(questions))
-        session.stage = "gate1_questions"
+        # Auto await_pm — no choice spam; Lead forks later with attest/new_round/hold.
+        session.stage = "gate1_await_pm"
+        session.awaiting = AWAITING_NONE
+        session.open_brief = None
         await self._store.save(session)
 
         await self._poster.post_status(
             room,
-            (
-                f"Gate‑1 questions for {init} "
-                f"(round {round_n}/{max_rounds}, {len(questions)} Q ≤{max_q}).\n\n" + doc
+            format_gate1_buzz_bluf(
+                initiative=init,
+                round_number=round_n,
+                max_rounds=max_rounds,
+                question_count=len(questions),
+                brief_path=brief_rel,
+                questions_path=rel,
             ),
             EventType.PROGRESS,
             {
@@ -342,6 +380,7 @@ class PeReviewProgramme(BaseBusinessService):
                 "initiative": init,
                 "round": round_n,
                 "count": len(questions),
+                "brief_path": brief_rel,
             },
             identity_handle=self.role_id,
         )
@@ -351,11 +390,17 @@ class PeReviewProgramme(BaseBusinessService):
         if pr_number is not None and forge_allowed(self.role_id, "comment_pr"):
             try:
                 app = self._workspace.app_role(self._settings.reviewer_app_slug)
+                # PR comment: questions + pointer to decision brief (not Buzz dump).
+                pr_body = (
+                    f"{doc}\n\n---\n\n"
+                    f"**Decision brief:** `{brief_rel}` "
+                    f"(recommend: `{card.recommend}` — {card.bluf})"
+                )
                 result = await self._forge.comment_pr(
                     app=app,
                     repo=tenant.meta_repo,
                     pr_number=pr_number,
-                    body=doc,
+                    body=pr_body,
                 )
                 comment_url = result.url or ""
                 session.slots["pr_comment_url"] = comment_url
@@ -369,40 +414,12 @@ class PeReviewProgramme(BaseBusinessService):
             except Exception as exc:
                 await self._poster.post_status(
                     room,
-                    f"PR comment failed for {init}: {exc}. Questions remain on Buzz + `{rel}`.",
+                    f"PR comment failed for {init}: {exc}. Papers remain at `{rel}` + `{brief_rel}`.",
                     EventType.STALL,
                     identity_handle=self.role_id,
                 )
 
         await self._emit_pm_questions_baton(tenant, session)
-        brief = self._briefs.build_brief(
-            purpose="gate1-pe-next",
-            node_id="gate1-pe-next",
-            question=(
-                f"Gate‑1 round {round_n}/{max_rounds} for {init}: wait for PM, "
-                "run another capped round, or attest this head?"
-            ),
-            example="PM answers on PR/Buzz; PE attests only when product stance is clear.",
-            options=[
-                "await_pm — wait for PM answers",
-                "new_round — another capped question pass",
-                "attest — Approve this meta PR head (PE attestation)",
-                "hold — park Gate‑1",
-            ],
-            recommend="await_pm",
-            bluf="Attest only when satisfied; merge stays a separate PM authorize.",
-            reply_tokens=["await_pm", "new_round", "attest", "hold"],
-        )
-        session.open_brief = brief
-        session.awaiting = AWAITING_JUDGMENT
-        session.stage = "gate1_await_pm"
-        await self._store.save(session)
-        await self._poster.post_status(
-            room,
-            self._briefs.format_brief_markdown(brief),
-            EventType.PROGRESS,
-            identity_handle=self.role_id,
-        )
 
     async def _attest(self, tenant: TenantContext, room: str, session: AgentWorkSession) -> None:
         init = (session.initiative or session.work_id).strip().upper()
@@ -472,7 +489,27 @@ class PeReviewProgramme(BaseBusinessService):
             },
             identity_handle=self.role_id,
         )
+        await self._purge_gate1_temps(tenant, room, init)
         await self._emit_pm_merge_ready_baton(tenant, session)
+
+    async def _purge_gate1_temps(self, tenant: TenantContext, room: str, initiative: str) -> None:
+        """Delete Gate‑1 working papers after attest (purge, do not archive)."""
+        paths = gate1_temp_paths(initiative, meta_repo=tenant.meta_repo)
+        # Keep questions/brief until merge? Product lock: purge temps after attest.
+        # Read-walk + kb body may still be needed pre-KB — only purge PE Q + gate1 brief here.
+        pe_only = [
+            p for p in paths if "PE-Product-Questions-" in p or "-hermes-gate1-brief.md" in p
+        ]
+        purged = self._workspace.purge_local_paths(tenant, pe_only)
+        if not purged:
+            return
+        await self._poster.post_status(
+            room,
+            f"Purged Gate‑1 temp papers for {initiative}: " + ", ".join(f"`{p}`" for p in purged),
+            EventType.PROGRESS,
+            {"status": "gate1_temps_purged", "initiative": initiative, "paths": purged},
+            identity_handle=self.role_id,
+        )
 
     async def _emit_pm_questions_baton(
         self, tenant: TenantContext, session: AgentWorkSession

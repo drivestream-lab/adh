@@ -17,6 +17,10 @@ from src.models.buzz_models import MessageKind, MessageRead
 from src.models.tenant_models import TenantContext
 
 _GATE1_VERBS = frozenset({"gate1", "review"})
+# Conversational forks while auto-awaiting PM (no open brief / judgment gate).
+_GATE1_FORK_TOKENS = frozenset(
+    {"attest", "approve", "new_round", "round_again", "hold", "await_pm"}
+)
 
 
 class PEAgent(BaseHermesAgent):
@@ -84,7 +88,37 @@ class PEAgent(BaseHermesAgent):
                     pr_url = await self._lookup_pr_url(tenant.slug, init)
                 await self._pe.start_gate1(tenant, room, initiative=init, pr_url=pr_url)
                 return
+            if await self._try_gate1_fork(tenant, room, body):
+                return
             await self._orchestrator.handle_lead_message(tenant, room, message)
+
+    async def _try_gate1_fork(self, tenant: TenantContext, room: str, body: str) -> bool:
+        """Handle attest / new_round / hold while stage=gate1_await_pm (auto await_pm)."""
+        token = body.strip().lower().split()[0] if body.strip() else ""
+        if token not in _GATE1_FORK_TOKENS:
+            return False
+        active = await self._pe.list_active(tenant.slug)
+        candidates = [
+            s for s in active if s.stage in {"gate1_await_pm", "gate1_questions", "gate1_review"}
+        ]
+        if not candidates:
+            return False
+        session = candidates[0]
+        if len(candidates) > 1:
+            # Prefer INIT mentioned in body when several Gate‑1 sessions are open.
+            mentioned = extract_initiative(body, tenant.init_prefix)
+            if mentioned:
+                matched = [
+                    s for s in candidates if (s.initiative or "").upper() == mentioned.upper()
+                ]
+                if len(matched) == 1:
+                    session = matched[0]
+                else:
+                    return False
+            else:
+                return False
+        await self._pe.after_judgment(tenant, room, session, token)
+        return True
 
     async def _lookup_pr_url(self, tenant_slug: str, initiative: str) -> str:
         """Reuse pr_url from a prior pe.review baton when Lead omits it."""

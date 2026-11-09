@@ -194,6 +194,7 @@ src/adh_pm_worker.py | adh_pe_worker.py | adh_read_worker.py | adh_kb_worker.py
 | V1 | PM live-proven on new work store |
 | V2 | PE claims `pe.review`; read rollup |
 | D1–D2 | Gate‑1 questions + attest + PM merge authorize |
+| Gate‑1 UX | Decision paper (`*-hermes-gate1-brief.md`) mirrors PM promote Buying/Not buying; Buzz BLUF + artefact; auto `await_pm`; Lead forks `attest`/`new_round`/`hold`; purge temps (no archive) |
 | D3 | Tenant-resolved one-repo walk; structured artefact; Buzz BLUF + next |
 | D4 | KB head patch + Buzz pointer (+ enrich draft PR); heads-only policy |
 | D5 | Dup/timeout/wrong-authorize/forge-idempotent/SSE-safe |
