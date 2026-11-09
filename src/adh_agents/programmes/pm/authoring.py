@@ -32,7 +32,12 @@ from src.adh_agents.programmes.pm.lead_tokens import (
     parse_promote_pick,
     promote_pick_wants_clean,
 )
-from src.adh_agents.programmes.pm.promote_cleanup import scratch_paths_for_initiative
+from src.adh_agents.collaboration.temp_papers import (
+    PurgeContext,
+    PurgeEvent,
+    buzz_purge_notice,
+    execute_purge,
+)
 from src.adh_agents.runtime.work_store import (
     UNBOUND_WORK_ID,
     AgentWorkStore,
@@ -608,23 +613,30 @@ class AuthoringProgrammeService(BaseBusinessService):
         return True
 
     async def _purge_scratch(self, tenant: TenantContext, room: str, initiative: str) -> None:
-        """Purge pre-promote temp papers (delete — do not archive)."""
+        """Purge temps at ``promote_done`` (global matrix — not promote-private)."""
         listing = self._workspace.inventory(tenant)
-        candidates = list(listing.think_paths) + [
-            f"prd/reports/{initiative}-prd-quality.md",
-            f"prd/reports/{initiative}-prd-ask.md",
-            f"prd/reports/{initiative}-prd-recommend.md",
-        ]
-        paths = scratch_paths_for_initiative(initiative, candidates)
-        if not paths:
+        purged = execute_purge(
+            self._workspace,
+            tenant,
+            PurgeEvent.PROMOTE_DONE,
+            PurgeContext(
+                initiative=initiative,
+                meta_repo=tenant.meta_repo,
+                candidates=tuple(listing.think_paths),
+            ),
+        )
+        if not purged:
             return
-        purged = self._workspace.purge_local_paths(tenant, paths)
-        path_list = ", ".join(f"`{p}`" for p in purged) or "(none)"
         await self._poster.post_status(
             room,
-            f"Purged pre-promote temp papers for {initiative}: {path_list}.",
+            buzz_purge_notice(PurgeEvent.PROMOTE_DONE, initiative, purged),
             EventType.PROGRESS,
-            {"status": "promote_purged", "initiative": initiative, "paths": purged},
+            {
+                "status": "temps_purged",
+                "event": PurgeEvent.PROMOTE_DONE.value,
+                "initiative": initiative,
+                "paths": purged,
+            },
         )
 
 

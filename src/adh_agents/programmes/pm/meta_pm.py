@@ -9,6 +9,12 @@ from injector import inject
 
 from src.business_services.base_business_service import BaseBusinessService
 from src.adh_agents.collaboration.brief_service import HermesBriefService
+from src.adh_agents.collaboration.temp_papers import (
+    PurgeContext,
+    PurgeEvent,
+    buzz_purge_notice,
+    execute_purge,
+)
 from src.adh_agents.programmes.pm.decision_card import (
     CARD_POSTPM,
     DecisionCard,
@@ -1021,6 +1027,26 @@ class MetaPmProgrammeService(BaseBusinessService):
             EventType.PROGRESS,
             {"status": "post_pm_confirmed", "initiative": session.initiative},
         )
+        init = (session.initiative or "").strip().upper()
+        if init:
+            purged = execute_purge(
+                self._workspace,
+                tenant,
+                PurgeEvent.POST_PM_DONE,
+                PurgeContext(initiative=init, meta_repo=tenant.meta_repo),
+            )
+            if purged:
+                await self._poster.post_status(
+                    room,
+                    buzz_purge_notice(PurgeEvent.POST_PM_DONE, init, purged),
+                    EventType.PROGRESS,
+                    {
+                        "status": "temps_purged",
+                        "event": PurgeEvent.POST_PM_DONE.value,
+                        "initiative": init,
+                        "paths": purged,
+                    },
+                )
         await self._impact_pass(tenant, room, session)
 
     async def _open_forge_auth(

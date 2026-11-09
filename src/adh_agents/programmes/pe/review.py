@@ -22,7 +22,12 @@ from src.adh_agents.programmes.pe.questions import (
     format_questions_document,
     impact_map_path,
 )
-from src.adh_agents.programmes.pm.temp_papers import gate1_temp_paths
+from src.adh_agents.collaboration.temp_papers import (
+    PurgeContext,
+    PurgeEvent,
+    buzz_purge_notice,
+    execute_purge,
+)
 from src.adh_agents.runtime.work_models import (
     AWAITING_NONE,
     PROGRAMME_PE,
@@ -489,25 +494,35 @@ class PeReviewProgramme(BaseBusinessService):
             },
             identity_handle=self.role_id,
         )
-        await self._purge_gate1_temps(tenant, room, init)
+        await self._purge_temps(tenant, room, init, PurgeEvent.GATE1_ATTESTED)
         await self._emit_pm_merge_ready_baton(tenant, session)
 
-    async def _purge_gate1_temps(self, tenant: TenantContext, room: str, initiative: str) -> None:
-        """Delete Gate‑1 working papers after attest (purge, do not archive)."""
-        paths = gate1_temp_paths(initiative, meta_repo=tenant.meta_repo)
-        # Keep questions/brief until merge? Product lock: purge temps after attest.
-        # Read-walk + kb body may still be needed pre-KB — only purge PE Q + gate1 brief here.
-        pe_only = [
-            p for p in paths if "PE-Product-Questions-" in p or "-hermes-gate1-brief.md" in p
-        ]
-        purged = self._workspace.purge_local_paths(tenant, pe_only)
+    async def _purge_temps(
+        self,
+        tenant: TenantContext,
+        room: str,
+        initiative: str,
+        event: PurgeEvent,
+    ) -> None:
+        """Delete temps for a lifecycle event (global matrix — Gate‑1 is one event)."""
+        purged = execute_purge(
+            self._workspace,
+            tenant,
+            event,
+            PurgeContext(initiative=initiative, meta_repo=tenant.meta_repo),
+        )
         if not purged:
             return
         await self._poster.post_status(
             room,
-            f"Purged Gate‑1 temp papers for {initiative}: " + ", ".join(f"`{p}`" for p in purged),
+            buzz_purge_notice(event, initiative, purged),
             EventType.PROGRESS,
-            {"status": "gate1_temps_purged", "initiative": initiative, "paths": purged},
+            {
+                "status": "temps_purged",
+                "event": event.value,
+                "initiative": initiative,
+                "paths": purged,
+            },
             identity_handle=self.role_id,
         )
 

@@ -92,6 +92,7 @@ See [`../references/adh-kb-heads.md`](../references/adh-kb-heads.md).
 7. **Buzz light** — BLUF + artefact pointer + single next step; no information overload.
 8. **No tenant/INIT/repo hardcoding** in programmes — resolve via tenant context + baton payload (RealWorld is guinea pig only).
 9. **Agentic + conversational** — LLM/understand maps Lead chat to catalogue outcomes; no regex/frozenset delivery SSOT; soft gates always wait for Lead; LLM-down → ask-back.
+10. **Temp papers are ephemeral** — working artefacts under `prd/reports/` (think/briefs/questions/walks) are never SSOT. **Purge = delete** (never archive). Lifecycle **events** (promote done, post-pm done, Gate‑1 attested, PRD merged, KB enrich done, lane abort) clear families via one shared matrix — gates are callers, not private purge strategies.
 
 ## Implementation
 

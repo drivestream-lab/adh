@@ -9,6 +9,12 @@ from injector import inject
 from src.adh_agents.baton.models import Baton, BatonStatus, Rollup
 from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.collaboration.brief_service import HermesBriefService
+from src.adh_agents.collaboration.temp_papers import (
+    PurgeContext,
+    PurgeEvent,
+    buzz_purge_notice,
+    execute_purge,
+)
 from src.adh_agents.forge_acl import forge_allowed
 from src.adh_agents.programmes.kb.heads import (
     HeadPatch,
@@ -302,6 +308,25 @@ class KbEnrichProgramme(BaseBusinessService):
             {"status": "kb_enrich_pr", "initiative": init, "pr": pr_url},
             identity_handle=self.role_id,
         )
+        purged = execute_purge(
+            self._workspace,
+            tenant,
+            PurgeEvent.KB_ENRICH_DONE,
+            PurgeContext(initiative=init, meta_repo=tenant.meta_repo),
+        )
+        if purged:
+            await self._poster.post_status(
+                room,
+                buzz_purge_notice(PurgeEvent.KB_ENRICH_DONE, init, purged),
+                EventType.PROGRESS,
+                {
+                    "status": "temps_purged",
+                    "event": PurgeEvent.KB_ENRICH_DONE.value,
+                    "initiative": init,
+                    "paths": purged,
+                },
+                identity_handle=self.role_id,
+            )
 
 
 def _load_signals(tenant: TenantContext, init: str, repo_ref: str) -> list[str]:
