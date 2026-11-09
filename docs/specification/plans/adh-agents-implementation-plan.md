@@ -1,6 +1,6 @@
 # Implementation plan — ADH Agents Team OS
 
-**Status:** Wave 0b greenfield spine in [PR #15](https://github.com/drivestream-lab/adh/pull/15); next = verify gates then programme depth.  
+**Status:** Wave 0b greenfield spine merged ([PR #16](https://github.com/drivestream-lab/adh/pull/16)); **V1+V2 verify done** — next = D1–D5 programme depth.  
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md)  
 **Product:** [adh-agents-team-os.md](../product/adh-agents-team-os.md)  
 **As-built:** [implementation-status.md](../as-built/implementation-status.md)
@@ -16,14 +16,14 @@ ADH Agents Team OS
 
 0.  Product / ADR lock                              ✅
 0a. PM on BaseHermesAgent + baton emit              ✅  PRs #6–#14
-0b. Greenfield control plane + delete legacy        ✅  PR #15 (merge)
+0b. Greenfield control plane + delete legacy        ✅  PR #16 (merge; #15 closed for branch rename)
     - Orchestrator + work store + workers
     - PM programmes on plane
     - pe / read / kb hired (minimal)
 
 ── verify gate (block treating PE as “done”) ──
-V1. PM live on new OS (RealWorld guinea pig)        ⬜  post-merge
-V2. PE claims pe.review → read.walk                 ⬜
+V1. PM live on new OS (RealWorld guinea pig)        ✅  ask-back/resume/gates/authorize → PR #2
+V2. PE claims pe.review → read.walk                 ✅  catch-up + live claim → read rollup
 
 ── depth (same OS — not new architecture) ──
 D1. PE: Q caps (≤10 / ≤4 rounds), Buzz+PR, attest   ⬜

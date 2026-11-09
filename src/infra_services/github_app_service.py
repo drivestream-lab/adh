@@ -309,6 +309,28 @@ class GitHubAppService(BaseInfraService):
             headers=headers,
             json={"title": title, "head": head, "base": base, "body": body, "draft": draft},
         )
+        if created.status_code == 422:
+            # Idempotent open_draft_pr: head/base PR may already exist from a prior authorize.
+            existing = await self._existing_pull_request(token, repo, head=head, base=base)
+            if existing is not None:
+                number, url = existing
+                logger.info(
+                    "Reusing existing pull request",
+                    repo=repo,
+                    pr=number,
+                    url=url,
+                    head=head,
+                    base=base,
+                )
+                if labels:
+                    labelled = await self._request(
+                        "POST",
+                        f"{repo_url}/issues/{number}/labels",
+                        headers=headers,
+                        json={"labels": labels},
+                    )
+                    labelled.raise_for_status()
+                return number, url
         if created.status_code >= 400:
             logger.info(
                 "GitHub create pull request failed",
@@ -329,6 +351,42 @@ class GitHubAppService(BaseInfraService):
             )
             labelled.raise_for_status()
         logger.info("Opened pull request", repo=repo, pr=number, url=url, draft=draft)
+        return number, url
+
+    async def _existing_pull_request(
+        self,
+        token: str,
+        repo: str,
+        *,
+        head: str,
+        base: str,
+    ) -> tuple[int, str] | None:
+        """Return (number, url) for an open PR with the same head/base, else None."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        head_ref = head if ":" in head else f"{org}:{head}"
+        listed = await self._request(
+            "GET",
+            f"{api}/repos/{org}/{repo}/pulls",
+            headers=_token_headers(token),
+            params={"state": "open", "head": head_ref, "base": base},
+        )
+        if listed.status_code >= 400:
+            logger.info(
+                "GitHub list pull requests failed",
+                repo=repo,
+                status=listed.status_code,
+                body=listed.text[:300],
+            )
+            return None
+        rows = listed.json()
+        if not isinstance(rows, list) or not rows:
+            return None
+        payload = rows[0]
+        number = int(payload["number"])
+        url = str(payload.get("html_url") or f"https://github.com/{org}/{repo}/pull/{number}")
         return number, url
 
     async def put_text_file(
@@ -471,6 +529,216 @@ class GitHubAppService(BaseInfraService):
             )
             created.raise_for_status()
         logger.info("Ensured GitHub branch", branch=branch, status=created.status_code)
+
+    async def create_issue_comment(
+        self,
+        token: str,
+        repo: str,
+        *,
+        issue_number: int,
+        body: str,
+    ) -> str:
+        """Post an issue/PR conversation comment. Returns html_url."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        created = await self._request(
+            "POST",
+            f"{api}/repos/{org}/{repo}/issues/{issue_number}/comments",
+            headers=_token_headers(token),
+            json={"body": body},
+        )
+        if created.status_code >= 400:
+            logger.info(
+                "GitHub create issue comment failed",
+                repo=repo,
+                issue=issue_number,
+                status=created.status_code,
+                body=created.text[:300],
+            )
+            created.raise_for_status()
+        payload = created.json()
+        url = str(payload.get("html_url") or "")
+        logger.info("Posted GitHub issue comment", repo=repo, issue=issue_number, url=url)
+        return url
+
+    async def create_pull_review(
+        self,
+        token: str,
+        repo: str,
+        *,
+        pr_number: int,
+        body: str,
+        event: str = "APPROVE",
+        commit_id: str | None = None,
+    ) -> str:
+        """Submit a PR review (APPROVE / COMMENT / REQUEST_CHANGES). Returns html_url."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        payload: dict[str, Any] = {"body": body, "event": event}
+        if commit_id:
+            payload["commit_id"] = commit_id
+        created = await self._request(
+            "POST",
+            f"{api}/repos/{org}/{repo}/pulls/{pr_number}/reviews",
+            headers=_token_headers(token),
+            json=payload,
+        )
+        if created.status_code >= 400:
+            logger.info(
+                "GitHub create pull review failed",
+                repo=repo,
+                pr=pr_number,
+                status=created.status_code,
+                body=created.text[:300],
+            )
+            created.raise_for_status()
+        data = created.json()
+        url = str(data.get("html_url") or "")
+        logger.info(
+            "Submitted GitHub pull review",
+            repo=repo,
+            pr=pr_number,
+            event=event,
+            url=url,
+        )
+        return url
+
+    async def merge_pull_request(
+        self,
+        token: str,
+        repo: str,
+        *,
+        pr_number: int,
+        commit_title: str,
+        merge_method: str = "squash",
+    ) -> str:
+        """Merge a PR. Returns merged commit SHA / url marker."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        merged = await self._request(
+            "PUT",
+            f"{api}/repos/{org}/{repo}/pulls/{pr_number}/merge",
+            headers=_token_headers(token),
+            json={
+                "merge_method": merge_method,
+                "commit_title": commit_title,
+            },
+        )
+        if merged.status_code >= 400:
+            logger.info(
+                "GitHub merge pull request failed",
+                repo=repo,
+                pr=pr_number,
+                status=merged.status_code,
+                body=merged.text[:300],
+            )
+            merged.raise_for_status()
+        data = merged.json()
+        sha = str(data.get("sha") or "")
+        logger.info("Merged pull request", repo=repo, pr=pr_number, sha=sha)
+        return sha or f"https://github.com/{org}/{repo}/pull/{pr_number}"
+
+    async def replace_issue_labels(
+        self,
+        token: str,
+        repo: str,
+        *,
+        issue_number: int,
+        add: list[str],
+        remove: list[str],
+    ) -> None:
+        """Add/remove issue/PR labels (projection). Does not invent *-lgtm policy."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        headers = _token_headers(token)
+        base = f"{api}/repos/{org}/{repo}/issues/{issue_number}/labels"
+        for name in remove:
+            deleted = await self._request(
+                "DELETE",
+                f"{base}/{quote(name, safe='')}",
+                headers=headers,
+            )
+            if deleted.status_code >= 400 and deleted.status_code not in (404,):
+                logger.info(
+                    "GitHub remove label failed",
+                    repo=repo,
+                    issue=issue_number,
+                    label=name,
+                    status=deleted.status_code,
+                    body=deleted.text[:200],
+                )
+                deleted.raise_for_status()
+        if add:
+            added = await self._request(
+                "POST",
+                base,
+                headers=headers,
+                json={"labels": add},
+            )
+            if added.status_code >= 400:
+                logger.info(
+                    "GitHub add labels failed",
+                    repo=repo,
+                    issue=issue_number,
+                    labels=add,
+                    status=added.status_code,
+                    body=added.text[:200],
+                )
+                added.raise_for_status()
+        logger.info(
+            "Updated GitHub labels",
+            repo=repo,
+            issue=issue_number,
+            add=add,
+            remove=remove,
+        )
+
+    async def mark_ready_for_review(self, token: str, repo: str, *, pr_number: int) -> None:
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        response = await self._request(
+            "POST",
+            f"{api}/repos/{org}/{repo}/pulls/{pr_number}/ready_for_review",
+            headers=_token_headers(token),
+        )
+        if response.status_code >= 400 and response.status_code != 422:
+            logger.info(
+                "GitHub ready_for_review failed",
+                repo=repo,
+                pr=pr_number,
+                status=response.status_code,
+                body=response.text[:300],
+            )
+            response.raise_for_status()
+
+    async def pull_head_sha(self, token: str, repo: str, *, pr_number: int) -> str | None:
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        response = await self._request(
+            "GET",
+            f"{api}/repos/{org}/{repo}/pulls/{pr_number}",
+            headers=_token_headers(token),
+        )
+        if response.status_code >= 400:
+            return None
+        data = response.json()
+        head = data.get("head") if isinstance(data, dict) else None
+        if not isinstance(head, dict):
+            return None
+        sha = head.get("sha")
+        return str(sha) if sha else None
 
     async def probe_merge(self, token: str, repo: str, pr_number: int) -> int:
         """Attempt merge. Must not succeed. 403/405/422 is the G0 pass."""

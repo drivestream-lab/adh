@@ -42,11 +42,13 @@ class HermesBuzzPoster:
         body: str,
         event_type: EventType = EventType.PROGRESS,
         payload: Optional[dict[str, Any]] = None,
+        *,
+        identity_handle: str | None = None,
     ) -> MessageRead:
         return await self._buzz.post_message(
             room,
             MessageCreate(
-                identity_handle=_HERMES_HANDLE,
+                identity_handle=identity_handle or _HERMES_HANDLE,
                 body=body,
                 kind=MessageKind.EVENT,
                 event_type=event_type,

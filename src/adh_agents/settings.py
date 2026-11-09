@@ -66,6 +66,22 @@ class PmAgentSettings(AgentSettings):
 class PeAgentSettings(AgentSettings):
     PREFIX: ClassVar[str] = "ADH_PE"
     role_id: str = Field(default="adh.pe")
+    max_product_questions: int = Field(
+        default=10,
+        ge=1,
+        le=20,
+        description="Gate‑1 open product-question cap per round",
+    )
+    max_question_rounds: int = Field(
+        default=4,
+        ge=1,
+        le=8,
+        description="Max Gate‑1 question rounds before fail-closed",
+    )
+    reviewer_app_slug: str = Field(
+        default="adh-reviewer",
+        description="roles.yaml app used for PE comment + attest",
+    )
 
 
 class ReadAgentSettings(AgentSettings):

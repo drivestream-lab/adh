@@ -7,12 +7,16 @@ from injector import inject
 from src.adh_agents.base import BaseHermesAgent
 from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.programmes.pe.review import PeReviewProgramme
+from src.adh_agents.programmes.pm.lead_tokens import extract_initiative
 from src.adh_agents.runtime.orchestrator import Orchestrator
 from src.adh_agents.settings import PeAgentSettings
 from src.business_services.buzz_service import BuzzService
 from src.configs.hermes_settings import HermesSettings
 from src.infra_services.tenant_registry_service import TenantRegistryService
 from src.models.buzz_models import MessageKind, MessageRead
+from src.models.tenant_models import TenantContext
+
+_GATE1_VERBS = frozenset({"gate1", "review"})
 
 
 class PEAgent(BaseHermesAgent):
@@ -40,7 +44,17 @@ class PEAgent(BaseHermesAgent):
         self._orchestrator.set_programme_runner(self._pe)
         rooms = [t.ops_room for t in self._tenants.active()]
         await self.start_ops_listeners(rooms)
+        await self._catch_up_pending_batons()
         self.logger.info("PEAgent listening", rooms=rooms)
+
+    async def _catch_up_pending_batons(self) -> None:
+        """Claim pe.review batons parked before this worker was online."""
+        for tenant in self._tenants.active():
+            pending = await self._batons.list_pending_for(
+                tenant=tenant.slug, to_role=self.role_id, baton_type="pe.review"
+            )
+            for baton in pending:
+                await self._pe.handle_baton(baton, room=tenant.ops_room)
 
     async def handle_ops_message(self, room: str, message: MessageRead) -> None:
         tenant = self._tenants.by_ops_room(room)
@@ -60,4 +74,51 @@ class PEAgent(BaseHermesAgent):
                 await self._pe.handle_baton(baton, room=room)
                 return
         if message.kind == MessageKind.MESSAGE and (message.identity_handle or "") == self._lead:
+            body = (message.body or "").strip()
+            gate1 = _parse_gate1_command(body, tenant)
+            if gate1 is not None:
+                init, pr_url = gate1
+                if not pr_url:
+                    pr_url = await self._lookup_pr_url(tenant.slug, init)
+                await self._pe.start_gate1(tenant, room, initiative=init, pr_url=pr_url)
+                return
             await self._orchestrator.handle_lead_message(tenant, room, message)
+
+    async def _lookup_pr_url(self, tenant_slug: str, initiative: str) -> str:
+        """Reuse pr_url from a prior pe.review baton when Lead omits it."""
+        rows = await self._batons.list_for_tenant(tenant=tenant_slug, baton_type="pe.review")
+        for baton in rows:
+            if (baton.initiative or "").upper() != initiative.upper():
+                continue
+            url = str((baton.payload or {}).get("pr_url") or "")
+            if url:
+                return url
+        return ""
+
+
+def _parse_gate1_command(body: str, tenant: TenantContext) -> tuple[str, str] | None:
+    """Lead shorthand: ``gate1 INIT-…`` / ``pe review INIT-…`` [optional PR URL].
+
+    Uses shared initiative extraction — not a private INIT- regex.
+    """
+    parts = body.split()
+    if not parts:
+        return None
+    idx = 0
+    if parts[0].lower() == "pe":
+        idx = 1
+    if idx >= len(parts) or parts[idx].lower() not in _GATE1_VERBS:
+        return None
+    remainder = " ".join(parts[idx + 1 :])
+    initiative = extract_initiative(remainder, tenant.init_prefix)
+    if not initiative:
+        return None
+    return initiative.upper(), _extract_github_pr_url(remainder)
+
+
+def _extract_github_pr_url(text: str) -> str:
+    for token in text.split():
+        cleaned = token.strip(".,);]")
+        if cleaned.startswith("https://github.com/") and "/pull/" in cleaned:
+            return cleaned
+    return ""

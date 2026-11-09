@@ -150,6 +150,9 @@ class BaseHermesAgent(BaseBusinessService, abc.ABC):
                         "to_role": stored.to_role,
                         "created": created,
                         "correlation_id": stored.correlation_id,
+                        "idempotency_key": stored.idempotency_key,
+                        "tenant": stored.tenant,
+                        "initiative": stored.initiative,
                     },
                 ),
             )

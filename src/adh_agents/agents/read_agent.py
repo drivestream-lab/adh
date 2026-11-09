@@ -38,7 +38,17 @@ class ReadAgent(BaseHermesAgent):
         self._orchestrator.set_programme_runner(self._walk)
         rooms = [t.ops_room for t in self._tenants.active()]
         await self.start_ops_listeners(rooms)
+        await self._catch_up_pending_batons()
         self.logger.info("ReadAgent listening", rooms=rooms)
+
+    async def _catch_up_pending_batons(self) -> None:
+        """Claim read.walk batons parked before this worker was online."""
+        for tenant in self._tenants.active():
+            pending = await self._batons.list_pending_for(
+                tenant=tenant.slug, to_role=self.role_id, baton_type="read.walk"
+            )
+            for baton in pending:
+                await self._walk.handle_baton(baton, room=tenant.ops_room)
 
     async def handle_ops_message(self, room: str, message: MessageRead) -> None:
         tenant = self._tenants.by_ops_room(room)

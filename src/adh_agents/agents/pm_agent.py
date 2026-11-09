@@ -18,6 +18,7 @@ from src.adh_agents.programmes.pm.lead_tokens import (
 )
 from src.adh_agents.programmes.pm.meta_pm import MetaPmProgrammeService
 from src.adh_agents.programmes.pm.outline_lock import OutlineLockMixin
+from src.adh_agents.programmes.pm.pe_glue import PmPeGlueProgramme
 from src.adh_agents.runtime.catch_up import should_skip_catch_up
 from src.adh_agents.runtime.orchestrator import Orchestrator
 from src.adh_agents.runtime.work_store import AgentWorkStore
@@ -33,6 +34,8 @@ from src.models.buzz_models import (
     MessageKind,
     MessageRead,
 )
+
+_PM_BATON_TYPES = frozenset({"pm.pe_questions", "pm.prd_merge_ready"})
 
 
 class PMAgent(OutlineLockMixin, BaseHermesAgent):
@@ -52,6 +55,7 @@ class PMAgent(OutlineLockMixin, BaseHermesAgent):
         orchestrator: Orchestrator,
         meta_pm: MetaPmProgrammeService,
         authoring: AuthoringProgrammeService,
+        pe_glue: PmPeGlueProgramme,
     ) -> None:
         settings = PmAgentSettings.get_instance()
         super().__init__(buzz=buzz, batons=batons, settings=settings)
@@ -61,6 +65,7 @@ class PMAgent(OutlineLockMixin, BaseHermesAgent):
         self._orchestrator = orchestrator
         self._meta_pm = meta_pm
         self._authoring = authoring
+        self._pe_glue = pe_glue
         self._pm_settings = settings
         self._settings = HermesSettings.get_instance()
         self._inflight: dict[str, str] = {}
@@ -74,12 +79,35 @@ class PMAgent(OutlineLockMixin, BaseHermesAgent):
         await self.start_ops_listeners(rooms)
         for room in rooms:
             await self.catch_up_ops(room)
+        await self._catch_up_pending_batons()
         self.logger.info("PMAgent listening", rooms=rooms)
+
+    async def _catch_up_pending_batons(self) -> None:
+        for tenant in self._tenants.active():
+            for baton_type in _PM_BATON_TYPES:
+                pending = await self._batons.list_pending_for(
+                    tenant=tenant.slug, to_role=self.role_id, baton_type=baton_type
+                )
+                for baton in pending:
+                    await self._pe_glue.handle_baton(baton, room=tenant.ops_room)
 
     async def handle_ops_message(self, room: str, message: MessageRead) -> None:
         tenant = self._tenants.by_ops_room(room)
         if tenant is None:
             return
+        payload = message.payload or {}
+        if (
+            payload.get("status") == "baton_emitted"
+            and payload.get("baton_type") in _PM_BATON_TYPES
+            and payload.get("idempotency_key")
+        ):
+            baton = await self._batons.get(
+                tenant=str(payload.get("tenant") or tenant.slug),
+                idempotency_key=str(payload["idempotency_key"]),
+            )
+            if baton is not None:
+                await self._pe_glue.handle_baton(baton, room=room)
+                return
         if await self._try_lead_stop(tenant, room, message):
             return
         if self._is_lead_text(message) and await self._orchestrator.handle_lead_message(

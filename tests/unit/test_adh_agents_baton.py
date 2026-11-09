@@ -28,6 +28,13 @@ class _FakeRedis:
     async def get(self, key: str, as_json: bool = False) -> Any:
         return self._data.get(key)
 
+    async def keys(self, pattern: str) -> list[str]:
+        # Minimal glob: treat '*' as substring wildcard at ends only.
+        if pattern.endswith("*"):
+            prefix = pattern[:-1]
+            return [k for k in self._data if k.startswith(prefix)]
+        return [k for k in self._data if k == pattern]
+
 
 def test_forge_acl_default_deny() -> None:
     assert forge_allowed("adh.pm", "open_draft_pr")
@@ -35,6 +42,7 @@ def test_forge_acl_default_deny() -> None:
     assert not forge_allowed("adh.pm", "approve_attestation")
     assert not forge_allowed("adh.read", "open_draft_pr")
     assert forge_allowed("adh.pe", "approve_attestation")
+    assert forge_allowed("adh.pe", "comment_pr")
 
 
 def test_baton_create_claim_done() -> None:
@@ -70,3 +78,40 @@ def test_baton_create_claim_done() -> None:
 
     done = asyncio.run(store.mark_done(loaded, ttl=60))
     assert done.status == BatonStatus.DONE
+
+
+def test_list_pending_for_role() -> None:
+    store = RedisBatonStore.__new__(RedisBatonStore)
+    store._redis = _FakeRedis()  # type: ignore[assignment]
+    store._prefix = "adh:baton"
+
+    pe = Baton(
+        type="pe.review",
+        from_role="adh.pm",
+        to_role="adh.pe",
+        tenant="realworld",
+        ops_room="realworld-ops",
+        initiative="INIT-A",
+        idempotency_key="pe.review:realworld:INIT-A:draft",
+    )
+    walk = Baton(
+        type="read.walk",
+        from_role="adh.pe",
+        to_role="adh.read",
+        tenant="realworld",
+        ops_room="realworld-ops",
+        initiative="INIT-A",
+        idempotency_key="read.walk:realworld:INIT-A:meta",
+    )
+    asyncio.run(store.create_pending(pe, ttl=60))
+    asyncio.run(store.create_pending(walk, ttl=60))
+
+    pending_pe = asyncio.run(
+        store.list_pending_for(tenant="realworld", to_role="adh.pe", baton_type="pe.review")
+    )
+    assert len(pending_pe) == 1
+    assert pending_pe[0].type == "pe.review"
+
+    pending_read = asyncio.run(store.list_pending_for(tenant="realworld", to_role="adh.read"))
+    assert len(pending_read) == 1
+    assert pending_read[0].type == "read.walk"
