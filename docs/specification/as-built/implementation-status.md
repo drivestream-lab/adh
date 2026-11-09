@@ -15,6 +15,8 @@
 | D3 — Read: one-repo walk / structured rollup | ✅ tenant `repo_ref` + artefact (Buzz BLUF) |
 | D4 — KB: `knowledge/` head patches + Buzz pointer | ✅ stub+LLM; post-merge `kb.enrich`; Lead authorize enrich PR |
 | D5 — Harden: dup / timeout / authorize / forge / SSE | ✅ reclaim; brief-token gates; no regex SSOT; SSE-safe authorize |
+| Gate‑1 decision paper (PM Buying/Not buying parity) | ✅ `*-hermes-gate1-brief.md`; Buzz light; auto await_pm |
+| Global temp-paper purge | ✅ `collaboration/temp_papers.py` event matrix; promote / post-pm / attest / merge / kb enrich |
 
 ## Landed (0b)
 

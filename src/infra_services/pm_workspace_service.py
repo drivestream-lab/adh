@@ -60,6 +60,11 @@ def hermes_post_pm_brief_path(initiative: str) -> str:
     return f"prd/reports/{initiative}-hermes-post-pm-brief.md"
 
 
+def hermes_gate1_brief_path(initiative: str) -> str:
+    """Hermes-owned Gate‑1 decision card (Buying / Not buying — PE lane)."""
+    return f"prd/reports/{initiative}-hermes-gate1-brief.md"
+
+
 def ask_path(initiative: str) -> str:
     return f"prd/reports/{initiative}-prd-ask.md"
 
@@ -350,6 +355,14 @@ class PmWorkspaceService(BaseInfraService):
         dest.unlink()
         logger.info("Deleted PM artifact from workspace", path=str(dest), slug=tenant.slug)
         return dest
+
+    def purge_local_paths(self, tenant: TenantContext, relative_paths: list[str]) -> list[str]:
+        """Delete temporary papers from tenant meta workspace (no archive)."""
+        purged: list[str] = []
+        for relative in list(dict.fromkeys(p for p in relative_paths if p)):
+            if self.delete_local(tenant, relative) is not None:
+                purged.append(relative)
+        return purged
 
     def move_local(
         self, tenant: TenantContext, relative_path: str, dest_relative: str

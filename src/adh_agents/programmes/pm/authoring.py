@@ -32,9 +32,11 @@ from src.adh_agents.programmes.pm.lead_tokens import (
     parse_promote_pick,
     promote_pick_wants_clean,
 )
-from src.adh_agents.programmes.pm.promote_cleanup import (
-    archive_dest,
-    scratch_paths_for_initiative,
+from src.adh_agents.collaboration.temp_papers import (
+    PurgeContext,
+    PurgeEvent,
+    buzz_purge_notice,
+    execute_purge,
 )
 from src.adh_agents.runtime.work_store import (
     UNBOUND_WORK_ID,
@@ -547,7 +549,7 @@ class AuthoringProgrammeService(BaseBusinessService):
             },
         )
         if clean:
-            await self._archive_scratch(tenant, room, initiative)
+            await self._purge_scratch(tenant, room, initiative)
         return True
 
     def _progress_callback(
@@ -607,38 +609,34 @@ class AuthoringProgrammeService(BaseBusinessService):
             {"status": "awaiting_post_pm", "initiative": initiative, "path": dest},
         )
         if clean:
-            await self._archive_scratch(tenant, room, initiative)
+            await self._purge_scratch(tenant, room, initiative)
         return True
 
-    async def _archive_scratch(self, tenant: TenantContext, room: str, initiative: str) -> None:
+    async def _purge_scratch(self, tenant: TenantContext, room: str, initiative: str) -> None:
+        """Purge temps at ``promote_done`` (global matrix — not promote-private)."""
         listing = self._workspace.inventory(tenant)
-        candidates = list(listing.think_paths) + [
-            f"prd/reports/{initiative}-prd-quality.md",
-            f"prd/reports/{initiative}-prd-ask.md",
-            f"prd/reports/{initiative}-prd-recommend.md",
-        ]
-        paths = scratch_paths_for_initiative(initiative, candidates)
-        moves = [(path, archive_dest(path, initiative)) for path in paths]
-        if not moves:
-            return
-        result = await self._workspace.archive_paths(
+        purged = execute_purge(
+            self._workspace,
             tenant,
-            moves,
-            commit_message=f"docs({initiative}): archive pre-promote scratch",
+            PurgeEvent.PROMOTE_DONE,
+            PurgeContext(
+                initiative=initiative,
+                meta_repo=tenant.meta_repo,
+                candidates=tuple(listing.think_paths),
+            ),
         )
-        archived = result.get("archived") or []
-        path_list = (
-            ", ".join(f"`{item.get('source')}` → `{item.get('dest')}`" for item in archived)
-            or "(none)"
-        )
+        if not purged:
+            return
         await self._poster.post_status(
             room,
-            self._poster.copy(
-                "hermes.pm.status.promote-archived",
-                {"initiative": initiative, "paths": path_list},
-            ),
+            buzz_purge_notice(PurgeEvent.PROMOTE_DONE, initiative, purged),
             EventType.PROGRESS,
-            {"status": "promote_archived", "initiative": initiative},
+            {
+                "status": "temps_purged",
+                "event": PurgeEvent.PROMOTE_DONE.value,
+                "initiative": initiative,
+                "paths": purged,
+            },
         )
 
 

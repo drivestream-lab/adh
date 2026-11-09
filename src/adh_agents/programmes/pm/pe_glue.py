@@ -7,6 +7,12 @@ from injector import inject
 from src.adh_agents.baton.models import Baton, BatonStatus, Rollup
 from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.collaboration.brief_service import HermesBriefService
+from src.adh_agents.collaboration.temp_papers import (
+    PurgeContext,
+    PurgeEvent,
+    buzz_purge_notice,
+    execute_purge,
+)
 from src.adh_agents.forge_acl import forge_allowed
 from src.adh_agents.runtime.work_models import (
     AWAITING_JUDGMENT,
@@ -334,7 +340,36 @@ class PmPeGlueProgramme(BaseBusinessService):
             EventType.DONE,
             {"status": "prd_merged", "initiative": init, "pr": pr_number},
         )
+        await self._purge_temps(tenant, room, init, PurgeEvent.PRD_MERGED)
         await self._emit_kb_enrich(tenant, room, init, pr_number)
+
+    async def _purge_temps(
+        self,
+        tenant: TenantContext,
+        room: str,
+        initiative: str,
+        event: PurgeEvent,
+    ) -> None:
+        listing = self._workspace.inventory(tenant)
+        ctx = PurgeContext(
+            initiative=initiative,
+            meta_repo=tenant.meta_repo,
+            candidates=tuple(listing.think_paths),
+        )
+        purged = execute_purge(self._workspace, tenant, event, ctx)
+        if not purged:
+            return
+        await self._poster.post_status(
+            room,
+            buzz_purge_notice(event, initiative, purged),
+            EventType.PROGRESS,
+            {
+                "status": "temps_purged",
+                "event": event.value,
+                "initiative": initiative,
+                "paths": purged,
+            },
+        )
 
     async def _emit_kb_enrich(
         self, tenant: TenantContext, room: str, initiative: str, pr_number: int

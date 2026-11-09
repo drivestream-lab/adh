@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Optional
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -12,6 +14,7 @@ from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.programmes.pe.review import PeReviewProgramme
 from src.adh_agents.runtime.work_store import AgentWorkStore
 from src.models.buzz_models import EventType
+from src.models.tenant_models import TenantContext
 
 
 class _FakeRedis:
@@ -48,16 +51,43 @@ class _FakePoster:
         body: str,
         event_type: EventType = EventType.PROGRESS,
         payload: Optional[dict[str, Any]] = None,
+        identity_handle: Optional[str] = None,
     ) -> None:
         self.posts.append(body)
 
 
 @pytest.mark.asyncio
-async def test_pe_claims_and_emits_read_walk() -> None:
+async def test_pe_claims_and_emits_read_walk(tmp_path: Path) -> None:
     redis = _FakeRedis()
     batons = RedisBatonStore(redis)  # type: ignore[arg-type]
     store = AgentWorkStore(redis)  # type: ignore[arg-type]
-    pe = PeReviewProgramme(store=store, batons=batons, poster=_FakePoster())  # type: ignore[arg-type]
+    reports = tmp_path / "prd" / "reports"
+    reports.mkdir(parents=True)
+
+    tenant = TenantContext(
+        slug="realworld",
+        org="org",
+        ops_room="realworld-ops",
+        meta_repo="org/meta",
+        meta_root=str(tmp_path),
+        init_prefix="INIT-REALWORLD",
+    )
+    tenants = MagicMock()
+    tenants.by_slug.return_value = tenant
+    workspace = MagicMock()
+    workspace.purge_local_paths.return_value = []
+    forge = MagicMock()
+    briefs = MagicMock()
+
+    pe = PeReviewProgramme(
+        store=store,
+        batons=batons,
+        poster=_FakePoster(),  # type: ignore[arg-type]
+        briefs=briefs,
+        forge=forge,
+        workspace=workspace,
+        tenants=tenants,
+    )
     baton = Baton(
         type="pe.review",
         from_role="adh.pm",
@@ -73,10 +103,16 @@ async def test_pe_claims_and_emits_read_walk() -> None:
     assert rollup.status == BatonStatus.DONE
     walk = await batons.get(
         tenant="realworld",
-        idempotency_key="read.walk:realworld:INIT-REALWORLD-001:meta",
+        idempotency_key="read.walk:realworld:INIT-REALWORLD-001:org/meta",
     )
     assert walk is not None
     assert walk.type == "read.walk"
     live = await store.load("realworld", "adh.pe", "INIT-REALWORLD-001")
     assert live is not None
     assert live.programme == "pe"
+    assert live.stage == "gate1_await_pm"
+    brief = tmp_path / "prd" / "reports" / "INIT-REALWORLD-001-hermes-gate1-brief.md"
+    assert brief.is_file()
+    text = brief.read_text(encoding="utf-8")
+    assert "**Buying.**" in text
+    assert "recommend: await_pm" in text
