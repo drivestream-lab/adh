@@ -20,6 +20,9 @@ class IdentityRole(str, Enum):
     CODER = "coder"
     REVIEWER = "reviewer"
     PM = "pm"
+    PE = "pe"
+    READ = "read"
+    KB = "kb"
     ORCHESTRATOR = "orchestrator"
     SYSTEM = "system"
 

@@ -7,10 +7,12 @@
 | Item | Status |
 |------|--------|
 | 0 / 0a — ADR + PM on `BaseHermesAgent` + baton emit | ✅ `develop` (#6–#14); INIT-001 guinea pig done |
-| 0b — Greenfield control plane + delete legacy | ✅ [PR #15](https://github.com/drivestream-lab/adh/pull/15) |
-| V1 — PM live on new OS | ⬜ post-merge |
-| V2 — PE claims `pe.review` → read.walk | ⬜ |
-| D1–D5 — PE/PM/read/kb depth + harden | ⬜ |
+| 0b — Greenfield control plane + delete legacy | ✅ [PR #16](https://github.com/drivestream-lab/adh/pull/16) |
+| V1 — PM live on new OS | ✅ RealWorld INIT-001 ask-back/resume/gates/authorize |
+| V2 — PE claims `pe.review` → read.walk | ✅ baton catch-up + read rollup |
+| D1 — PE Q caps, Buzz+PR, attest + `impact-map-lgtm` | ✅ guinea pig on PR #2 |
+| D2 — PM ack PE + `prd_merge` authorize | ✅ meta PR #2 merged |
+| D3–D5 — read/kb depth + harden | ⬜ |
 
 ## Landed (0b)
 

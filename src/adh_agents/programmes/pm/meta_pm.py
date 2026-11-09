@@ -16,6 +16,7 @@ from src.adh_agents.programmes.pm.decision_card import (
     parse_postpm_decision_card,
 )
 from src.adh_agents.programmes.pm.decision_cards import apply_validate_briefs
+from src.adh_agents.programmes.pm.pe_glue import PmPeGlueProgramme
 from src.adh_agents.execution.dispatch_service import HermesDispatchService
 from src.adh_agents.catalogue.navigator import HermesNavigatorService
 from src.adh_agents.runtime.work_store import AgentWorkStore
@@ -89,6 +90,7 @@ class MetaPmProgrammeService(BaseBusinessService):
         poster: HermesBuzzPoster,
         workspace: PmWorkspaceService,
         prompts: PromptService,
+        pe_glue: PmPeGlueProgramme,
     ) -> None:
         super().__init__()
         self._store = store
@@ -98,6 +100,7 @@ class MetaPmProgrammeService(BaseBusinessService):
         self._poster = poster
         self._workspace = workspace
         self._prompts = prompts
+        self._pe_glue = pe_glue
         self._settings = HermesSettings.get_instance()
 
     async def start_programme(
@@ -307,6 +310,16 @@ class MetaPmProgrammeService(BaseBusinessService):
         if stage == "prd-pr-action":
             await self._open_forge_auth(tenant, room, session)
             return
+        if stage == "prd-merge":
+            # D2 — reopen merge authorize; never fall back to open_draft_pr.
+            await self._pe_glue.reopen_merge_gate(
+                tenant,
+                room,
+                initiative=init,
+                pr_url=session.slots.get("pr_url") or "",
+                attestation_url=session.slots.get("attestation_url") or "",
+            )
+            return
         # Unknown stage — fall through to artefact resume without wiping slots.
         await self._poster.post_status(
             room,
@@ -377,6 +390,9 @@ class MetaPmProgrammeService(BaseBusinessService):
     ) -> None:
         """Continue after Lead answered an open brief."""
         stage = session.stage
+        if stage in {"pm-pe-answers", "prd-merge"}:
+            await self._pe_glue.after_judgment(tenant, room, session, token)
+            return
         if stage == "requirements-human-decision" or stage == "validate-requirements":
             await self._apply_vf_token(tenant, room, session, token)
             return

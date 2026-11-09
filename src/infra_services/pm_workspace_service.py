@@ -291,6 +291,13 @@ class PmWorkspaceService(BaseInfraService):
             raise ValidationError("roles.yaml missing; cannot resolve PM GitHub App")
         return _pm_app(roles_path)
 
+    def app_role(self, slug: str) -> AppRole:
+        """Resolve any roles.yaml app by slug (e.g. adh-reviewer for PE attest)."""
+        roles_path = self._roles_path()
+        if roles_path is None:
+            raise ValidationError("roles.yaml missing; cannot resolve GitHub App")
+        return _app_by_slug(roles_path, slug)
+
     def _roles_path(self) -> Optional[Path]:
         if self._orch.meta_root:
             path = Path(self._orch.meta_root).expanduser() / "config" / "roles.yaml"
@@ -508,10 +515,14 @@ def initiative_from_filename(name: str, prefix: str) -> Optional[str]:
 
 
 def _pm_app(roles_path: Path) -> AppRole:
+    return _app_by_slug(roles_path, _PM_APP_SLUG)
+
+
+def _app_by_slug(roles_path: Path, slug: str) -> AppRole:
     with roles_path.open(encoding="utf-8") as handle:
         data = yaml.safe_load(handle)
     apps = (data or {}).get("apps") or {}
-    raw = apps.get(_PM_APP_SLUG)
+    raw = apps.get(slug)
     if not isinstance(raw, dict):
-        raise ValidationError(f"roles.yaml missing app {_PM_APP_SLUG}")
+        raise ValidationError(f"roles.yaml missing app {slug}")
     return AppRole.model_validate(raw)

@@ -151,6 +151,16 @@ class RedisService(BaseInfraService):
 
         return await self._require_connection_manager().exists(key)
 
+    async def keys(self, pattern: str) -> list[str]:
+        """List keys matching ``pattern`` (use sparingly; prefer known idempotency keys)."""
+        if not self._initialized:
+            raise RuntimeError("Redis service has not been initialized")
+        raw = await self.get_client().keys(pattern)
+        out: list[str] = []
+        for key in raw or []:
+            out.append(key.decode("utf-8") if isinstance(key, (bytes, bytearray)) else str(key))
+        return out
+
     async def health_check(self) -> bool:
         """Check Redis connectivity.
 

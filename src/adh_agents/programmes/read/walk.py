@@ -41,7 +41,10 @@ class ReadWalkProgramme(BaseBusinessService):
         self, tenant: TenantContext, room: str, session: AgentWorkSession
     ) -> None:
         await self._poster.post_status(
-            room, f"Read programme bound for {session.work_id}.", EventType.PROGRESS
+            room,
+            f"Read programme bound for {session.work_id}.",
+            EventType.PROGRESS,
+            identity_handle=self.role_id,
         )
 
     async def after_judgment(
@@ -51,7 +54,10 @@ class ReadWalkProgramme(BaseBusinessService):
 
     async def resume_programme(self, tenant: TenantContext, room: str, work_id: str) -> None:
         await self._poster.post_status(
-            room, f"Resume read walk `{work_id}` (no-op if finished).", EventType.PROGRESS
+            room,
+            f"Resume read walk `{work_id}` (no-op if finished).",
+            EventType.PROGRESS,
+            identity_handle=self.role_id,
         )
 
     def list_resumable(self, tenant: TenantContext) -> list[dict[str, str]]:
@@ -78,6 +84,7 @@ class ReadWalkProgramme(BaseBusinessService):
             f"Read rollup for {baton.initiative or baton.id}: {summary}",
             EventType.DONE,
             {"status": "read_rollup", "paths": sketch[:20], "baton_id": baton.id},
+            identity_handle=self.role_id,
         )
         done = await self._batons.mark_done(baton, ttl=ttl)
         return Rollup(

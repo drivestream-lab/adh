@@ -41,6 +41,48 @@ class RedisBatonStore:
             raw = raw.decode("utf-8")
         return Baton.model_validate_json(raw)
 
+    async def list_for_tenant(
+        self,
+        *,
+        tenant: str,
+        to_role: str | None = None,
+        baton_type: str | None = None,
+        status: BatonStatus | None = None,
+    ) -> list[Baton]:
+        """List batons for a tenant with optional filters."""
+        keys = await self._redis.keys(f"{self._prefix}:{tenant}:*")
+        found: list[Baton] = []
+        for key in keys:
+            raw = await self._redis.get(key)
+            if raw is None:
+                continue
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8")
+            try:
+                baton = Baton.model_validate_json(raw)
+            except Exception:
+                logger.exception("skip corrupt baton key", key=key)
+                continue
+            if status is not None and baton.status != status:
+                continue
+            if to_role is not None and baton.to_role != to_role:
+                continue
+            if baton_type is not None and baton.type != baton_type:
+                continue
+            found.append(baton)
+        return found
+
+    async def list_pending_for(
+        self, *, tenant: str, to_role: str, baton_type: str | None = None
+    ) -> list[Baton]:
+        """Pending batons for a role (hire-order catch-up when worker boots after emit)."""
+        return await self.list_for_tenant(
+            tenant=tenant,
+            to_role=to_role,
+            baton_type=baton_type,
+            status=BatonStatus.PENDING,
+        )
+
     async def create_pending(self, baton: Baton, *, ttl: int) -> tuple[Baton, bool]:
         """Create if absent. Returns (baton, created)."""
         if not baton.idempotency_key:

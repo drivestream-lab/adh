@@ -78,6 +78,24 @@ _SEED_IDENTITIES: tuple[IdentityCreate, ...] = (
         role=IdentityRole.PM,
     ),
     IdentityCreate(
+        handle="adh.pe",
+        display_name="PE",
+        kind=IdentityKind.AGENT,
+        role=IdentityRole.PE,
+    ),
+    IdentityCreate(
+        handle="adh.read",
+        display_name="Read",
+        kind=IdentityKind.AGENT,
+        role=IdentityRole.READ,
+    ),
+    IdentityCreate(
+        handle="adh.kb",
+        display_name="KB",
+        kind=IdentityKind.AGENT,
+        role=IdentityRole.KB,
+    ),
+    IdentityCreate(
         handle="adh.system",
         display_name="Buzz system",
         kind=IdentityKind.AGENT,

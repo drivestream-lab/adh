@@ -550,13 +550,25 @@ class Orchestrator(BaseBusinessService):
             return True
         node = self._navigator.current(session)
         # Forge only — GitHub App API (Contents + Pulls). Never gh CLI.
-        result = await self._dispatch.run_external_action(
-            tenant,
-            node,
-            session.initiative or "",
-            authorized=True,
-            slots=session.slots,
-        )
+        try:
+            result = await self._dispatch.run_external_action(
+                tenant,
+                node,
+                session.initiative or "",
+                authorized=True,
+                slots=session.slots,
+            )
+        except Exception as exc:
+            # Keep the authorize brief open; never let forge failures kill the SSE listener.
+            await self._say(
+                room,
+                (
+                    f"Authorize failed for `{brief.node_id}`: {exc}. "
+                    f"Reply {_fmt(brief.reply_tokens)} to retry (or `stop`)."
+                ),
+                EventType.STALL,
+            )
+            return True
         self._navigator.advance(session, "pass")
         session.awaiting = AWAITING_NONE
         session.open_brief = None
