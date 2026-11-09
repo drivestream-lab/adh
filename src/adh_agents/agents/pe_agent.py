@@ -49,7 +49,9 @@ class PEAgent(BaseHermesAgent):
 
     async def _catch_up_pending_batons(self) -> None:
         """Claim pe.review batons parked before this worker was online."""
+        ttl = int(self._agent_settings.baton_ttl_seconds)
         for tenant in self._tenants.active():
+            await self._batons.reclaim_stale(tenant=tenant.slug, max_age_seconds=ttl)
             pending = await self._batons.list_pending_for(
                 tenant=tenant.slug, to_role=self.role_id, baton_type="pe.review"
             )

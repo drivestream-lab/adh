@@ -12,7 +12,8 @@ _DEFAULT_ACL: dict[str, FrozenSet[str]] = {
     "adh.qa": frozenset({"comment_pr", "set_check"}),
     "adh.read": frozenset(),
     "adh.taskgraph": frozenset(),
-    "adh.kb": frozenset(),
+    # KB may open enrich draft PRs under knowledge/** (Contents push via workspace).
+    "adh.kb": frozenset({"open_draft_pr"}),
 }
 
 

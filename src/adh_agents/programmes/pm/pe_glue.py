@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
-
 from injector import inject
 
 from src.adh_agents.baton.models import Baton, BatonStatus, Rollup
@@ -26,8 +23,6 @@ from src.infra_services.pm_workspace_service import PmWorkspaceService
 from src.infra_services.tenant_registry_service import TenantRegistryService
 from src.models.buzz_models import EventType
 from src.models.tenant_models import TenantContext
-
-_PR_NUM = re.compile(r"/pull/(\d+)")
 
 
 class PmPeGlueProgramme(BaseBusinessService):
@@ -107,26 +102,26 @@ class PmPeGlueProgramme(BaseBusinessService):
     async def after_judgment(
         self, tenant: TenantContext, room: str, session: AgentWorkSession, token: str
     ) -> None:
+        # Orchestrator already matched ``token`` against the open brief (H1/H2).
         lowered = (token or "").strip().lower()
         if session.stage == "pm-pe-answers":
-            if lowered in {"ack_pe", "answered"}:
-                session.awaiting = AWAITING_NONE
-                session.open_brief = None
-                session.stage = "pm-pe-acked"
-                await self._store.save(session)
-                await self._poster.post_status(
-                    room,
-                    (
-                        f"PM acknowledged PE questions for {session.initiative}. "
-                        "Update PRD as needed; PE may `attest` when satisfied."
-                    ),
-                    EventType.DONE,
-                )
+            if "hold" in lowered:
+                return
+            session.awaiting = AWAITING_NONE
+            session.open_brief = None
+            session.stage = "pm-pe-acked"
+            await self._store.save(session)
+            await self._poster.post_status(
+                room,
+                (
+                    f"PM acknowledged PE questions for {session.initiative}. "
+                    "**Next:** update PRD as needed; PE may `attest` when satisfied."
+                ),
+                EventType.DONE,
+            )
             return
         if session.stage == "prd-merge":
-            if lowered in {"go ahead", "authorize", "authorize prd_merge"}:
-                await self._run_merge(tenant, room, session)
-            elif lowered == "hold":
+            if "hold" in lowered:
                 session.awaiting = AWAITING_NONE
                 session.open_brief = None
                 await self._store.save(session)
@@ -135,6 +130,8 @@ class PmPeGlueProgramme(BaseBusinessService):
                     f"Holding meta merge for {session.initiative}.",
                     EventType.PROGRESS,
                 )
+                return
+            await self._run_merge(tenant, room, session)
 
     async def _on_pe_questions(self, tenant: TenantContext, room: str, baton: Baton) -> None:
         init = (baton.initiative or "").strip().upper()
@@ -142,11 +139,6 @@ class PmPeGlueProgramme(BaseBusinessService):
         pr_url = str((baton.payload or {}).get("pr_url") or "")
         round_n = str((baton.payload or {}).get("round") or "?")
         count = str((baton.payload or {}).get("count") or "?")
-        preview = ""
-        if path:
-            full = Path(tenant.meta_root).expanduser() / path
-            if full.is_file():
-                preview = full.read_text(encoding="utf-8")[:3500]
         session = AgentWorkSession(
             tenant_slug=tenant.slug,
             role_id=self.role_id,
@@ -179,16 +171,17 @@ class PmPeGlueProgramme(BaseBusinessService):
         session.open_brief = brief
         session.awaiting = AWAITING_JUDGMENT
         await self._store.save(session)
-        body = (
-            f"PM received PE questions for **{init}** "
-            f"(round {round_n}, {count} Q).\n"
-            f"PR: {pr_url or 'n/a'}\n"
-            f"Artefact: `{path or 'n/a'}`\n\n"
+        await self._poster.post_status(
+            room,
+            (
+                f"PM received PE questions for **{init}** "
+                f"(round {round_n}, {count} Q).\n"
+                f"PR: {pr_url or 'n/a'}\n"
+                f"Artefact: `{path or 'n/a'}`\n"
+                f"**Next:** {self._briefs.format_brief_markdown(brief)}"
+            ),
+            EventType.START,
         )
-        if preview:
-            body += preview + "\n\n"
-        body += self._briefs.format_brief_markdown(brief)
-        await self._poster.post_status(room, body, EventType.START)
 
     async def reopen_merge_gate(
         self,
@@ -274,10 +267,15 @@ class PmPeGlueProgramme(BaseBusinessService):
     async def _run_merge(self, tenant: TenantContext, room: str, session: AgentWorkSession) -> None:
         init = (session.initiative or "").strip().upper()
         pr_url = session.slots.get("pr_url") or ""
-        match = _PR_NUM.search(pr_url)
-        if match is None:
+        pr_number = _pr_number_from_url(pr_url) or _int_slot(session.slots.get("pr_number"))
+        if pr_number is None:
             await self._poster.post_status(
-                room, f"Cannot merge {init} — missing PR number.", EventType.STALL
+                room,
+                (
+                    f"Cannot merge {init} — missing PR number. "
+                    "**Next:** ensure `pr_url` / `pr_number` is on the session."
+                ),
+                EventType.STALL,
             )
             return
         if not forge_allowed(self.role_id, "prd_merge"):
@@ -285,7 +283,6 @@ class PmPeGlueProgramme(BaseBusinessService):
                 room, "Forge ACL denies prd_merge for adh.pm.", EventType.STALL
             )
             return
-        pr_number = int(match.group(1))
         try:
             app = self._workspace.pm_app_role()
             result = await self._forge.prd_merge(
@@ -331,9 +328,65 @@ class PmPeGlueProgramme(BaseBusinessService):
         await self._poster.post_status(
             room,
             (
-                f"Merged `{init}` PR #{pr_number}: {result.url or 'ok'}. "
-                "Individual repos may kick in next (Impact-Map order — later programmes)."
+                f"Merged `{init}` PR #{pr_number}: {result.url or 'ok'}.\n"
+                f"**Next:** waiting on `adh.kb` (`kb.enrich` baton)."
             ),
             EventType.DONE,
             {"status": "prd_merged", "initiative": init, "pr": pr_number},
         )
+        await self._emit_kb_enrich(tenant, room, init, pr_number)
+
+    async def _emit_kb_enrich(
+        self, tenant: TenantContext, room: str, initiative: str, pr_number: int
+    ) -> None:
+        ttl = int(self._settings.baton_ttl_seconds)
+        baton = Baton(
+            type="kb.enrich",
+            from_role=self.role_id,
+            to_role="adh.kb",
+            tenant=tenant.slug,
+            ops_room=room,
+            initiative=initiative,
+            idempotency_key=f"kb.enrich:{tenant.slug}:{initiative}:post-merge",
+            payload={
+                "reason": "post_prd_merge",
+                "repo_ref": tenant.meta_repo,
+                "pr_number": pr_number,
+            },
+        )
+        stored, created = await self._batons.create_pending(baton, ttl=ttl)
+        notice = (
+            f"baton `kb.enrich` → `adh.kb` (init={initiative}; "
+            f"correlation={stored.correlation_id})"
+        )
+        if not created:
+            notice = f"(idempotent) {notice}"
+        await self._poster.post_status(
+            room,
+            notice,
+            EventType.PROGRESS,
+            {
+                "status": "baton_emitted",
+                "baton_type": "kb.enrich",
+                "baton_id": stored.id,
+                "idempotency_key": stored.idempotency_key,
+                "tenant": tenant.slug,
+                "initiative": initiative,
+                "created": created,
+            },
+        )
+
+
+def _pr_number_from_url(pr_url: str) -> int | None:
+    """Parse trailing `/pull/N` without regex."""
+    parts = (pr_url or "").rstrip("/").split("/")
+    if len(parts) >= 2 and parts[-2] == "pull" and parts[-1].isdigit():
+        return int(parts[-1])
+    return None
+
+
+def _int_slot(raw: str | None) -> int | None:
+    text = (raw or "").strip()
+    if text.isdigit():
+        return int(text)
+    return None

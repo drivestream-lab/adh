@@ -131,3 +131,30 @@ class RedisBatonStore:
             baton_type=baton.type,
         )
         return baton
+
+    async def reclaim_stale(
+        self,
+        *,
+        tenant: str,
+        max_age_seconds: int,
+        statuses: set[BatonStatus] | None = None,
+    ) -> list[Baton]:
+        """Expire CLAIMED/RUNNING batons whose updated_at is older than max_age."""
+        watch = statuses or {BatonStatus.CLAIMED, BatonStatus.RUNNING}
+        now = datetime.now(timezone.utc)
+        reclaimed: list[Baton] = []
+        for baton in await self.list_for_tenant(tenant=tenant):
+            if baton.status not in watch:
+                continue
+            age = (now - baton.updated_at).total_seconds() if baton.updated_at else 0
+            if age < max_age_seconds:
+                continue
+            reclaimed.append(await self.expire(baton))
+            logger.warning(
+                "Baton reclaimed (stale)",
+                tenant=tenant,
+                baton_type=baton.type,
+                age_seconds=int(age),
+                key=baton.idempotency_key or baton.id,
+            )
+        return reclaimed
