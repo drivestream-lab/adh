@@ -82,15 +82,30 @@ Progress ticks while working (still-working); one short DONE rollup. Same Decisi
 |---|-------|--------|
 | D3.1 | Walk model | **One repo per `read.walk` baton**; `repo_ref` in payload, resolved via **tenant context** (not `workspace_root` dump, not RealWorld literals) |
 | D3.2 | First emit | PE may emit meta first (`tenant.meta_repo`); later fan-out follows Impact-Map — same baton shape |
-| D3.3 | Rollup | **Structured sketch** (caps, entrypoints, ADR index signals) → `artefact_refs`; Buzz = BLUF + link + next |
+| D3.3 | Rollup | **Deterministic** structured sketch → `artefact_refs`; Buzz = BLUF + link + next. **LLM consumes** rollup in PE (not in Read) |
 | D3.4 | Codegraph | **Filesystem port only** this wave; keep `CodegraphPort` Protocol / degraded stub; MCP = later hire |
 | D4.1 | Trigger | Emit `kb.enrich` on **post-merge success** (catalogue-aware / PM path) — not PE-at-attest, not silent side effect |
 | D4.2 | Heads | OKF under `{tenant-meta}/knowledge/` only — `foundation/` · `stacks/` · `repos/` · `contracts/` — **no** `initiatives/` tree |
 | D4.3 | Durability | Patch + **Buzz pointer** + forge **draft PR** under `knowledge/**` (KB forge ACL); Lead authorizes on forge/ops |
-| D4.4 | Authoring | **Deterministic stubs** from read rollup first; LLM fill later behind the same writer interface |
+| D4.4 | Authoring | **A — stub scaffold + LLM fill** in the same writer (paths/sections deterministic; prose from LLM; OKF-validated) |
 | D5.1 | Scope | Dup baton claim · baton/work **timeout reclaim** · wrong-stage authorize/resume · forge 422 → idempotent PR · authorize/forge errors **must not kill SSE** |
 | D5.2 | Verify | Unit/contract tests for OS + **one** RealWorld guinea pig proof — guinea pig is not the design oracle |
 | UX | Buzz | BLUF + artefact link + **single next step** (see contract above) |
+
+### Agentic harness locks (2026-11-09)
+
+Delivery copilot stays **catalogue-driven + conversational** (ADR 0001). No hardcoding, no regex as product SSOT.
+
+| # | Topic | Choice |
+|---|-------|--------|
+| H1 | Next-step ownership | **LLM understand** maps Lead chat → catalogue `outcomes[]` / open-brief tokens. Catalogue still owns the graph — LLM does not invent a parallel workflow |
+| H2 | No regex | **No regex / frozenset allowlists** for Lead intent **or** artefact parsing (PRD / Impact-Map / KB). Use understand + structured writers / LLM |
+| H3 | Soft gates | **Always wait for Lead** on briefs. Forge / `authorization: explicit` never auto-run |
+| H4 | KB content | Stub scaffold + LLM fill (**D4.4 A**) |
+| H5 | Read vs PE | Read = deterministic sensor; PE/LLM interprets evidence for questions / recommend |
+| H6 | LLM / understand down | Short Buzz **ask-back** (“say that again / pick from options”) — **no** regex fallback |
+
+**Debt to retire while building D3–D5:** PE Q-cap regex parsers, phrase/token frozensets in pe_glue / lead_tokens used as SSOT, magic `repo="meta"` / blind `workspace_root` walks.
 
 ---
 
@@ -152,18 +167,19 @@ src/adh_pm_worker.py | adh_pe_worker.py | adh_read_worker.py | adh_kb_worker.py
 
 ### D4 — KB depth
 1. Emit `kb.enrich` after successful `prd_merge` (catalogue-aware).
-2. Writer: deterministic head stubs from rollup → local `knowledge/**` → Buzz BLUF + diff/PR link.
-3. Forge ACL for `adh.kb` (paths under `knowledge/**` only); draft enrich PR; Lead next-step tokens if authorize required.
-4. Identity `adh.kb` on Buzz posts.
+2. Writer: **OKF stub scaffold** (paths + required sections) → **LLM fill** from rollup/PRD refs → validate heads-only → local `knowledge/**`.
+3. Forge ACL for `adh.kb` (paths under `knowledge/**` only); draft enrich PR; Buzz BLUF + **wait for Lead** authorize/hold.
+4. Identity `adh.kb` on Buzz posts; no regex scraping of PRD into heads.
 
 **Exit:** Head diff pointer on Buzz after enrich; durable proposal on meta forge; no initiative folders.
 
 ### D5 — Harden
 1. Close gaps: dup claim, timeout reclaim, illegal authorize stage, forge 422 reuse, SSE survival on authorize/forge errors.
-2. Contract tests for the matrix; short Buzz failure notices with **one** recovery next step.
-3. Apply harden fixes anytime D3/D4 touch shared baton/forge/orchestrator code; focused D5 pass to close the bar.
+2. Route Lead replies via **understand → catalogue/brief** (H1–H2); on understand failure → ask-back (H6), not regex.
+3. Contract tests for the matrix; short Buzz failure notices with **one** recovery next step.
+4. Apply harden fixes anytime D3/D4 touch shared baton/forge/orchestrator code; focused D5 pass to close the bar.
 
-**Exit:** OS survives redelivery, stall, and wrong-token without silent worker death.
+**Exit:** OS survives redelivery, stall, and wrong-token without silent worker death; Lead path stays conversational.
 
 ### Order
 **D3 → D4 → D5** (harden opportunistically while touching shared code).
