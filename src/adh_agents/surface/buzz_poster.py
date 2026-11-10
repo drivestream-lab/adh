@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Coroutine, Optional
+from typing import Any, Callable, Coroutine, Optional, Sequence
 
 from injector import inject
 
+from src.adh_agents.collaboration.gate_coach import TokenAction, format_human_next
 from src.business_services.buzz_service import BuzzService
 from src.configs.hermes_settings import HermesSettings
 from src.infra_services.prompt_service import PromptService
@@ -54,6 +55,49 @@ class HermesBuzzPoster:
                 event_type=event_type,
                 payload=payload,
             ),
+        )
+
+    async def post_human_next(
+        self,
+        room: str,
+        *,
+        i_did: str,
+        recommend: str,
+        outside_adh: str,
+        tokens: Sequence[TokenAction],
+        recommend_why: str = "",
+        evidence: str = "",
+        human_role: str = "Lead",
+        hop: str = "",
+        example: str = "",
+        event_type: EventType = EventType.PROGRESS,
+        payload: Optional[dict[str, Any]] = None,
+        identity_handle: str | None = None,
+    ) -> MessageRead:
+        """Post helpful-army coach (programmes wire through poster + role handle)."""
+        body = format_human_next(
+            i_did=i_did,
+            recommend=recommend,
+            outside_adh=outside_adh,
+            tokens=list(tokens),
+            recommend_why=recommend_why,
+            evidence=evidence,
+            human_role=human_role,
+            hop=hop,
+            example=example,
+        )
+        handle = identity_handle or _HERMES_HANDLE
+        return await self.post_status(
+            room,
+            body,
+            event_type,
+            {
+                **(payload or {}),
+                "status": (payload or {}).get("status") or "human_next",
+                "role": handle,
+                "coach": True,
+            },
+            identity_handle=handle,
         )
 
     async def post_heartbeat(self, room: str, body: str, event_type: EventType) -> None:

@@ -159,18 +159,16 @@ class ForgeActionService(BaseInfraService):
         url = f"https://github.com/{org}/{repo}/pull/{pr_number}"
         return ForgeActionResult(action=_READY_FOR_REVIEW, repo=repo, pr_number=pr_number, url=url)
 
-    async def prd_merge(
+    async def land_pull_request(
         self,
         *,
         app: AppRole,
         repo: str,
         pr_number: int,
         commit_title: str,
+        action: str = _PRD_MERGE,
     ) -> ForgeActionResult:
-        """Merge meta PRD PR after Lead authorize (GitHub permissions still apply).
-
-        Draft PRs cannot be merged (GitHub 405) — convert to ready_for_review first.
-        """
+        """Undraft (fail-closed) then merge. Shared by product + knowledge lands."""
         token, _ = await self._github.installation_token(app, write=True, repositories=[repo])
         # Draft PRs cannot merge (405). Undraft via GraphQL must succeed before merge.
         await self._github.mark_ready_for_review(token, repo, pr_number=pr_number)
@@ -180,4 +178,40 @@ class ForgeActionService(BaseInfraService):
             pr_number=pr_number,
             commit_title=commit_title,
         )
-        return ForgeActionResult(action=_PRD_MERGE, repo=repo, pr_number=pr_number, url=sha)
+        return ForgeActionResult(action=action, repo=repo, pr_number=pr_number, url=sha)
+
+    async def prd_merge(
+        self,
+        *,
+        app: AppRole,
+        repo: str,
+        pr_number: int,
+        commit_title: str,
+    ) -> ForgeActionResult:
+        """Merge meta product PR after Lead authorize (thin wrapper on land_pull_request)."""
+        return await self.land_pull_request(
+            app=app,
+            repo=repo,
+            pr_number=pr_number,
+            commit_title=commit_title,
+            action=_PRD_MERGE,
+        )
+
+    async def close_pull_request(
+        self,
+        *,
+        app: AppRole,
+        repo: str,
+        pr_number: int,
+        comment: str = "",
+    ) -> ForgeActionResult:
+        """Close a superseding / zombie draft PR (U5 hygiene)."""
+        token, _ = await self._github.installation_token(app, write=True, repositories=[repo])
+        await self._github.close_pull_request(
+            token, repo, pr_number=pr_number, comment=comment or None
+        )
+        from src.configs.orchestrator_settings import OrchestratorSettings
+
+        org = OrchestratorSettings.get_instance().github_org
+        url = f"https://github.com/{org}/{repo}/pull/{pr_number}"
+        return ForgeActionResult(action="close_pr", repo=repo, pr_number=pr_number, url=url)

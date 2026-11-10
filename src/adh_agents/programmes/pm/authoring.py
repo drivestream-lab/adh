@@ -482,11 +482,41 @@ class AuthoringProgrammeService(BaseBusinessService):
         )
         session.awaiting = AWAITING_JUDGMENT
         await self._store.save(session)
-        await self._poster.post_status(
+        from src.adh_agents.collaboration.gate_coach import TokenAction
+
+        promote_tokens = [
+            TokenAction(
+                lab,
+                f"promote `{think_paths[i]}` → `prd/{initiative}.md` and continue the lane",
+            )
+            for i, lab in enumerate(labels)
+        ]
+        promote_tokens.extend(
+            [
+                TokenAction("skip", "skip promote for now"),
+                TokenAction("none", "decline all C-labels"),
+                TokenAction("iterate", "run another think/quality pass"),
+            ]
+        )
+        await self._poster.post_human_next(
             room,
-            self._briefs.format_brief_markdown(session.open_brief),
-            EventType.PROGRESS,
-            {"status": "need_promote", "initiative": initiative, "choices": labels},
+            i_did=f"Finished think/quality for **{initiative}** and wrote the promote brief.",
+            recommend=judgment.recommend or (labels[0] if labels else "iterate"),
+            recommend_why=judgment.bluf,
+            evidence=f"`{brief_path}`",
+            outside_adh=(
+                f"Read the promote brief (`{brief_path}`) and the C-label think files "
+                "in Cursor before picking."
+            ),
+            tokens=promote_tokens,
+            hop="authoring-promote",
+            example=judgment.example,
+            payload={
+                "status": "need_promote",
+                "initiative": initiative,
+                "choices": labels,
+                "purpose": "authoring-promote",
+            },
         )
 
     async def _on_promote_reply(

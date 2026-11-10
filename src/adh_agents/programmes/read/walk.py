@@ -133,7 +133,7 @@ class ReadWalkProgramme(BaseBusinessService):
             (
                 f"Read walk done for **{repo_ref}** ({init}).\n"
                 f"Artefact: `{rel}`\n"
-                f"**Next:** waiting on `adh.pe` (Gate‑1 continues — no Lead action)."
+                f"**Next:** waiting on PE (product brief continues — no Lead action)."
             ),
             EventType.DONE,
             {

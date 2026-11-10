@@ -17,6 +17,13 @@
 | D5 — Harden: dup / timeout / authorize / forge / SSE | ✅ reclaim; brief-token gates; no regex SSOT; SSE-safe authorize |
 | Gate‑1 decision paper (PM Buying/Not buying parity) | ✅ `*-hermes-gate1-brief.md`; Buzz light; auto await_pm |
 | Global temp-paper purge | ✅ `collaboration/temp_papers.py` event matrix; promote / post-pm / attest / merge / kb enrich |
+| Forge undraft via GraphQL | ✅ PR #22 — draft product PR can merge after Buzz authorize |
+| U1 — Helpful-army Buzz coach on base | ✅ `gate_coach` + `delivery_voice` + `post_human_next` (base + poster); programmes wired |
+| U2 — Single open human gate | ✅ PE/KB silent without open gate; orchestrator fences `prd-merged` |
+| U3 — Land + sync local develop | ✅ `land_pull_request` + `sync_integration_branch` (dirty → stall / discard local) |
+| U4 — KB authorize → agent land | ✅ open draft → land gate → merge+sync+purge; ACL allows KB land |
+| U5 — Zombie draft hygiene + unit proof | ✅ refuse superseding draft after merge; unit tests green (RealWorld guinea pig after U6) |
+| U6 — Agent↔agent PE↔PM rally | ✅ PM auto-answers; PE settle≤2; agent attest; human merge coach only; `ack_pe` gone; OKF prompt context |
 
 ## Landed (0b)
 

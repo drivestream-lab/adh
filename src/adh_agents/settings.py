@@ -73,10 +73,10 @@ class PeAgentSettings(AgentSettings):
         description="Gate‑1 open product-question cap per round",
     )
     max_question_rounds: int = Field(
-        default=4,
+        default=2,
         ge=1,
         le=8,
-        description="Max Gate‑1 question rounds before fail-closed",
+        description="Max PE↔PM agent clarification rounds before settle (U6 default 2)",
     )
     reviewer_app_slug: str = Field(
         default="adh-reviewer",

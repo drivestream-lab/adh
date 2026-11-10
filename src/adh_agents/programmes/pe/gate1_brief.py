@@ -1,7 +1,12 @@
-"""Gate‑1 decision paper — same recommend / Buying / Not buying shape as PM promote."""
+"""Product brief (Gate‑1 lane) — same recommend / Buying / Not buying shape as PM promote.
+
+Buzz uses delivery voice via ``format_gate1_buzz_bluf`` / ``post_human_next``.
+Artefact markdown may keep Gate‑1 in the title for path continuity; Buzz bodies do not.
+"""
 
 from __future__ import annotations
 
+from src.adh_agents.collaboration.gate_coach import TokenAction, format_human_next
 from src.adh_agents.programmes.pe.questions import ProductQuestion
 from src.adh_agents.programmes.pm.decision_card import (
     CARD_PROMOTE,
@@ -27,7 +32,7 @@ def build_gate1_decision_card(
     questions: list[ProductQuestion],
     recommend: str = "await_pm",
 ) -> DecisionCard:
-    """Product skim card for Lead/PE after a Gate‑1 question round."""
+    """Product skim card for Lead/PE after a product-question round."""
     locking = [f"{q.qid}: {q.recommendation}" for q in questions[:3] if q.recommendation] or [
         "Product questions posted — PM stance still open."
     ]
@@ -43,8 +48,8 @@ def build_gate1_decision_card(
     return decision_card(
         recommend=recommend,
         bluf=(
-            f"Gate‑1 round {round_number}/{max_rounds} for {initiative}: "
-            "wait for PM answers before attesting this meta PR head."
+            f"Product brief round {round_number}/{max_rounds} for {initiative}: "
+            "wait for PM answers before attesting this product PR head."
         ),
         example=(
             "PM answers on the PR thread / Buzz; PE attests only when product stance "
@@ -69,10 +74,10 @@ def format_gate1_brief_markdown(
 ) -> str:
     """Full recommendation paper (artefact). Mirrors PM promote Buying / Not buying.
 
-    Buzz stays BLUF + path only — this file is the SSOT for the decision card.
+    Buzz stays coach-only — this file is the SSOT for the decision card.
     """
     lines = [
-        f"# Gate‑1 decision brief — {initiative}",
+        f"# Product brief — {initiative}",
         "",
         f"> Round **{round_number}/{max_rounds}**. Posted by **adh.pe**. "
         "Same shape as PM promote / post-pm papers: recommend + Buying / Not buying.",
@@ -125,13 +130,13 @@ def format_gate1_brief_markdown(
             "|---------------|--------------|",
             "| `await_pm` ← | Default after posting Qs — wait for PM (auto) |",
             "| `new_round` | Another capped question pass (Lead/PE) |",
-            "| `attest` | Approve this meta PR head when satisfied |",
-            "| `hold` | Park Gate‑1 |",
+            "| `attest` | Approve this product PR head when satisfied |",
+            "| `hold` | Park product brief |",
             "",
             "## artefacts",
             "",
             f"- Questions: `{questions_path}`",
-            f"- Meta PR: {pr_url or '(unknown)'}",
+            f"- Product PR: {pr_url or '(unknown)'}",
             "",
             "## questions_index",
             "",
@@ -157,14 +162,27 @@ def format_gate1_buzz_bluf(
     brief_path: str,
     questions_path: str,
 ) -> str:
-    """Buzz light — paper carries the full recommendation."""
-    return "\n".join(
-        [
-            f"Gate‑1 round {round_number}/{max_rounds} for **{initiative}** "
-            f"({question_count} Q) — decision paper ready.",
-            f"Artefact: `{brief_path}`",
-            f"Questions: `{questions_path}`",
-            "**Next:** waiting on PM answers (`adh.pm`) — reply `attest` / `new_round` / "
-            "`hold` when you want to fork.",
-        ]
+    """Buzz coach — delivery voice; paper carries the full recommendation."""
+    return format_human_next(
+        i_did=(
+            f"Posted product questions for **{initiative}** "
+            f"(round {round_number}/{max_rounds}, {question_count} Q) "
+            "and wrote the product brief. PM agent will answer next."
+        ),
+        recommend="await_pm",
+        recommend_why=(
+            "Agent↔agent rally in progress — no human ack needed. "
+            "You will be asked to merge after clarifications settle."
+        ),
+        evidence=f"`{brief_path}` · `{questions_path}`",
+        outside_adh=(
+            "Optional skim of the product brief + questions in Cursor / the product PR. "
+            "No Buzz reply required unless you want to `park` or force `need another round`."
+        ),
+        tokens=[
+            TokenAction("park", "park the product brief — stop the rally"),
+            TokenAction("need another round", "force another capped question pass (escape hatch)"),
+        ],
+        hop="product_brief",
+        human_role="Lead",
     )

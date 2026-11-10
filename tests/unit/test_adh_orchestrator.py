@@ -127,3 +127,79 @@ async def test_ask_back_on_ambiguous_confirm() -> None:
 def test_match_reply_token() -> None:
     assert match_reply_token("confirm\nthanks", ["confirm", "revise"]) == "confirm"
     assert match_reply_token("nope", ["confirm"]) is None
+
+
+class _MergedRunner:
+    """Programme runner stub — should not be called for merged INIT go-ahead."""
+
+    programme_id = PROGRAMME_META_PM
+
+    def list_resumable(self, tenant):  # noqa: ANN001
+        del tenant
+        return [
+            {
+                "initiative": "INIT-REALWORLD-001",
+                "gate": "authorize",
+                "hint": "should be filtered — already merged",
+            }
+        ]
+
+    async def resume_programme(self, tenant, room, work_id):  # noqa: ANN001
+        raise AssertionError(f"must not resume merged INIT {work_id}")
+
+    async def start_programme(self, tenant, room, session):  # noqa: ANN001
+        raise AssertionError("must not start")
+
+    async def after_judgment(self, tenant, room, session, token):  # noqa: ANN001
+        raise AssertionError("must not judge")
+
+
+@pytest.mark.asyncio
+async def test_post_merge_go_ahead_does_not_reopen_product_draft() -> None:
+    """U2/U5: bare go ahead after prd-merged must not reopen draft-PR authorize."""
+    redis = _FakeRedis()
+    store = AgentWorkStore(redis)  # type: ignore[arg-type]
+    poster = _FakePoster()
+    orch = Orchestrator(
+        store=store,
+        understand=_FakeUnderstand(),  # type: ignore[arg-type]
+        briefs=None,  # type: ignore[arg-type]
+        navigator=None,  # type: ignore[arg-type]
+        dispatch=None,  # type: ignore[arg-type]
+        poster=poster,  # type: ignore[arg-type]
+    )
+    orch.bind_role("adh.pm")
+    orch.set_programme_runner(_MergedRunner())  # type: ignore[arg-type]
+    tenant = TenantContext(
+        slug="realworld",
+        org="drivestream-lab",
+        meta_repo="realworld-meta",
+        meta_root="/tmp/realworld-meta",
+        ops_room="realworld-ops",
+        integration_branch="develop",
+        init_prefix="INIT-REALWORLD-",
+    )
+    await store.save(
+        AgentWorkSession(
+            tenant_slug="realworld",
+            role_id="adh.pm",
+            room="realworld-ops",
+            work_id="INIT-REALWORLD-001",
+            initiative="INIT-REALWORLD-001",
+            programme=PROGRAMME_META_PM,
+            stage="prd-merged",
+            awaiting="none",
+            slots={"merge_sha": "abc123"},
+        )
+    )
+    msg = MessageRead(
+        id=uuid4(),
+        room_id=uuid4(),
+        identity_id=uuid4(),
+        identity_handle="nikd10x",
+        body="go ahead",
+        kind=MessageKind.MESSAGE,
+    )
+    consumed = await orch.handle_lead_message(tenant, "realworld-ops", msg)
+    assert consumed is True
+    assert any("already merged" in p.lower() for p in poster.posts)

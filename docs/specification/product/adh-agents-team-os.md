@@ -56,17 +56,25 @@ Buzz message or baton
 
 ### Buzz UX (ops — no overload)
 
-Ops is for **human input and next steps**, not evidence dumps.
+Ops is for **human input and next steps**, not evidence dumps.  
+**Helpful army:** the role that did the work posts in first person — what we did, recommend + evidence, what the human role must read **outside ADH**, exact Buzz reply, what we will do next. Delivery language only (product PR, knowledge docs PR, spec PR, …) — not internal gate/code names.
 
 | Field | Rule |
 |-------|------|
-| **What** | ≤3 lines BLUF |
-| **Evidence** | Link / path / PR only |
-| **Next** | One clear ask **or** “waiting on `{role}` / baton …” |
-| **Tokens** | Only when a Lead gate is open |
-| **Never** | Full walks, full diffs, raw forge JSON, multi-ask lists |
+| **I did** | First person; delivery language (e.g. “I opened a product PR”) |
+| **Recommend** | One recommend + short why |
+| **Evidence** | Brief path and/or PR URL (`artefact_refs`) |
+| **Outside ADH** | What to read in Cursor/IDE/PR before replying |
+| **On Buzz** | Exact tokens + what the agent will execute |
+| **Never** | Full walks, full diffs, raw forge JSON, “merge it yourself on GitHub” as primary Next |
 
-Heavy evidence lives in artefacts / PRs / OKF `knowledge/` heads. Progress ticks while working; one short DONE rollup.
+Heavy evidence lives in artefacts / PRs / OKF `knowledge/` heads. Progress ticks while working; one short DONE rollup. Humans review outside ADH; they decide on Buzz; agents land (including merge + refresh local develop).
+
+### Clarification rally (U6 — Hermes value)
+
+After the product draft PR opens, **PE and PM run an agent↔agent rally** (default ≤2 rounds): PE questions on the PR + brief → PM answers on the PR + answers artefact → PE settle or one follow-up → PE attests.  
+**No mid-rally human ack** (`ack_pe` is dead). Human PM enters **after** clarifications settle — reviews briefs outside ADH, then posts `merge the product PR` / `park`.  
+OKF `knowledge/` heads feed PE/PM prompts so Hermes compounds as features land.
 
 ## Graphs (do not conflate)
 
@@ -92,7 +100,9 @@ See [`../references/adh-kb-heads.md`](../references/adh-kb-heads.md).
 7. **Buzz light** — BLUF + artefact pointer + single next step; no information overload.
 8. **No tenant/INIT/repo hardcoding** in programmes — resolve via tenant context + baton payload (RealWorld is guinea pig only).
 9. **Agentic + conversational** — LLM/understand maps Lead chat to catalogue outcomes; no regex/frozenset delivery SSOT; soft gates always wait for Lead; LLM-down → ask-back.
-10. **Temp papers are ephemeral** — working artefacts under `prd/reports/` (think/briefs/questions/walks) are never SSOT. **Purge = delete** (never archive). Lifecycle **events** (promote done, post-pm done, Gate‑1 attested, PRD merged, KB enrich done, lane abort) clear families via one shared matrix — gates are callers, not private purge strategies.
+10. **Temp papers are ephemeral** — working artefacts under `prd/reports/` (think/briefs/questions/walks) are never SSOT. **Purge = delete** (never archive). Lifecycle **events** (promote done, post-pm done, product-review attested, PRD merged, KB enrich done, lane abort) clear families via one shared matrix — gates are callers, not private purge strategies.
+11. **Helpful army on Buzz** — working role coaches via `BaseHermesAgent.post_human_next`: did work → recommend + evidence → human role + outside-ADH reading → exact Buzz token → agent executes (authorize ⇒ land + sync). One open human gate per INIT.
+12. **Agent↔agent clarification, human after briefs** — PE↔PM capped rally prepares the product PR; human judges merge (not mid-rally paperwork). KB heads are prompt context for the next run.
 
 ## Implementation
 

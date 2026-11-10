@@ -1,4 +1,4 @@
-"""PM glue for Gate‑1 — answer PE questions; authorize prd_merge after attest."""
+"""PM glue for product questions + authorize product merge after PE attest."""
 
 from __future__ import annotations
 
@@ -7,6 +7,14 @@ from injector import inject
 from src.adh_agents.baton.models import Baton, BatonStatus, Rollup
 from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.collaboration.brief_service import HermesBriefService
+from src.adh_agents.collaboration.gate_coach import TokenAction
+from src.adh_agents.collaboration.human_replies import (
+    MERGE_PRODUCT_PR,
+    PARK,
+    merge_gate_tokens,
+    merge_gate_wills,
+    tokens_equivalent,
+)
 from src.adh_agents.collaboration.temp_papers import (
     PurgeContext,
     PurgeEvent,
@@ -14,6 +22,7 @@ from src.adh_agents.collaboration.temp_papers import (
     execute_purge,
 )
 from src.adh_agents.forge_acl import forge_allowed
+from src.adh_agents.programmes.pm.pe_answers import PmPeAnswersProgramme
 from src.adh_agents.runtime.work_models import (
     AWAITING_JUDGMENT,
     AWAITING_NONE,
@@ -24,6 +33,7 @@ from src.adh_agents.runtime.work_store import AgentWorkStore
 from src.adh_agents.settings import PmAgentSettings
 from src.adh_agents.surface.buzz_poster import HermesBuzzPoster
 from src.business_services.base_business_service import BaseBusinessService
+from src.exceptions.app_exceptions import ValidationError
 from src.infra_services.forge_action_service import ForgeActionService
 from src.infra_services.pm_workspace_service import PmWorkspaceService
 from src.infra_services.tenant_registry_service import TenantRegistryService
@@ -32,7 +42,7 @@ from src.models.tenant_models import TenantContext
 
 
 class PmPeGlueProgramme(BaseBusinessService):
-    """Handles pm.pe_questions + pm.prd_merge_ready batons (D2)."""
+    """pm.pe_questions → auto-answers; pm.prd_merge_ready → human merge coach (U6)."""
 
     programme_id = "pm-pe-glue"
     role_id = "adh.pm"
@@ -47,6 +57,7 @@ class PmPeGlueProgramme(BaseBusinessService):
         forge: ForgeActionService,
         workspace: PmWorkspaceService,
         tenants: TenantRegistryService,
+        pe_answers: PmPeAnswersProgramme,
     ) -> None:
         super().__init__()
         self._store = store
@@ -56,6 +67,7 @@ class PmPeGlueProgramme(BaseBusinessService):
         self._forge = forge
         self._workspace = workspace
         self._tenants = tenants
+        self._pe_answers = pe_answers
         self._settings = PmAgentSettings.get_instance()
 
     async def handle_baton(self, baton: Baton, *, room: str) -> Rollup:
@@ -109,85 +121,27 @@ class PmPeGlueProgramme(BaseBusinessService):
         self, tenant: TenantContext, room: str, session: AgentWorkSession, token: str
     ) -> None:
         # Orchestrator already matched ``token`` against the open brief (H1/H2).
+        # U6: no mid-rally ack_pe gate — only merge / park / discard-local.
         lowered = (token or "").strip().lower()
-        if session.stage == "pm-pe-answers":
-            if "hold" in lowered:
-                return
-            session.awaiting = AWAITING_NONE
-            session.open_brief = None
-            session.stage = "pm-pe-acked"
-            await self._store.save(session)
-            await self._poster.post_status(
-                room,
-                (
-                    f"PM acknowledged PE questions for {session.initiative}. "
-                    "**Next:** update PRD as needed; PE may `attest` when satisfied."
-                ),
-                EventType.DONE,
-            )
-            return
         if session.stage == "prd-merge":
-            if "hold" in lowered:
+            if tokens_equivalent(token, PARK):
                 session.awaiting = AWAITING_NONE
                 session.open_brief = None
                 await self._store.save(session)
                 await self._poster.post_status(
                     room,
-                    f"Holding meta merge for {session.initiative}.",
+                    f"Holding product merge for {session.initiative}.",
                     EventType.PROGRESS,
                 )
+                return
+            if "discard local" in lowered:
+                await self._discard_local_and_retry(tenant, room, session)
                 return
             await self._run_merge(tenant, room, session)
 
     async def _on_pe_questions(self, tenant: TenantContext, room: str, baton: Baton) -> None:
-        init = (baton.initiative or "").strip().upper()
-        path = str((baton.payload or {}).get("questions_path") or "")
-        pr_url = str((baton.payload or {}).get("pr_url") or "")
-        round_n = str((baton.payload or {}).get("round") or "?")
-        count = str((baton.payload or {}).get("count") or "?")
-        session = AgentWorkSession(
-            tenant_slug=tenant.slug,
-            role_id=self.role_id,
-            room=room,
-            work_id=f"PEQ-{init}",
-            initiative=init,
-            programme=PROGRAMME_META_PM,
-            stage="pm-pe-answers",
-            slots={
-                "pr_url": pr_url,
-                "questions_path": path,
-                "pe_round": round_n,
-                "pe_count": count,
-                "glue": "pe_questions",
-            },
-        )
-        brief = self._briefs.build_brief(
-            purpose="pm-pe-answers",
-            node_id="pm-pe-answers",
-            question=(
-                f"PE Gate‑1 questions for {init} (round {round_n}, {count} Q). "
-                "Review PR thread / Buzz, update PRD if needed, then ack."
-            ),
-            example="Reply on the meta PR; then `ack_pe` here when product stance is captured.",
-            options=["ack_pe — PM has answered / will update PRD", "hold — need more time"],
-            recommend="ack_pe",
-            bluf="PE waits for product answers before attest.",
-            reply_tokens=["ack_pe", "hold"],
-        )
-        session.open_brief = brief
-        session.awaiting = AWAITING_JUDGMENT
-        await self._store.save(session)
-        await self._poster.post_status(
-            room,
-            (
-                f"PM received PE questions for **{init}** "
-                f"(round {round_n}, {count} Q).\n"
-                f"PR: {pr_url or 'n/a'}\n"
-                f"Artefact: `{path or 'n/a'}`\n"
-                f"**Next:** {self._briefs.format_brief_markdown(brief)}"
-            ),
-            EventType.START,
-        )
+        """U6: agent auto-answers — never open a human ack gate."""
+        await self._pe_answers.answer_pe_questions(tenant, room, baton)
 
     async def reopen_merge_gate(
         self,
@@ -198,7 +152,7 @@ class PmPeGlueProgramme(BaseBusinessService):
         pr_url: str = "",
         attestation_url: str = "",
     ) -> None:
-        """Re-open Lead authorize for prd_merge (resume / retry after draft 405)."""
+        """Re-open Lead authorize for product merge (resume / retry after draft 405)."""
         await self._open_merge_gate(
             tenant,
             room,
@@ -225,7 +179,7 @@ class PmPeGlueProgramme(BaseBusinessService):
         attestation: str,
     ) -> None:
         init = initiative.strip().upper()
-        # Same work_id as initiative so bare `go ahead` / resume bind to this Gate‑1 merge.
+        # Same work_id as initiative so bare `go ahead` / resume bind to this product merge.
         existing = await self._store.load(tenant.slug, self.role_id, init)
         slots = dict(existing.slots) if existing is not None else {}
         slots.update(
@@ -235,6 +189,9 @@ class PmPeGlueProgramme(BaseBusinessService):
                 "glue": "prd_merge",
             }
         )
+        pr_number = _pr_number_from_url(pr_url) or _int_slot(slots.get("pr_number"))
+        if pr_number is not None:
+            slots["pr_number"] = str(pr_number)
         session = AgentWorkSession(
             tenant_slug=tenant.slug,
             role_id=self.role_id,
@@ -245,29 +202,56 @@ class PmPeGlueProgramme(BaseBusinessService):
             stage="prd-merge",
             slots=slots,
         )
+        wills = merge_gate_wills()
         brief = self._briefs.build_brief(
             purpose="prd-merge",
             node_id="prd-merge",
-            question=f"Authorize `prd_merge` for {init}? PE has attested.",
-            example="Merges the meta PRD draft PR. App repos kick in after merge (later programmes).",
-            options=["authorize prd_merge — merge now", "hold — do not merge"],
-            recommend="authorize",
-            bluf="Nothing merges until you authorize.",
-            reply_tokens=["go ahead", "authorize prd_merge", "hold"],
+            question=(
+                f"Clarifications settled for {init}. "
+                "Review the briefs outside ADH, then merge the product PR?"
+            ),
+            example="I will undraft + merge the product PR, then refresh local develop.",
+            options=[
+                f"{MERGE_PRODUCT_PR} — land into develop now",
+                f"{PARK} — do not merge",
+            ],
+            recommend=MERGE_PRODUCT_PR,
+            bluf="Army finished the PE↔PM rally and PE attested — your call to land.",
+            reply_tokens=merge_gate_tokens(),
         )
         session.open_brief = brief
-        # Judgment (not catalogue authorize): pe_glue.after_judgment runs prd_merge.
+        # Judgment (not catalogue authorize): pe_glue.after_judgment runs product merge.
         session.awaiting = AWAITING_JUDGMENT
         await self._store.save(session)
-        await self._poster.post_status(
+        evidence_bits = [
+            b
+            for b in (
+                f"PR: {pr_url}" if pr_url else "",
+                f"Attestation: {attestation}" if attestation else "",
+            )
+            if b
+        ]
+        await self._poster.post_human_next(
             room,
-            (
-                f"PE attested {init}. Ready for meta merge.\n"
-                f"PR: {pr_url or 'n/a'}\n"
-                f"Attestation: {attestation or 'n/a'}\n\n"
-                + self._briefs.format_brief_markdown(brief)
+            i_did=(
+                f"Clarifications settled for **{init}**. "
+                "PE attested the product PR head after the agent↔agent rally."
             ),
-            EventType.PROGRESS,
+            recommend=MERGE_PRODUCT_PR,
+            recommend_why="Review the question/answer briefs, then land when product stance looks right.",
+            evidence=" · ".join(evidence_bits) if evidence_bits else "",
+            outside_adh=(
+                "Read the product PR thread (PE questions + PM answers), the product brief, "
+                "and attestation in GitHub / Cursor. Do **not** merge on GitHub yourself."
+            ),
+            tokens=[TokenAction(tok, wills.get(tok, "continue")) for tok in merge_gate_tokens()],
+            hop="clarifications_settled",
+            payload={
+                "status": "need_prd_merge",
+                "initiative": init,
+                "purpose": "prd-merge",
+                "pr_number": pr_number,
+            },
         )
 
     async def _run_merge(self, tenant: TenantContext, room: str, session: AgentWorkSession) -> None:
@@ -286,62 +270,165 @@ class PmPeGlueProgramme(BaseBusinessService):
             return
         if not forge_allowed(self.role_id, "prd_merge"):
             await self._poster.post_status(
-                room, "Forge ACL denies prd_merge for adh.pm.", EventType.STALL
+                room, "Forge ACL denies product merge for adh.pm.", EventType.STALL
             )
             return
         try:
             app = self._workspace.pm_app_role()
-            result = await self._forge.prd_merge(
+            result = await self._forge.land_pull_request(
                 app=app,
                 repo=tenant.meta_repo,
                 pr_number=pr_number,
-                commit_title=f"merge({init}): Gate‑1 attested PRD",
+                commit_title=f"merge({init}): product PR attested",
             )
         except Exception as exc:
-            msg = str(exc)
-            hint = "Reply `go ahead` to retry or `hold`."
-            if "405" in msg:
-                hint = (
-                    "GitHub refused merge (often still a **draft** PR — "
-                    "mark ready for review, then retry). " + hint
-                )
-            # Keep the authorize brief open for retry.
+            await self._reopen_merge_stall(tenant, room, session, init, exc)
+            return
+
+        try:
+            sync = self._workspace.sync_integration_branch(tenant)
+        except ValidationError as exc:
+            session.awaiting = AWAITING_JUDGMENT
+            session.stage = "prd-merge"
+            session.slots["merge_sha"] = result.url or ""
+            session.slots["sync_stall"] = "dirty"
             brief = self._briefs.build_brief(
                 purpose="prd-merge",
                 node_id="prd-merge",
-                question=f"Authorize `prd_merge` for {init}? PE has attested.",
-                example="Merges the meta PRD PR after it is ready for review (not draft).",
-                options=["authorize prd_merge — merge now", "hold — do not merge"],
-                recommend="authorize",
-                bluf="Nothing merges until you authorize.",
-                reply_tokens=["go ahead", "authorize prd_merge", "hold"],
+                question=(
+                    f"Product PR #{pr_number} merged for {init}, but local meta is dirty. "
+                    "Discard local changes so I can sync develop?"
+                ),
+                example="I will not silently overwrite dirty local meta.",
+                options=[
+                    "discard local — reset local meta to origin develop",
+                    "hold — leave local as-is",
+                ],
+                recommend="discard local",
+                bluf="Remote is landed; local meta must match before KB continues cleanly.",
+                reply_tokens=["discard local", "hold"],
             )
             session.open_brief = brief
-            session.awaiting = AWAITING_JUDGMENT
-            session.stage = "prd-merge"
             await self._store.save(session)
-            await self._poster.post_status(
+            await self._poster.post_human_next(
                 room,
-                f"prd_merge failed for {init}: {exc}. {hint}",
-                EventType.STALL,
+                i_did=f"Merged product PR #{pr_number} for **{init}**, but local meta is dirty.",
+                recommend="discard local",
+                recommend_why=str(exc),
+                evidence=f"PR #{pr_number}" + (f" · {result.url}" if result.url else ""),
+                outside_adh="Inspect local meta dirty files in Cursor before discarding.",
+                tokens=[
+                    TokenAction(
+                        "discard local",
+                        "hard-reset local meta to origin develop, purge, hand off to KB",
+                    ),
+                    TokenAction("hold", "leave local dirty — KB baton not emitted yet"),
+                ],
+                hop="prd-merge",
+                event_type=EventType.STALL,
+                payload={"status": "sync_stall", "initiative": init, "pr": pr_number},
             )
             return
+
         session.awaiting = AWAITING_NONE
         session.open_brief = None
         session.stage = "prd-merged"
         session.slots["merge_sha"] = result.url or ""
+        session.slots["sync_sha"] = sync.get("sha") or ""
         await self._store.save(session)
         await self._poster.post_status(
             room,
             (
-                f"Merged `{init}` PR #{pr_number}: {result.url or 'ok'}.\n"
-                f"**Next:** waiting on `adh.kb` (`kb.enrich` baton)."
+                f"Landed product PR #{pr_number} for **{init}** "
+                f"(local develop synced to `{sync.get('sha') or 'origin'}`).\n"
+                f"**Next:** waiting on KB for knowledge docs."
             ),
             EventType.DONE,
             {"status": "prd_merged", "initiative": init, "pr": pr_number},
         )
         await self._purge_temps(tenant, room, init, PurgeEvent.PRD_MERGED)
         await self._emit_kb_enrich(tenant, room, init, pr_number)
+
+    async def _discard_local_and_retry(
+        self, tenant: TenantContext, room: str, session: AgentWorkSession
+    ) -> None:
+        init = (session.initiative or "").strip().upper()
+        pr_number = _int_slot(session.slots.get("pr_number")) or _pr_number_from_url(
+            session.slots.get("pr_url") or ""
+        )
+        try:
+            sync = self._workspace.sync_integration_branch(tenant, force=True)
+        except Exception as exc:
+            await self._poster.post_status(
+                room,
+                f"Could not discard/sync local meta for {init}: {exc}",
+                EventType.STALL,
+            )
+            return
+        session.awaiting = AWAITING_NONE
+        session.open_brief = None
+        session.stage = "prd-merged"
+        session.slots["sync_sha"] = sync.get("sha") or ""
+        session.slots.pop("sync_stall", None)
+        await self._store.save(session)
+        await self._poster.post_status(
+            room,
+            (
+                f"Local develop synced for **{init}** "
+                f"(`{sync.get('sha') or 'origin'}`). Handing off to KB."
+            ),
+            EventType.DONE,
+            {"status": "prd_merged", "initiative": init, "pr": pr_number},
+        )
+        await self._purge_temps(tenant, room, init, PurgeEvent.PRD_MERGED)
+        if pr_number is not None:
+            await self._emit_kb_enrich(tenant, room, init, pr_number)
+
+    async def _reopen_merge_stall(
+        self,
+        tenant: TenantContext,
+        room: str,
+        session: AgentWorkSession,
+        init: str,
+        exc: Exception,
+    ) -> None:
+        del tenant  # brief reopen only
+        msg = str(exc)
+        wills = merge_gate_wills()
+        hint = f"Reply `{MERGE_PRODUCT_PR}` to retry or `{PARK}`."
+        if "405" in msg:
+            hint = (
+                "GitHub refused merge (often still a draft — I undraft first; "
+                "if this persists, check branch protection). " + hint
+            )
+        brief = self._briefs.build_brief(
+            purpose="prd-merge",
+            node_id="prd-merge",
+            question=f"Retry product merge for {init}? PE has attested.",
+            example="I will undraft + merge the product PR after it is ready.",
+            options=[
+                f"{MERGE_PRODUCT_PR} — merge now",
+                f"{PARK} — do not merge",
+            ],
+            recommend=MERGE_PRODUCT_PR,
+            bluf="Nothing merges until you authorize.",
+            reply_tokens=merge_gate_tokens(),
+        )
+        session.open_brief = brief
+        session.awaiting = AWAITING_JUDGMENT
+        session.stage = "prd-merge"
+        await self._store.save(session)
+        await self._poster.post_human_next(
+            room,
+            i_did=f"Tried to land the product PR for **{init}** and hit an error.",
+            recommend=MERGE_PRODUCT_PR,
+            recommend_why=f"{exc}. {hint}",
+            outside_adh="Check the product PR status on GitHub / Cursor, then retry here.",
+            tokens=[TokenAction(tok, wills.get(tok, "continue")) for tok in merge_gate_tokens()],
+            hop="clarifications_settled",
+            event_type=EventType.STALL,
+            payload={"status": "prd_merge_failed", "initiative": init},
+        )
 
     async def _purge_temps(
         self,
@@ -390,15 +477,19 @@ class PmPeGlueProgramme(BaseBusinessService):
             },
         )
         stored, created = await self._batons.create_pending(baton, ttl=ttl)
-        notice = (
-            f"baton `kb.enrich` → `adh.kb` (init={initiative}; "
-            f"correlation={stored.correlation_id})"
-        )
         if not created:
-            notice = f"(idempotent) {notice}"
+            self.logger.info(
+                "kb.enrich baton idempotent (no Buzz)",
+                baton_id=stored.id,
+                initiative=initiative,
+            )
+            return
         await self._poster.post_status(
             room,
-            notice,
+            (
+                f"baton `kb.enrich` → `adh.kb` (init={initiative}; "
+                f"correlation={stored.correlation_id})"
+            ),
             EventType.PROGRESS,
             {
                 "status": "baton_emitted",
@@ -407,7 +498,7 @@ class PmPeGlueProgramme(BaseBusinessService):
                 "idempotency_key": stored.idempotency_key,
                 "tenant": tenant.slug,
                 "initiative": initiative,
-                "created": created,
+                "created": True,
             },
         )
 

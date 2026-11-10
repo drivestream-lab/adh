@@ -6,14 +6,14 @@ from typing import FrozenSet
 
 # Role → allowed forge action names (empty = deny all)
 _DEFAULT_ACL: dict[str, FrozenSet[str]] = {
-    "adh.pm": frozenset({"open_draft_pr", "prd_merge"}),
+    "adh.pm": frozenset({"open_draft_pr", "prd_merge", "comment_pr"}),
     "adh.pe": frozenset({"ready_for_review", "approve_attestation", "apply_labels", "comment_pr"}),
     "adh.dev": frozenset({"open_draft_pr", "push_branch", "comment_pr"}),
     "adh.qa": frozenset({"comment_pr", "set_check"}),
     "adh.read": frozenset(),
     "adh.taskgraph": frozenset(),
-    # KB may open enrich draft PRs under knowledge/** (Contents push via workspace).
-    "adh.kb": frozenset({"open_draft_pr"}),
+    # KB may open + land enrich PRs under knowledge/** (Contents push via workspace).
+    "adh.kb": frozenset({"open_draft_pr", "prd_merge", "land_pull_request"}),
 }
 
 

@@ -8,6 +8,7 @@ from typing import Any, Callable, Coroutine, Optional
 
 from src.adh_agents.baton.models import Baton
 from src.adh_agents.baton.redis_store import RedisBatonStore
+from src.adh_agents.collaboration.gate_coach import TokenAction, format_human_next
 from src.adh_agents.forge_acl import forge_allowed
 from src.adh_agents.settings import AgentSettings
 from src.business_services.base_business_service import BaseBusinessService
@@ -126,15 +127,67 @@ class BaseHermesAgent(BaseBusinessService, abc.ABC):
 
         return _on_progress
 
+    async def post_human_next(
+        self,
+        room: str,
+        *,
+        i_did: str,
+        recommend: str,
+        outside_adh: str,
+        tokens: list[TokenAction],
+        recommend_why: str = "",
+        evidence: str = "",
+        human_role: str = "Lead",
+        hop: str = "",
+        example: str = "",
+        event_type: EventType = EventType.PROGRESS,
+        payload: Optional[dict[str, Any]] = None,
+    ) -> MessageRead:
+        """Post the helpful-army coach for one open human gate (working role only)."""
+        body = format_human_next(
+            i_did=i_did,
+            recommend=recommend,
+            outside_adh=outside_adh,
+            tokens=tokens,
+            recommend_why=recommend_why,
+            evidence=evidence,
+            human_role=human_role,
+            hop=hop,
+            example=example,
+        )
+        return await self._buzz.post_message(
+            room,
+            MessageCreate(
+                identity_handle=self.role_id,
+                body=body,
+                kind=MessageKind.EVENT,
+                event_type=event_type,
+                payload={
+                    **(payload or {}),
+                    "status": (payload or {}).get("status") or "human_next",
+                    "role": self.role_id,
+                    "coach": True,
+                },
+            ),
+        )
+
     async def emit_baton(self, baton: Baton) -> tuple[Baton, bool]:
         ttl = int(self._agent_settings.baton_ttl_seconds)
         stored, created = await self._batons.create_pending(baton, ttl=ttl)
+        # Idempotent re-emit: log only — never spam ops with "(idempotent) baton…".
+        if not created:
+            logger.info(
+                "baton emit idempotent (no Buzz)",
+                baton_type=stored.type,
+                baton_id=stored.id,
+                correlation_id=stored.correlation_id,
+                initiative=stored.initiative,
+            )
+            return stored, created
         notice = (
             f"baton `{baton.type}` → `{baton.to_role}` "
             f"(init={baton.initiative or '—'}; correlation={baton.correlation_id})"
         )
-        if not created:
-            notice = f"(idempotent) {notice}"
         try:
             await self._buzz.post_message(
                 baton.ops_room,
@@ -148,7 +201,7 @@ class BaseHermesAgent(BaseBusinessService, abc.ABC):
                         "baton_id": stored.id,
                         "baton_type": stored.type,
                         "to_role": stored.to_role,
-                        "created": created,
+                        "created": True,
                         "correlation_id": stored.correlation_id,
                         "idempotency_key": stored.idempotency_key,
                         "tenant": stored.tenant,
