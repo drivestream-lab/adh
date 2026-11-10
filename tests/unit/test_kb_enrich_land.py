@@ -114,7 +114,8 @@ async def test_land_calls_land_pull_request() -> None:
         )
     )
     workspace = MagicMock()
-    workspace.pm_app_role.return_value = MagicMock()
+    workspace.pm_app_role.return_value = MagicMock(name="pm")
+    workspace.app_role.return_value = MagicMock(name="reviewer")
     workspace.sync_integration_branch.return_value = {
         "branch": "develop",
         "sha": "abc",
@@ -129,6 +130,7 @@ async def test_land_calls_land_pull_request() -> None:
     prog._store = AsyncMock()  # type: ignore[attr-defined]
     prog._forge = forge  # type: ignore[attr-defined]
     prog._workspace = workspace  # type: ignore[attr-defined]
+    prog._settings = MagicMock(reviewer_app_slug="adh-reviewer")  # type: ignore[attr-defined]
 
     tenant = TenantContext(
         slug="demo",
@@ -152,6 +154,65 @@ async def test_land_calls_land_pull_request() -> None:
     )
     await prog._land_enrich_pr(tenant, "demo-ops", session)  # type: ignore[attr-defined]
     forge.land_pull_request.assert_awaited_once()
+    kwargs = forge.land_pull_request.await_args.kwargs
+    assert kwargs.get("pre_approve_app") is workspace.app_role.return_value
+    workspace.app_role.assert_called_once_with("adh-reviewer")
     workspace.sync_integration_branch.assert_called_once()
     assert session.stage == "kb-enrich-landed"
     assert any("Landed knowledge docs" in p[0] for p in poster.posts)
+
+
+@pytest.mark.asyncio
+async def test_land_failure_reopens_buzz_gate() -> None:
+    poster = _FakePoster()
+    forge = MagicMock()
+    forge.land_pull_request = AsyncMock(
+        side_effect=RuntimeError(
+            "Client error '405 Method Not Allowed' for url "
+            "'https://api.github.com/repos/org/demo-meta/pulls/9/merge'"
+        )
+    )
+    workspace = MagicMock()
+    workspace.pm_app_role.return_value = MagicMock(name="pm")
+    workspace.app_role.return_value = MagicMock(name="reviewer")
+
+    prog = object.__new__(KbEnrichProgramme)
+    prog.role_id = "adh.kb"
+    prog._poster = poster  # type: ignore[attr-defined]
+    prog._briefs = HermesBriefService()  # type: ignore[attr-defined]
+    prog._store = AsyncMock()  # type: ignore[attr-defined]
+    prog._forge = forge  # type: ignore[attr-defined]
+    prog._workspace = workspace  # type: ignore[attr-defined]
+    prog._settings = MagicMock(reviewer_app_slug="adh-reviewer")  # type: ignore[attr-defined]
+
+    tenant = TenantContext(
+        slug="demo",
+        org="org",
+        meta_repo="demo-meta",
+        meta_root="/tmp/demo-meta",
+        ops_room="demo-ops",
+        integration_branch="develop",
+        init_prefix="INIT-",
+    )
+    session = AgentWorkSession(
+        tenant_slug="demo",
+        role_id="adh.kb",
+        room="demo-ops",
+        work_id="INIT-1",
+        initiative="INIT-1",
+        programme="kb-enrich",
+        stage="kb-enrich-land",
+        awaiting="none",
+        open_brief=None,
+        slots={"enrich_pr": "https://github.com/org/demo-meta/pull/9", "enrich_pr_number": "9"},
+    )
+    await prog._land_enrich_pr(tenant, "demo-ops", session)  # type: ignore[attr-defined]
+    assert session.awaiting == AWAITING_JUDGMENT
+    assert session.open_brief is not None
+    prog._store.save.assert_awaited()  # type: ignore[attr-defined]
+    body, et, payload = poster.posts[-1]
+    assert et == EventType.STALL
+    assert payload.get("status") == "kb_enrich_land_failed"
+    assert "go ahead" in body
+    assert "APPROVE" in body
+    assert "405" in body

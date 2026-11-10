@@ -104,11 +104,60 @@ class KbEnrichProgramme(BaseBusinessService):
         await self._open_enrich_pr(tenant, room, session)
 
     async def resume_programme(self, tenant: TenantContext, room: str, work_id: str) -> None:
-        del tenant
-        # Explicit resume only — no spam. Re-surface open brief if present via store caller.
+        """Re-surface land/open gates on Buzz so Lead can authorize; forge does the land."""
+        init = (work_id or "").strip().upper()
+        session = await self._store.load(tenant.slug, self.role_id, init)
+        if session is None:
+            await self._poster.post_status(
+                room,
+                f"KB resume: no session for `{init}`.",
+                EventType.STALL,
+                identity_handle=self.role_id,
+            )
+            return
+        pr_url = session.slots.get("enrich_pr") or ""
+        pr_number = _int_slot(session.slots.get("enrich_pr_number")) or _pr_number_from_url(pr_url)
+        if session.stage in {"kb-enrich-land", "kb-enrich-authorize"} and pr_url:
+            await self._repost_land_gate(
+                tenant,
+                room,
+                session,
+                init=init or (session.initiative or "KB").strip().upper(),
+                pr_url=pr_url,
+                pr_number=pr_number,
+                i_did=(
+                    f"Resumed knowledge land gate for **{init}** "
+                    f"(PR #{pr_number or '?'} still open)."
+                ),
+                recommend_why=(
+                    "Authorize again — forge will undraft, APPROVE for branch protection, "
+                    "merge, and sync. Do not merge on GitHub yourself."
+                ),
+                outside_adh="Skim the knowledge docs PR if you want, then decide here.",
+                event_type=EventType.PROGRESS,
+                payload={
+                    "status": "kb_enrich_land_resumed",
+                    "initiative": init,
+                    "pr": pr_url,
+                    "pr_number": pr_number,
+                    "purpose": "kb-enrich-land",
+                },
+            )
+            return
+        if session.open_brief is not None and session.awaiting == AWAITING_JUDGMENT:
+            await self._poster.post_status(
+                room,
+                f"KB resume: gate already open for `{init}` — reply with the coach token.",
+                EventType.PROGRESS,
+                identity_handle=self.role_id,
+            )
+            return
         await self._poster.post_status(
             room,
-            f"KB resume requested for `{work_id}` — open the outstanding knowledge gate if any.",
+            (
+                f"KB resume for `{init}` — stage `{session.stage}` has no land PR to reopen. "
+                "Start from a new kb.enrich baton if needed."
+            ),
             EventType.PROGRESS,
             identity_handle=self.role_id,
         )
@@ -344,12 +393,54 @@ class KbEnrichProgramme(BaseBusinessService):
         pr_url: str,
         pr_number: int | None,
     ) -> None:
+        await self._repost_land_gate(
+            tenant,
+            room,
+            session,
+            init=init,
+            pr_url=pr_url,
+            pr_number=pr_number,
+            i_did=f"Opened draft knowledge docs PR for **{init}**.",
+            recommend_why="Land heads onto develop when the draft looks right.",
+            outside_adh=(
+                "Review the knowledge docs PR in GitHub / Cursor. "
+                "Do **not** merge on GitHub yourself — authorize here and I will land it."
+            ),
+            event_type=EventType.PROGRESS,
+            payload={
+                "status": "kb_enrich_need_land",
+                "initiative": init,
+                "pr": pr_url,
+                "pr_number": pr_number,
+                "purpose": "kb-enrich-land",
+            },
+        )
+
+    async def _repost_land_gate(
+        self,
+        tenant: TenantContext,
+        room: str,
+        session: AgentWorkSession,
+        *,
+        init: str,
+        pr_url: str,
+        pr_number: int | None,
+        i_did: str,
+        recommend_why: str,
+        outside_adh: str,
+        event_type: EventType = EventType.PROGRESS,
+        payload: dict | None = None,
+    ) -> None:
+        """Persist open land gate + Buzz coach so Lead retry hits KB (not PM merged)."""
         del tenant
         brief = self._briefs.build_brief(
             purpose="kb-enrich-land",
             node_id="kb-enrich-land",
             question=f"Authorize landing the knowledge docs PR for {init}?",
-            example="I will undraft + merge, sync local develop, then purge temps.",
+            example=(
+                "I will undraft + APPROVE (branch protection) + merge, "
+                "sync local develop, then purge temps."
+            ),
             options=[
                 "authorize kb_enrich_land — merge now",
                 "hold — leave draft open",
@@ -364,25 +455,27 @@ class KbEnrichProgramme(BaseBusinessService):
         await self._store.save(session)
         await self._poster.post_human_next(
             room,
-            i_did=f"Opened draft knowledge docs PR for **{init}**.",
+            i_did=i_did,
             recommend="go ahead",
-            recommend_why="Land heads onto develop when the draft looks right.",
+            recommend_why=recommend_why,
             evidence=f"PR: {pr_url or 'n/a'}"
             + (f" (#{pr_number})" if pr_number is not None else ""),
-            outside_adh=(
-                "Review the knowledge docs PR in GitHub / Cursor. "
-                "Do **not** merge on GitHub yourself — authorize here and I will land it."
-            ),
+            outside_adh=outside_adh,
             tokens=[
                 TokenAction(
                     "go ahead",
-                    "undraft + merge the knowledge docs PR, sync local develop, purge temps",
+                    (
+                        "undraft + APPROVE + merge the knowledge docs PR, "
+                        "sync local develop, purge temps"
+                    ),
                 ),
                 TokenAction("authorize kb_enrich_land", "same as go ahead"),
                 TokenAction("hold", "leave the draft open — nothing lands"),
             ],
             hop="kb-enrich-land",
-            payload={
+            event_type=event_type,
+            payload=payload
+            or {
                 "status": "kb_enrich_need_land",
                 "initiative": init,
                 "pr": pr_url,
@@ -419,29 +512,37 @@ class KbEnrichProgramme(BaseBusinessService):
             return
         try:
             app = self._workspace.pm_app_role()
+            reviewer = self._workspace.app_role(self._settings.reviewer_app_slug)
             result = await self._forge.land_pull_request(
                 app=app,
                 repo=tenant.meta_repo,
                 pr_number=pr_number,
                 commit_title=f"docs(knowledge): land enrich after {init}",
                 action="land_pull_request",
+                pre_approve_app=reviewer,
+                pre_approve_body=(
+                    f"Lead authorized knowledge docs land for `{init}` on Buzz. "
+                    "Forge APPROVE satisfies develop branch protection (no PE attest on knowledge)."
+                ),
             )
         except Exception as exc:
-            await self._poster.post_human_next(
+            # Re-open Buzz gate so Lead can retry — do not leave awaiting=none (PM steals go ahead).
+            why = _land_failure_why(exc)
+            await self._repost_land_gate(
+                tenant,
                 room,
-                i_did=f"Tried to land knowledge docs PR #{pr_number} for **{init}** and failed.",
-                recommend="go ahead",
-                recommend_why=str(exc),
-                outside_adh="Check the knowledge docs PR on GitHub, then retry here.",
-                tokens=[
-                    TokenAction("go ahead", "retry undraft + merge + sync"),
-                    TokenAction("authorize kb_enrich_land", "same as go ahead"),
-                    TokenAction("hold", "leave the draft open"),
-                ],
-                hop="kb-enrich-land",
+                session,
+                init=init,
+                pr_url=pr_url,
+                pr_number=pr_number,
+                i_did=(f"Tried to land knowledge docs PR #{pr_number} for **{init}** and failed."),
+                recommend_why=why,
+                outside_adh=(
+                    "Check the knowledge docs PR on GitHub if you want context, "
+                    "then authorize again here — forge will undraft, APPROVE, merge, and sync."
+                ),
                 event_type=EventType.STALL,
                 payload={"status": "kb_enrich_land_failed", "initiative": init},
-                identity_handle=self.role_id,
             )
             return
 
@@ -596,3 +697,20 @@ def _int_slot(raw: str | None) -> int | None:
     if text.isdigit():
         return int(text)
     return None
+
+
+def _land_failure_why(exc: BaseException) -> str:
+    """Coach-facing why; map common GitHub land refusals to Lead-actionable text."""
+    msg = str(exc)
+    lowered = msg.lower()
+    if "405" in msg or "method not allowed" in lowered:
+        return (
+            f"{msg} — often still draft or develop requires an approving review. "
+            "On retry I will undraft, APPROVE with the reviewer app, then merge."
+        )
+    if "422" in msg or "not mergeable" in lowered or "review" in lowered:
+        return (
+            f"{msg} — branch protection or mergeability blocked the land. "
+            "On retry I will undraft, APPROVE, then merge."
+        )
+    return msg

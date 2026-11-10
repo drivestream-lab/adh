@@ -92,3 +92,10 @@ class ReadAgentSettings(AgentSettings):
 class KbAgentSettings(AgentSettings):
     PREFIX: ClassVar[str] = "ADH_KB"
     role_id: str = Field(default="adh.kb")
+    reviewer_app_slug: str = Field(
+        default="adh-reviewer",
+        description=(
+            "roles.yaml app that APPROVEs knowledge docs PRs before land "
+            "(branch protection; no PE attest on knowledge lane)"
+        ),
+    )

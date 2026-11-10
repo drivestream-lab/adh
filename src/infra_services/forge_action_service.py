@@ -167,11 +167,27 @@ class ForgeActionService(BaseInfraService):
         pr_number: int,
         commit_title: str,
         action: str = _PRD_MERGE,
+        pre_approve_app: AppRole | None = None,
+        pre_approve_body: str = "",
     ) -> ForgeActionResult:
-        """Undraft (fail-closed) then merge. Shared by product + knowledge lands."""
+        """Undraft (fail-closed), optional APPROVE for branch protection, then merge.
+
+        Shared by product + knowledge lands. Knowledge PRs have no PE attest, so callers
+        pass ``pre_approve_app`` (typically adh-reviewer) after Lead authorize on Buzz.
+        """
         token, _ = await self._github.installation_token(app, write=True, repositories=[repo])
         # Draft PRs cannot merge (405). Undraft via GraphQL must succeed before merge.
         await self._github.mark_ready_for_review(token, repo, pr_number=pr_number)
+        if pre_approve_app is not None:
+            # Branch protection (required reviews) otherwise returns 405 on merge.
+            await self.approve_attestation(
+                app=pre_approve_app,
+                repo=repo,
+                pr_number=pr_number,
+                body=pre_approve_body
+                or "Lead authorized land on Buzz — forge APPROVE for branch protection.",
+                gate_labels=False,
+            )
         sha = await self._github.merge_pull_request(
             token,
             repo,
