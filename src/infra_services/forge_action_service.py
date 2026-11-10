@@ -172,16 +172,8 @@ class ForgeActionService(BaseInfraService):
         Draft PRs cannot be merged (GitHub 405) — convert to ready_for_review first.
         """
         token, _ = await self._github.installation_token(app, write=True, repositories=[repo])
-        try:
-            await self._github.mark_ready_for_review(token, repo, pr_number=pr_number)
-        except Exception as exc:
-            # Already ready, or App lacks draft conversion — merge may still work if not draft.
-            logger.info(
-                "ready_for_review before merge skipped/failed",
-                repo=repo,
-                pr=pr_number,
-                error=str(exc)[:200],
-            )
+        # Draft PRs cannot merge (405). Undraft via GraphQL must succeed before merge.
+        await self._github.mark_ready_for_review(token, repo, pr_number=pr_number)
         sha = await self._github.merge_pull_request(
             token,
             repo,

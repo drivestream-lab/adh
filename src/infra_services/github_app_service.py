@@ -702,24 +702,91 @@ class GitHubAppService(BaseInfraService):
         )
 
     async def mark_ready_for_review(self, token: str, repo: str, *, pr_number: int) -> None:
+        """Convert a draft PR to ready-for-review.
+
+        GitHub has **no** REST ``…/pulls/{n}/ready_for_review`` route (404).
+        Use GraphQL ``markPullRequestReadyForReview`` with the PR ``node_id``.
+        No-op when the PR is already non-draft.
+        """
         if self._client is None:
             raise RuntimeError("GitHub App service has not been initialized")
         org = self._settings.github_org
         api = self._settings.github_api.rstrip("/")
+        headers = _token_headers(token)
+        meta = await self._request(
+            "GET",
+            f"{api}/repos/{org}/{repo}/pulls/{pr_number}",
+            headers=headers,
+        )
+        if meta.status_code >= 400:
+            logger.info(
+                "GitHub ready_for_review: cannot load PR",
+                repo=repo,
+                pr=pr_number,
+                status=meta.status_code,
+                body=meta.text[:300],
+            )
+            meta.raise_for_status()
+        raw_meta = meta.json()
+        data = raw_meta if isinstance(raw_meta, dict) else {}
+        if not bool(data.get("draft")):
+            logger.info(
+                "GitHub ready_for_review skipped — PR already ready",
+                repo=repo,
+                pr=pr_number,
+            )
+            return
+        node_id = str(data.get("node_id") or "").strip()
+        if not node_id:
+            raise ValidationError(
+                f"GitHub PR {org}/{repo}#{pr_number} has no node_id for ready_for_review"
+            )
+        # GraphQL is the supported convert-draft API.
+        mutation = (
+            "mutation($id: ID!) {"
+            " markPullRequestReadyForReview(input: {pullRequestId: $id}) {"
+            "  pullRequest { number isDraft }"
+            " }"
+            "}"
+        )
+        gql_headers = {
+            **headers,
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+        }
         response = await self._request(
             "POST",
-            f"{api}/repos/{org}/{repo}/pulls/{pr_number}/ready_for_review",
-            headers=_token_headers(token),
+            f"{api}/graphql",
+            headers=gql_headers,
+            json={"query": mutation, "variables": {"id": node_id}},
         )
-        if response.status_code >= 400 and response.status_code != 422:
+        if response.status_code >= 400:
             logger.info(
-                "GitHub ready_for_review failed",
+                "GitHub ready_for_review GraphQL HTTP failed",
                 repo=repo,
                 pr=pr_number,
                 status=response.status_code,
                 body=response.text[:300],
             )
             response.raise_for_status()
+        raw_gql = response.json()
+        payload = raw_gql if isinstance(raw_gql, dict) else {}
+        errors = payload.get("errors")
+        if errors:
+            msg = "; ".join(
+                str(e.get("message") or e) for e in errors if isinstance(e, dict)
+            ) or str(errors)
+            logger.info(
+                "GitHub ready_for_review GraphQL errors",
+                repo=repo,
+                pr=pr_number,
+                errors=msg[:300],
+            )
+            raise ValidationError(
+                f"GitHub markPullRequestReadyForReview failed for "
+                f"{org}/{repo}#{pr_number}: {msg[:200]}"
+            )
+        logger.info("Marked pull request ready for review", repo=repo, pr=pr_number)
 
     async def pull_head_sha(self, token: str, repo: str, *, pr_number: int) -> str | None:
         if self._client is None:
