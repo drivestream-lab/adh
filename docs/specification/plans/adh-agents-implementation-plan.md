@@ -1,6 +1,6 @@
 # Implementation plan — ADH Agents Team OS
 
-**Status:** D1–D5 + U1–U6 landed on `develop`. **Next: Floor wave F1–F9 in one PR** (durable Buzz floor + task rooms + god mode + trajectory).  
+**Status:** D1–D5 + U1–U6 + **Floor F1–F9** landed on `develop` ([PR #25](https://github.com/drivestream-lab/adh/pull/25)). God guinea pig `INIT-REALWORLD-004` archived.  
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md)  
 **Product:** [adh-agents-team-os.md](../product/adh-agents-team-os.md)  
 **KB heads:** [adh-kb-heads.md](../references/adh-kb-heads.md)  
@@ -21,11 +21,11 @@ ADH Agents Team OS
 U1–U5 helpful-army land  ✅  coach, single gate, land+sync, KB land, hygiene
 U6 PE↔PM agent rally     ✅  PR #23; ack_pe gone; human merge after settle
 KB land approve-before   ✅  PR #24; reopen Buzz gate on stall
+F1–F9 Team floor         ✅  PR #25; god INIT-004 → archive; traj hub mirrors
 
-── NEXT (single PR) ──
-F1–F9 Team floor         🟨  T1–T4 polish landed → **god verify** next
-
-── later hires ──
+── later ──
+Human rewind + reason     ⬜  (deferred; god has no rewind)
+Human INIT verify redo    ⬜  optional (003 archived mid-path)
 dev / qa / iac / sre / obs + codegraph MCP + TaskGraph hire   ⬜
 ```
 
