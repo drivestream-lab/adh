@@ -10,6 +10,7 @@ from src.adh_agents.baton.models import Baton
 from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.collaboration.gate_coach import TokenAction, format_human_next
 from src.adh_agents.forge_acl import forge_allowed
+from src.adh_agents.runtime.presence import PresenceService
 from src.adh_agents.settings import AgentSettings
 from src.business_services.base_business_service import BaseBusinessService
 from src.business_services.buzz_service import BuzzService
@@ -20,6 +21,9 @@ from src.models.buzz_models import (
     MessageCreate,
     MessageKind,
     MessageRead,
+    RoomMemberCreate,
+    TaskEventCreate,
+    TaskEventKind,
 )
 
 logger = get_logger()
@@ -37,14 +41,18 @@ class BaseHermesAgent(BaseBusinessService, abc.ABC):
         buzz: BuzzService,
         batons: RedisBatonStore,
         settings: AgentSettings,
+        *,
+        presence: Optional[PresenceService] = None,
     ) -> None:
         super().__init__()
         self._buzz = buzz
         self._batons = batons
         self._agent_settings = settings
+        self._presence = presence
         self.role_id = settings.role_id or self.role_id
         self._listen_tasks: list[asyncio.Task[None]] = []
         self._work_tasks: set[asyncio.Task[None]] = set()
+        self._listening_rooms: set[str] = set()
 
     @abc.abstractmethod
     async def handle_ops_message(self, room: str, message: MessageRead) -> None:
@@ -53,6 +61,34 @@ class BaseHermesAgent(BaseBusinessService, abc.ABC):
     def assert_forge(self, action: str) -> None:
         if not forge_allowed(self.role_id, action):
             raise PermissionError(f"forge action {action!r} denied for role {self.role_id}")
+
+    async def ack_received(
+        self,
+        room: str,
+        *,
+        lead_body: str,
+        source_message_id: str | None = None,
+    ) -> MessageRead:
+        """Base premise: immediate ingest ack before long work (Lead must never see silence)."""
+        from src.adh_agents.surface.buzz_poster import _lead_snippet
+
+        snippet = _lead_snippet(lead_body)
+        quoted = f"`{snippet}`" if snippet else "your message"
+        return await self._buzz.post_message(
+            room,
+            MessageCreate(
+                identity_handle=self.role_id,
+                body=f"Got it — working on {quoted}.",
+                kind=MessageKind.EVENT,
+                event_type=EventType.START,
+                payload={
+                    "status": "received",
+                    "ack": True,
+                    "role": self.role_id,
+                    "source_message_id": source_message_id or "",
+                },
+            ),
+        )
 
     async def broadcast_progress(
         self,
@@ -171,6 +207,15 @@ class BaseHermesAgent(BaseBusinessService, abc.ABC):
             ),
         )
 
+    async def ensure_hub_member(self, hub_room: str) -> None:
+        """Join tenant hub roster on boot (idempotent)."""
+        try:
+            await self._buzz.ensure_member(
+                RoomMemberCreate(room_slug=hub_room, identity_handle=self.role_id)
+            )
+        except Exception:
+            logger.exception("hub member ensure failed", role=self.role_id, room=hub_room)
+
     async def emit_baton(self, baton: Baton) -> tuple[Baton, bool]:
         ttl = int(self._agent_settings.baton_ttl_seconds)
         stored, created = await self._batons.create_pending(baton, ttl=ttl)
@@ -185,7 +230,7 @@ class BaseHermesAgent(BaseBusinessService, abc.ABC):
             )
             return stored, created
         notice = (
-            f"baton `{baton.type}` → `{baton.to_role}` "
+            f"@{stored.to_role} baton `{baton.type}` "
             f"(init={baton.initiative or '—'}; correlation={baton.correlation_id})"
         )
         try:
@@ -198,6 +243,7 @@ class BaseHermesAgent(BaseBusinessService, abc.ABC):
                     event_type=EventType.PROGRESS,
                     payload={
                         "status": "baton_emitted",
+                        "collab": True,
                         "baton_id": stored.id,
                         "baton_type": stored.type,
                         "to_role": stored.to_role,
@@ -211,13 +257,85 @@ class BaseHermesAgent(BaseBusinessService, abc.ABC):
             )
         except Exception:
             logger.exception("baton notice post failed", baton_type=baton.type)
+        await self._append_baton_event(stored, purpose="emit")
         return stored, created
 
+    async def post_collab_baton(
+        self,
+        room: str,
+        *,
+        body: str,
+        status: str,
+        baton: Baton,
+        mention: str = "",
+    ) -> None:
+        """CollabPost for claim/done sites (emit already posts on create)."""
+        text = (body or "").strip()
+        if mention and f"@{mention}" not in text:
+            text = f"@{mention} {text}".strip()
+        try:
+            await self._buzz.post_message(
+                room,
+                MessageCreate(
+                    identity_handle=self.role_id,
+                    body=text,
+                    kind=MessageKind.EVENT,
+                    event_type=EventType.PROGRESS,
+                    payload={
+                        "status": status,
+                        "collab": True,
+                        "baton_id": baton.id,
+                        "baton_type": baton.type,
+                        "tenant": baton.tenant,
+                        "initiative": baton.initiative,
+                    },
+                ),
+            )
+        except Exception:
+            logger.exception("collab post failed", status=status, baton_type=baton.type)
+
     async def start_ops_listeners(self, rooms: list[str]) -> None:
+        added = await self.ensure_listening(rooms)
+        if added:
+            self.logger.info("Agent ops listeners scheduled", role=self.role_id, rooms=added)
+
+    async def ensure_listening(self, rooms: list[str]) -> list[str]:
+        """Subscribe to any rooms not yet listened; return newly added slugs."""
+        added: list[str] = []
         for room in rooms:
+            if not room or room in self._listening_rooms:
+                continue
+            self._listening_rooms.add(room)
             task = asyncio.create_task(self._listen_ops(room))
             self._listen_tasks.append(task)
-        self.logger.info("Agent ops listeners scheduled", role=self.role_id, rooms=rooms)
+            added.append(room)
+        return added
+
+    def start_listen_refresh_loop(
+        self,
+        rooms_provider,
+        *,
+        interval_seconds: float = 15.0,
+        on_added=None,
+    ) -> None:
+        """Periodically discover hub+task rooms and subscribe (Floor multi-room)."""
+
+        async def _loop() -> None:
+            delay = max(5.0, float(interval_seconds))
+            while True:
+                try:
+                    rooms = await rooms_provider()
+                    added = await self.ensure_listening(list(rooms or []))
+                    if added and on_added is not None:
+                        await on_added(added)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self.logger.exception("listen refresh failed", role=self.role_id)
+                await asyncio.sleep(delay)
+
+        task = asyncio.create_task(_loop())
+        self._listen_tasks.append(task)
 
     async def close(self) -> None:
         tasks = [*self._listen_tasks, *self._work_tasks]
@@ -230,7 +348,50 @@ class BaseHermesAgent(BaseBusinessService, abc.ABC):
                 pass
         self._listen_tasks = []
         self._work_tasks.clear()
+        self._listening_rooms.clear()
         await super().close()
+
+    async def _presence_heartbeat(self, room: str) -> None:
+        if self._presence is None:
+            return
+        tenant = room.split("-ops")[0] if room.endswith("-ops") else ""
+        if room.startswith("task-"):
+            task = await self._buzz.get_task_by_room_slug(room)
+            tenant = task.tenant_slug if task is not None else ""
+        if not tenant:
+            return
+        try:
+            await self._presence.heartbeat(
+                tenant=tenant,
+                role_id=self.role_id,
+                state="listening",
+                ttl_seconds=int(self._agent_settings.presence_ttl_seconds),
+            )
+        except Exception:
+            logger.exception("presence heartbeat failed", role=self.role_id, room=room)
+
+    async def _append_baton_event(self, baton: Baton, *, purpose: str) -> None:
+        init = (baton.initiative or "").strip().upper()
+        if not init:
+            return
+        try:
+            await self._buzz.append_task_event(
+                TaskEventCreate(
+                    tenant_slug=baton.tenant,
+                    task_id=init,
+                    kind=TaskEventKind.BATON,
+                    role_id=self.role_id,
+                    purpose=purpose,
+                    token=baton.type,
+                    payload={"baton_id": baton.id, "to_role": baton.to_role},
+                )
+            )
+        except Exception:
+            logger.exception(
+                "baton trajectory write failed",
+                baton_type=baton.type,
+                initiative=init,
+            )
 
     async def _listen_ops(self, room: str) -> None:
         delay = 1.0
@@ -240,10 +401,15 @@ class BaseHermesAgent(BaseBusinessService, abc.ABC):
                 await anext(stream)
                 delay = 1.0
                 self.logger.info("Agent listener subscribed", role=self.role_id, room=room)
+                await self._presence_heartbeat(room)
                 async for raw in stream:
                     message = _parse_stream_message(raw)
                     if message is not None:
+                        await self._presence_heartbeat(room)
                         await self.handle_ops_message(room, message)
+                    else:
+                        # ping / idle — still refresh presence
+                        await self._presence_heartbeat(room)
             except asyncio.CancelledError:
                 raise
             except Exception:

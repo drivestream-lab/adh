@@ -55,6 +55,23 @@ class _FakePoster:
     ) -> None:
         self.posts.append(body)
 
+    async def post_collab(
+        self,
+        room: str,
+        *,
+        body: str,
+        identity_handle: str,
+        status: str,
+        payload: Optional[dict[str, Any]] = None,
+        event_type: EventType = EventType.PROGRESS,
+        mention: str = "",
+    ) -> None:
+        del room, identity_handle, status, payload, event_type
+        text = body
+        if mention and f"@{mention}" not in text:
+            text = f"@{mention} {text}"
+        self.posts.append(text)
+
 
 @pytest.mark.asyncio
 async def test_pe_claims_and_emits_read_walk(tmp_path: Path) -> None:
@@ -79,6 +96,12 @@ async def test_pe_claims_and_emits_read_walk(tmp_path: Path) -> None:
     forge = MagicMock()
     briefs = MagicMock()
 
+    buzz = MagicMock()
+
+    async def _no_task(*_a: Any, **_k: Any) -> None:
+        raise LookupError("no task in unit test")
+
+    buzz.get_task = _no_task
     pe = PeReviewProgramme(
         store=store,
         batons=batons,
@@ -87,6 +110,7 @@ async def test_pe_claims_and_emits_read_walk(tmp_path: Path) -> None:
         forge=forge,
         workspace=workspace,
         tenants=tenants,
+        buzz=buzz,  # type: ignore[arg-type]
     )
     baton = Baton(
         type="pe.review",

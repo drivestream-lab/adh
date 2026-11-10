@@ -57,6 +57,35 @@ class HermesBuzzPoster:
             ),
         )
 
+    async def ack_received(
+        self,
+        room: str,
+        *,
+        lead_body: str,
+        identity_handle: str | None = None,
+        source_message_id: str | None = None,
+    ) -> MessageRead:
+        """Base premise: immediate Buzz ack so Lead sees ingest before long work.
+
+        Post this **first** on every consumed Lead/human message, then do the work
+        (still_working / Recorded / coach). Never leave the poster guessing silence.
+        """
+        snippet = _lead_snippet(lead_body)
+        quoted = f"`{snippet}`" if snippet else "your message"
+        handle = identity_handle or _HERMES_HANDLE
+        return await self.post_status(
+            room,
+            f"Got it — working on {quoted}.",
+            EventType.START,
+            {
+                "status": "received",
+                "ack": True,
+                "role": handle,
+                "source_message_id": source_message_id or "",
+            },
+            identity_handle=handle,
+        )
+
     async def post_human_next(
         self,
         room: str,
@@ -109,6 +138,37 @@ class HermesBuzzPoster:
                 event_type=event_type,
                 payload={"service": "hermes", "lane": "pm"},
             )
+        )
+
+    async def post_collab(
+        self,
+        room: str,
+        *,
+        body: str,
+        identity_handle: str,
+        status: str,
+        payload: Optional[dict[str, Any]] = None,
+        event_type: EventType = EventType.PROGRESS,
+        mention: str = "",
+    ) -> MessageRead:
+        """Army @-talk (CollabPost) — visible baton/claim/done chatter."""
+        text = (body or "").strip()
+        if mention and f"@{mention}" not in text:
+            text = f"@{mention} {text}".strip()
+        return await self._buzz.post_message(
+            room,
+            MessageCreate(
+                identity_handle=identity_handle,
+                body=text,
+                kind=MessageKind.EVENT,
+                event_type=event_type,
+                payload={
+                    **(payload or {}),
+                    "status": status,
+                    "collab": True,
+                    "role": identity_handle,
+                },
+            ),
         )
 
     def still_working_callback(
@@ -167,3 +227,11 @@ class HermesBuzzPoster:
                 logger.exception("PM progress heartbeat failed", hop=hop)
 
         return _on_progress
+
+
+def _lead_snippet(text: str, *, limit: int = 72) -> str:
+    """Single-line quote for ack posts (Buzz-light)."""
+    one = " ".join((text or "").split())
+    if len(one) <= limit:
+        return one
+    return one[: max(0, limit - 1)] + "…"

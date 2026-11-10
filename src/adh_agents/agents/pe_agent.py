@@ -9,6 +9,8 @@ from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.programmes.pe.review import PeReviewProgramme
 from src.adh_agents.programmes.pm.lead_tokens import extract_initiative
 from src.adh_agents.runtime.orchestrator import Orchestrator
+from src.adh_agents.runtime.presence import PresenceService
+from src.adh_agents.runtime.room_resolve import listen_rooms_for_tenants, resolve_tenant_for_room
 from src.adh_agents.runtime.work_models import AWAITING_AUTHORIZATION, AWAITING_JUDGMENT
 from src.adh_agents.settings import PeAgentSettings
 from src.business_services.buzz_service import BuzzService
@@ -35,9 +37,10 @@ class PEAgent(BaseHermesAgent):
         tenants: TenantRegistryService,
         orchestrator: Orchestrator,
         pe: PeReviewProgramme,
+        presence: PresenceService,
     ) -> None:
         settings = PeAgentSettings.get_instance()
-        super().__init__(buzz=buzz, batons=batons, settings=settings)
+        super().__init__(buzz=buzz, batons=batons, settings=settings, presence=presence)
         self._tenants = tenants
         self._orchestrator = orchestrator
         self._pe = pe
@@ -47,9 +50,15 @@ class PEAgent(BaseHermesAgent):
         await super().initialize()
         self._orchestrator.bind_role(self.role_id)
         self._orchestrator.set_programme_runner(self._pe)
-        rooms = [t.ops_room for t in self._tenants.active()]
+        for tenant in self._tenants.active():
+            await self.ensure_hub_member(tenant.ops_room)
+        rooms = await listen_rooms_for_tenants(self._buzz, self._tenants)
         await self.start_ops_listeners(rooms)
         await self._catch_up_pending_batons()
+        self.start_listen_refresh_loop(
+            lambda: listen_rooms_for_tenants(self._buzz, self._tenants),
+            interval_seconds=15.0,
+        )
         self.logger.info("PEAgent listening", rooms=rooms)
 
     async def _catch_up_pending_batons(self) -> None:
@@ -62,13 +71,14 @@ class PEAgent(BaseHermesAgent):
                     tenant=tenant.slug, to_role=self.role_id, baton_type=baton_type
                 )
                 for baton in pending:
+                    room = baton.ops_room or tenant.ops_room
                     if baton.type == "pe.pm_answers":
-                        await self._pe.handle_pm_answers(baton, room=tenant.ops_room)
+                        await self._pe.handle_pm_answers(baton, room=room)
                     else:
-                        await self._pe.handle_baton(baton, room=tenant.ops_room)
+                        await self._pe.handle_baton(baton, room=room)
 
     async def handle_ops_message(self, room: str, message: MessageRead) -> None:
-        tenant = self._tenants.by_ops_room(room)
+        tenant = await resolve_tenant_for_room(self._tenants, self._buzz, room)
         if tenant is None:
             return
         payload = message.payload or {}
@@ -92,14 +102,20 @@ class PEAgent(BaseHermesAgent):
             body = (message.body or "").strip()
             gate1 = _parse_gate1_command(body, tenant)
             if gate1 is not None:
+                await self.ack_received(
+                    room,
+                    lead_body=body,
+                    source_message_id=str(message.id) if message.id else None,
+                )
                 init, pr_url = gate1
                 if not pr_url:
                     pr_url = await self._lookup_pr_url(tenant.slug, init)
                 await self._pe.start_gate1(tenant, room, initiative=init, pr_url=pr_url)
                 return
-            if await self._try_gate1_fork(tenant, room, body):
+            if await self._try_gate1_fork(tenant, room, body, message=message):
                 return
             # U2: PE stays silent unless open human gate or explicit resume.
+            # Orchestrator acks when it consumes.
             lowered = body.lower()
             if "resume" in lowered:
                 await self._orchestrator.handle_lead_message(tenant, room, message)
@@ -114,7 +130,14 @@ class PEAgent(BaseHermesAgent):
             if open_gates:
                 await self._orchestrator.handle_lead_message(tenant, room, message)
 
-    async def _try_gate1_fork(self, tenant: TenantContext, room: str, body: str) -> bool:
+    async def _try_gate1_fork(
+        self,
+        tenant: TenantContext,
+        room: str,
+        body: str,
+        *,
+        message: MessageRead | None = None,
+    ) -> bool:
         """Lead escape: attest / need another round / park (happy path is agent settle)."""
         lowered = (body or "").strip().lower()
         if lowered.startswith("need another round"):
@@ -144,6 +167,11 @@ class PEAgent(BaseHermesAgent):
                     return False
             else:
                 return False
+        await self.ack_received(
+            room,
+            lead_body=body,
+            source_message_id=str(message.id) if message and message.id else None,
+        )
         await self._pe.after_judgment(tenant, room, session, token)
         return True
 

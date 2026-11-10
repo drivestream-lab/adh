@@ -32,9 +32,14 @@ class AgentSettings(BaseSettings):
         description="Redis baton key TTL",
     )
     work_ttl_seconds: int = Field(
-        default=172800,
+        default=604800,
         ge=60,
-        description="Redis agent work-session TTL (Lead gates; default 2d)",
+        description="Redis agent work-session TTL (Lead gates; default 7d)",
+    )
+    presence_ttl_seconds: int = Field(
+        default=120,
+        ge=30,
+        description="Redis presence heartbeat TTL while worker is listening",
     )
     network_retry_attempts: int = Field(
         default=3,
@@ -98,4 +103,25 @@ class KbAgentSettings(AgentSettings):
             "roles.yaml app that APPROVEs knowledge docs PRs before land "
             "(branch protection; no PE attest on knowledge lane)"
         ),
+    )
+
+
+class AdhAutonomySettings(BaseSettings):
+    """Process-wide autonomy mode (all role workers read the same env)."""
+
+    PREFIX: ClassVar[str] = "ADH"
+
+    autonomy_mode: str = Field(
+        default="human",
+        description="human | god — god plays brief.recommend through GateOpener",
+    )
+    god_allow_discard: bool = Field(
+        default=False,
+        description="When true, god may auto-play destructive discard local",
+    )
+    god_chain_cap: int = Field(
+        default=12,
+        ge=1,
+        le=40,
+        description="Max auto-takes per initiative in one god chain",
     )

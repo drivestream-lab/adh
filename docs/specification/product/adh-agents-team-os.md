@@ -2,16 +2,45 @@
 
 ## Intent
 
-ADH runs a **software-engineering team of agents**. Buzz is the talking floor. The pinned delivery catalogue (`workflow.yaml`) says what stage comes next. Agents are hired **incrementally** into the tenant ops room. **ADH is the product**; tenant lanes (e.g. RealWorld) are guinea pigs to pressure-test the OS.
+ADH is a **delivery harness**: it understands the pinned delivery workflow (`workflow.yaml`)
+and **orchestrates automation** across a hired agent army. Buzz is the talking floor
+(Cursor-like durable chat). Agents are hired **incrementally** into the tenant **hub**,
+then collaborate in **per-task rooms**.
+
+**Tasks are first-class.** Every bound work item is a durable Postgres row
+(`buzz_tasks`) with a **kind** (`init` | `bug` | `enhancement` | …) and a **state**
+(`bound` → `running` → `gated` → `done` / `halted` → `archived`). Resume and
+orchestration key off **task + catalogue + trajectory** — never by replaying the
+whole Buzz transcript. **ADH is the product**; tenant lanes (e.g. RealWorld) are
+guinea pigs to pressure-test the OS.
+
+## Storage (locked)
+
+| Store | Holds | Does **not** hold |
+|-------|--------|-------------------|
+| **Postgres (Buzz)** | Identities, hub + task rooms, members, messages, tasks, archive metadata, **`buzz_task_events` trajectory** | Ephemeral gate machines |
+| **Redis** | Live control plane: work sessions, batons, presence, short god-mode chain ledger | Chat history, archive, trajectory SSOT |
+| **Disk/git meta** | PRD, reports, OKF `knowledge/` heads | Buzz transcript |
+
+**Postgres is the durable product chat** (long retention; archive hides, delete is explicit).  
+**Redis is live OS only** (TTL OK). **Never force-fit chat into Redis.**
+
+| Redis key family | Default TTL |
+|------------------|-------------|
+| Work sessions (`adh:agent:work:…`) | **7d** (refresh on save) |
+| Batons | **1d** |
+| Presence / god-chain | short |
+
+Hermes/ledger Postgres DBs remain secondary (not Team OS task SSOT).
 
 ## Control plane (mandatory)
 
 ```text
-#tenant-ops Buzz
+#tenant-hub  (+ non-archived task rooms)
         │
         ▼
 ┌───────────────────────────────┐
-│  Orchestrator (runtime)       │  work store · ask-back · gates · resume · stop
+│  Orchestrator (runtime)       │  work store · ask-back · gates · GateOpener · resume · stop
 │  programme runner registry    │
 └───────────────┬───────────────┘
                 │
@@ -22,7 +51,55 @@ ADH runs a **software-engineering team of agents**. Buzz is the talking floor. T
 
 - Every role **worker embeds** this plane (role-scoped Redis work units).
 - Programmes **register**; they do not reimplement routing.
-- Agents are thin: listen, identity, batons, forge ACL.
+- Agents are thin: listen, identity, batons, forge ACL, CollabPost.
+- Workers subscribe to the **hub + all non-archived task rooms** for the tenant.
+
+## Rooms (hub + task)
+
+```text
+#{tenant}-ops          HUB — front desk (intake + announces only)
+#task-{TASK_ID}        TASK ROOM — war room for one INIT/bug/enhancement
+```
+
+### Mental model (do not shuttle)
+
+| | **Hub** `#{tenant}-ops` | **Task room** `#task-{TASK_ID}` |
+|--|-------------------------|----------------------------------|
+| Role | Inbox / arrivals board | Single work-item thread |
+| Lifetime | Always on | Born at bind; archive (or delete) when done |
+| Lead habit | Post **new** outlines / watch for “Opened task…” | **Live here** until archive coach |
+
+**Hub holds only:**
+- Ingress: Lead outline, GH bind announce, hire/presence stalls
+- One-line lifecycle: task opened / archived / deleted
+
+**Task room holds everything after bind for that work:**
+- Authoring (think / quality / promote)
+- Meta-PM (validate / update / post-PM / impact-map / draft-PR authorize)
+- Army CollabPosts + PE↔PM rally + merge coach + KB enrich/land
+- Gate coaches and Lead/god reply tokens
+- Done coach: `archive task` / `keep open` (`delete task` rare)
+
+**Code rule:** baton `ops_room` = **collaboration room** = task room slug once `buzz_tasks` exists — **not** the hub. Hub must not accumulate still-working / baton spam for a bound INIT.
+
+| Kind | Ingress | Task id |
+|------|---------|---------|
+| `init` | Buzz outline on hub | `INIT-…` |
+| `bug` / `enhancement` | GitHub issue/board (opt-in label; bind API + poll stub) | `BUG-…` / `ENH-…` |
+
+Canonical task row lives in **Postgres** (`buzz_tasks`). Unique `(tenant, source_ref)` for GH. No Redis Task SSOT.
+
+| Task state | Meaning |
+|------------|---------|
+| `bound` | Task + room created; not yet advancing catalogue |
+| `running` | Army/catalogue hops in progress |
+| `gated` | Soft gate open (Lead token or god recommend) |
+| `done` | Delivery complete; archive coach pending |
+| `halted` | God/mode halt or fail-closed stop |
+| `archived` | Lead archived (history kept) |
+
+Redis work sessions / batons are the **live projection** of that task — they must not
+become a second task SSOT.
 
 ## Roles (incremental roster)
 
@@ -30,7 +107,7 @@ ADH runs a **software-engineering team of agents**. Buzz is the talking floor. T
 |------|---------|------|----------------|
 | PM | `adh.pm` | Requirements → draft PRD PR; product answers; PRD merge | Verify first on new OS |
 | Read | `adh.read` | Walk one repo; Buzz rollup | Before / with PE fan-out |
-| PE | `adh.pe` | Gate‑1: fan-out reads, ≤10 Q / ≤4 rounds, attest, ping PM | After PM verify; consume `pe.review` |
+| PE | `adh.pe` | Product review: fan-out reads, ≤10 Q / ≤2 agent rounds, attest, ping PM | After PM verify; consume `pe.review` |
 | KB | `adh.kb` | Patch OKF `knowledge/` heads | After merge enrich |
 | Dev / QA / IaC / SRE / Obs | later | … | later |
 
@@ -46,35 +123,40 @@ make adh-kb    → adh_kb_worker
 ## Collaboration loop
 
 ```text
-Buzz message or baton
-  → role worker (role-scoped Orchestrator filter)
-  → claim baton if needed (Redis idempotency)
+Ingress (outline | GH bind) → Postgres task + task room
+  → baton claim (Redis NX) + CollabPost on Buzz (@role)
   → programme runs with tools
-  → Buzz rollup (+ forge under ACL)
-  → catalogue / next gate continues
+  → GateOpener (human wait | god plays recommend)
+  → trajectory row in buzz_task_events
+  → land / sync / purge temps (disk) / archive coach
 ```
 
-### Buzz UX (ops — no overload)
+Batons remain handoff **SSOT**. Buzz CollabPosts are the **visible** army talk. Specialists do not call each other in-process as SSOT.
 
-Ops is for **human input and next steps**, not evidence dumps.  
-**Helpful army:** the role that did the work posts in first person — what we did, recommend + evidence, what the human role must read **outside ADH**, exact Buzz reply, what we will do next. Delivery language only (product PR, knowledge docs PR, spec PR, …) — not internal gate/code names.
+### Buzz UX
 
-| Field | Rule |
-|-------|------|
-| **I did** | First person; delivery language (e.g. “I opened a product PR”) |
-| **Recommend** | One recommend + short why |
-| **Evidence** | Brief path and/or PR URL (`artefact_refs`) |
-| **Outside ADH** | What to read in Cursor/IDE/PR before replying |
-| **On Buzz** | Exact tokens + what the agent will execute |
-| **Never** | Full walks, full diffs, raw forge JSON, “merge it yourself on GitHub” as primary Next |
+**Ingest ack (base premise):** every consumed Lead/human message gets an immediate  
+`Got it — working on \`…\`.` (`payload.status=received`) **before** long work  
+(`still_working` / forge / Cursor). Lead must never wonder if the bot saw the post.  
+**Helpful army** (working role → Lead gate): I did / recommend / evidence / outside ADH / exact tokens.  
+**CollabPost** (agent → agent): short `@adh.pe`-style lines on baton emit/claim/done.  
+**UI:** open on latest; load **last 20** messages; scroll-up paginates older from Postgres; SSE appends with stick-to-bottom. Desktop (`apps/buzz-desktop`) only — no dual web UI.
 
-Heavy evidence lives in artefacts / PRs / OKF `knowledge/` heads. Progress ticks while working; one short DONE rollup. Humans review outside ADH; they decide on Buzz; agents land (including merge + refresh local develop).
+Heavy evidence lives in artefacts / PRs / OKF heads. Temp papers under `prd/reports/` are ephemeral (**purge = delete**). Buzz **archive ≠ purge**: archive hides the task room; messages remain until Lead **delete task**.
 
-### Clarification rally (U6 — Hermes value)
+### Clarification rally (U6)
 
-After the product draft PR opens, **PE and PM run an agent↔agent rally** (default ≤2 rounds): PE questions on the PR + brief → PM answers on the PR + answers artefact → PE settle or one follow-up → PE attests.  
-**No mid-rally human ack** (`ack_pe` is dead). Human PM enters **after** clarifications settle — reviews briefs outside ADH, then posts `merge the product PR` / `park`.  
-OKF `knowledge/` heads feed PE/PM prompts so Hermes compounds as features land.
+PE↔PM agent rally (≤2 rounds); no mid-rally human ack. Human (or god mode) only after settle — merge / park. OKF heads feed prompts.
+
+### God mode + trajectory
+
+| Mode | Gate close |
+|------|------------|
+| `human` (default) | Lead Buzz token |
+| `god` (`ADH_AUTONOMY_MODE=god`) | Hermes `brief.recommend` ∈ reply_tokens via GateOpener; Lead ignored for open gates |
+
+Halt tokens / bad recommend → `god_mode_halt` (no human rescue wait). `delete task` / `discard local` never auto in god without an explicit allow flag.  
+**Trajectory:** append-only `buzz_task_events` in Postgres (gate_open / god_taken / god_halt / baton / land / archive). **No trajectory artefacts in meta git.**
 
 ## Graphs (do not conflate)
 
@@ -91,23 +173,29 @@ See [`../references/adh-kb-heads.md`](../references/adh-kb-heads.md).
 
 ## Non-negotiables
 
-1. Buzz = human trigger + agent collab surface (one ops room per tenant).
-2. Specialists do not call each other in-process as SSOT — batons do.
-3. Parallel sessions, TTL, ask-back, resume, stall-keep, retry are **OS** attributes.
+1. Buzz = durable hired-team messaging floor (hub + task rooms); Postgres SSOT for chat.
+2. Batons = agent handoff SSOT (Redis); CollabPosts make hops visible on Buzz.
+3. Redis = live control plane only — never chat/archive/trajectory SSOT.
 4. Missing agent on a catalogue node → fail closed on Buzz.
 5. Forge scoped per role.
-6. **No legacy / dead code** carried beside the new tree.
-7. **Buzz light** — BLUF + artefact pointer + single next step; no information overload.
-8. **No tenant/INIT/repo hardcoding** in programmes — resolve via tenant context + baton payload (RealWorld is guinea pig only).
-9. **Agentic + conversational** — LLM/understand maps Lead chat to catalogue outcomes; no regex/frozenset delivery SSOT; soft gates always wait for Lead; LLM-down → ask-back.
-10. **Temp papers are ephemeral** — working artefacts under `prd/reports/` (think/briefs/questions/walks) are never SSOT. **Purge = delete** (never archive). Lifecycle **events** (promote done, post-pm done, product-review attested, PRD merged, KB enrich done, lane abort) clear families via one shared matrix — gates are callers, not private purge strategies.
-11. **Helpful army on Buzz** — working role coaches via `BaseHermesAgent.post_human_next`: did work → recommend + evidence → human role + outside-ADH reading → exact Buzz token → agent executes (authorize ⇒ land + sync). One open human gate per INIT.
-12. **Agent↔agent clarification, human after briefs** — PE↔PM capped rally prepares the product PR; human judges merge (not mid-rally paperwork). KB heads are prompt context for the next run.
+6. **No legacy / dead code** / dual paths beside the new tree.
+7. **Buzz light** — coach + CollabPost + pointers; no evidence dumps.
+8. **No tenant/INIT/repo hardcoding** in programmes — tenant context + baton/task payload (RealWorld = guinea pig).
+9. **Agentic + conversational** — understand→catalogue; soft gates wait in human mode; god mode plays recommend only.
+10. Temp papers ephemeral (delete). Buzz archive retains history; delete is Lead-explicit.
+11. Helpful army + GateOpener for all human-shaped gates.
+12. Agent↔agent clarification; human/god after briefs settle.
+13. Trajectory in `buzz_task_events` only — never meta repo files for autopilot journals.
+14. **Ingest ack first** — on every consumed Lead message, post `Got it — working on …` before long hops; silence after a human post is a bug.
+15. **Delivery harness** — maintain `buzz_tasks` **kind + state**; orchestrate from workflow + task SSOT + trajectory, not chat archaeology.
+16. **Trajectory** — SSOT `buzz_task_events`; **Buzz-light mirror on `#{tenant}-ops`** (pointers only). God mode: forward-only (no rewind).
+17. **Ingress** — outline → `init` only; `bug`/`enhancement` → GitHub ticket only.
+18. **Hub → task** — guarded desktop auto-switch when Lead is on hub; never steal focus from another task room.
 
 ## Implementation
 
 **Work tracker (follow this):** [`../plans/adh-agents-implementation-plan.md`](../plans/adh-agents-implementation-plan.md)  
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md) · **As-built:** [`../as-built/implementation-status.md`](../as-built/implementation-status.md)
 
-Retired framing: “Hermes enabler + responsibility agents” **phase lists** that assumed a Hermes facade router. Enabler = `BaseHermesAgent`; control plane = Orchestrator in `adh_agents/runtime`.  
-**Still binding from that north star:** recommend + artefact, human conversational gates, Buzz light, ports over hardcoding — see plan D3–D5 locks.
+Enabler = `BaseHermesAgent`; control plane = Orchestrator in `adh_agents/runtime`.  
+**Next single PR:** Floor wave F1–F9 (pagination, task rooms, CollabPost, GateOpener/god, GH bind stub, trajectory) — see plan.

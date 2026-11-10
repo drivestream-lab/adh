@@ -24,6 +24,8 @@
 | U4 — KB authorize → agent land | ✅ open draft → land gate → merge+sync+purge; ACL allows KB land |
 | U5 — Zombie draft hygiene + unit proof | ✅ refuse superseding draft after merge; unit tests green (RealWorld guinea pig after U6) |
 | U6 — Agent↔agent PE↔PM rally | ✅ PM auto-answers; PE settle≤2; agent attest; human merge coach only; `ack_pe` gone; OKF prompt context |
+| KB land approve-before-merge | ✅ PR #24 — reviewer APPROVE for branch protection; stall reopens Buzz gate |
+| F1–F9 Team floor (single PR) | 🟨 T1–T4 polish landed (traj hub mirror, roster API, desktop guarded switch + listening strip, F.15–F.18). **Next: god verify** (`ADH_AUTONOMY_MODE=god`) |
 
 ## Landed (0b)
 

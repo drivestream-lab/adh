@@ -51,6 +51,17 @@ class _FakePoster:
     ) -> None:
         self.posts.append(body)
 
+    async def ack_received(
+        self,
+        room: str,
+        *,
+        lead_body: str,
+        identity_handle: str | None = None,
+        source_message_id: str | None = None,
+    ) -> None:
+        del room, identity_handle, source_message_id
+        self.posts.append(f"Got it — working on `{lead_body.strip()}`.")
+
 
 class _FakeUnderstand:
     def extract_initiative(self, text: str, init_prefix: str = "") -> str | None:
