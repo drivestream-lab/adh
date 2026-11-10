@@ -224,12 +224,13 @@ class PmPeAnswersProgramme(BaseBusinessService):
         await self._poster.post_status(
             room,
             (
-                f"baton `pe.pm_answers` → `adh.pe` (init={initiative}; "
+                f"@{baton.to_role} baton `pe.pm_answers` (init={initiative}; "
                 f"correlation={stored.correlation_id})"
             ),
             EventType.PROGRESS,
             {
                 "status": "baton_emitted",
+                "collab": True,
                 "baton_type": "pe.pm_answers",
                 "baton_id": stored.id,
                 "idempotency_key": stored.idempotency_key,

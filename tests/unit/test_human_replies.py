@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from src.adh_agents.collaboration.human_replies import (
+    ARCHIVE_TASK,
+    DELETE_TASK,
+    KEEP_OPEN,
     MERGE_PRODUCT_PR,
     PARK,
     merge_gate_tokens,
@@ -30,3 +33,10 @@ def test_match_reply_token_uses_aliases() -> None:
 
 def test_strip_legacy_ack() -> None:
     assert "ack_pe" not in strip_legacy_ack(["ack_pe", "go ahead"])
+
+
+def test_archive_task_aliases() -> None:
+    allowed = [ARCHIVE_TASK, DELETE_TASK, KEEP_OPEN]
+    assert normalize_reply("archive", allowed) == ARCHIVE_TASK
+    assert normalize_reply("delete task", allowed) == DELETE_TASK
+    assert normalize_reply("keep", allowed) == KEEP_OPEN

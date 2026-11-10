@@ -38,14 +38,19 @@ from src.adh_agents.collaboration.temp_papers import (
     buzz_purge_notice,
     execute_purge,
 )
+from src.adh_agents.runtime.autonomy import AutonomyPolicy
+from src.adh_agents.runtime.gate_opener import CoachSpec, GateOpener
 from src.adh_agents.runtime.work_store import (
     UNBOUND_WORK_ID,
     AgentWorkStore,
 )
 from src.adh_agents.surface.buzz_poster import HermesBuzzPoster
+from src.business_services.buzz_service import BuzzService
 from src.configs.hermes_settings import HermesSettings
+from src.adh_agents.programmes.pm.validation_report import impact_map_path
 from src.infra_services.pm_workspace_service import (
     PmWorkspaceService,
+    hermes_post_pm_brief_path,
     hermes_promote_brief_path,
     next_free_think_runs,
     next_programme_init,
@@ -53,13 +58,24 @@ from src.infra_services.pm_workspace_service import (
     quality_path,
     think_path,
 )
-from src.models.buzz_models import EventType, MessageKind, MessageRead
+from src.models.buzz_models import (
+    EventType,
+    MessageKind,
+    MessageRead,
+    RoomMemberCreate,
+    TaskCreate,
+    TaskKind,
+    TaskSource,
+    TaskState,
+)
 from src.adh_agents.runtime.work_models import (
     AWAITING_CLARIFY,
     AWAITING_JUDGMENT,
     PROGRAMME_AUTHORING,
+    PROGRAMME_META_PM,
     AgentWorkSession,
 )
+from src.adh_agents.programmes.pm.meta_pm import MetaPmProgrammeService
 from src.models.tenant_models import TenantContext
 
 _PROGRAMME = PROGRAMME_AUTHORING
@@ -83,6 +99,10 @@ class AuthoringProgrammeService(BaseBusinessService):
         briefs: HermesBriefService,
         poster: HermesBuzzPoster,
         workspace: PmWorkspaceService,
+        buzz: BuzzService,
+        gates: GateOpener,
+        autonomy: AutonomyPolicy,
+        meta_pm: MetaPmProgrammeService,
     ) -> None:
         super().__init__()
         self._store = store
@@ -90,6 +110,10 @@ class AuthoringProgrammeService(BaseBusinessService):
         self._briefs = briefs
         self._poster = poster
         self._workspace = workspace
+        self._buzz = buzz
+        self._gates = gates
+        self._autonomy = autonomy
+        self._meta_pm = meta_pm
         self._settings = HermesSettings.get_instance()
         self._work_tasks: set[asyncio.Task[None]] = set()
 
@@ -117,19 +141,85 @@ class AuthoringProgrammeService(BaseBusinessService):
         if not is_numbered_init(resolved, tenant.init_prefix):
             await self._ask_for_init(tenant, room, outline, fingerprint, source_id)
             return
+        task_room = await self._open_task_room(
+            tenant, hub_room=room, initiative=resolved, outline=outline
+        )
         session = AgentWorkSession(
             role_id=self.role_id,
             tenant_slug=tenant.slug,
-            room=room,
+            room=task_room,
             initiative=resolved,
             programme=_PROGRAMME,
             stage="prd-think",
             slots={_SLOT_OUTLINE: outline, "fingerprint": fingerprint, "source_id": source_id},
         )
         await self._store.save(session)
-        task = asyncio.create_task(self._run_authoring(tenant, room, session, source_message_id))
+        task = asyncio.create_task(
+            self._run_authoring(tenant, task_room, session, source_message_id)
+        )
         self._work_tasks.add(task)
         task.add_done_callback(self._work_tasks.discard)
+
+    async def _open_task_room(
+        self,
+        tenant: TenantContext,
+        *,
+        hub_room: str,
+        initiative: str,
+        outline: str,
+    ) -> str:
+        """Bind INIT to durable PG task + task room; announce on hub.
+
+        F.18: Buzz outline ingress is ``init`` only — bug/enhancement are GH-only.
+        """
+        title = (outline.strip().splitlines() or [initiative])[0][:512]
+        task = await self._buzz.create_task(
+            TaskCreate(
+                tenant_slug=tenant.slug,
+                kind=TaskKind.INIT,  # outline → init only (never bug/enhancement)
+                task_id=initiative,
+                title=title or initiative,
+                source=TaskSource.BUZZ,
+                source_ref=f"buzz:outline:{initiative}",
+                hub_room_slug=tenant.ops_room,
+            )
+        )
+        for handle in ("adh.pm", "adh.pe", "adh.read", "adh.kb", "nikd10x"):
+            try:
+                await self._buzz.ensure_member(
+                    RoomMemberCreate(room_slug=task.task_room_slug, identity_handle=handle)
+                )
+            except Exception:
+                self.logger.exception(
+                    "task room member ensure failed",
+                    room=task.task_room_slug,
+                    handle=handle,
+                )
+        await self._poster.post_status(
+            hub_room,
+            (
+                f"Opened task `{task.task_id}` ({task.kind.value}) in "
+                f"`#{task.task_room_slug}` — army talk continues there."
+            ),
+            EventType.START,
+            {
+                "status": "task_opened",
+                "task_id": task.task_id,
+                "task_kind": task.kind.value,
+                "task_room": task.task_room_slug,
+                "hub_room_slug": tenant.ops_room,
+            },
+        )
+        # Delivery harness: bound task is now running the catalogue path.
+        try:
+            await self._buzz.set_task_state(
+                tenant.slug, task.task_id, TaskState.RUNNING, role_id=self.role_id
+            )
+        except Exception:
+            self.logger.exception(
+                "task state → running failed", task_id=task.task_id, tenant=tenant.slug
+            )
+        return task.task_room_slug
 
     async def handle_lead_message(
         self, tenant: TenantContext, room: str, message: MessageRead
@@ -151,9 +241,21 @@ class AuthoringProgrammeService(BaseBusinessService):
         if not authoring:
             # Promote recovery without session: C-label after prior recommend slot
             if parse_promote_pick(body) is not None:
+                await self._poster.ack_received(
+                    room,
+                    lead_body=body,
+                    identity_handle=self.role_id,
+                    source_message_id=str(message.id) if message.id else None,
+                )
                 return await self._promote_without_session(tenant, room, body)
             return False
         if body.lower() == "stop":
+            await self._poster.ack_received(
+                room,
+                lead_body=body,
+                identity_handle=self.role_id,
+                source_message_id=str(message.id) if message.id else None,
+            )
             if len(authoring) == 1:
                 init = authoring[0].initiative or UNBOUND_WORK_ID
                 await self._store.clear(tenant.slug, self.role_id, init)
@@ -176,6 +278,12 @@ class AuthoringProgrammeService(BaseBusinessService):
             )
             return True
         if body.lower() == "stop all":
+            await self._poster.ack_received(
+                room,
+                lead_body=body,
+                identity_handle=self.role_id,
+                source_message_id=str(message.id) if message.id else None,
+            )
             for session in authoring:
                 await self._store.clear(
                     tenant.slug, self.role_id, session.initiative or UNBOUND_WORK_ID
@@ -199,6 +307,12 @@ class AuthoringProgrammeService(BaseBusinessService):
             and match_reply_token(body, s.open_brief.reply_tokens) is not None
         ]
         if len(token_hits) > 1:
+            await self._poster.ack_received(
+                room,
+                lead_body=body,
+                identity_handle=self.role_id,
+                source_message_id=str(message.id) if message.id else None,
+            )
             options = [s.initiative or "?" for s in token_hits]
             await self._poster.post_status(
                 room,
@@ -216,6 +330,12 @@ class AuthoringProgrammeService(BaseBusinessService):
         if session is None and len(authoring) == 1:
             session = authoring[0]
         if session is None:
+            await self._poster.ack_received(
+                room,
+                lead_body=body,
+                identity_handle=self.role_id,
+                source_message_id=str(message.id) if message.id else None,
+            )
             options = [s.initiative or "unbound" for s in authoring]
             await self._poster.post_status(
                 room,
@@ -227,6 +347,13 @@ class AuthoringProgrammeService(BaseBusinessService):
                 {"status": "need_init_pick", "initiatives": options},
             )
             return True
+        # Base premise: ack ingest before promote / clarify / long hops.
+        await self._poster.ack_received(
+            room,
+            lead_body=body,
+            identity_handle=self.role_id,
+            source_message_id=str(message.id) if message.id else None,
+        )
         # Promote gate: open brief, or recover after collaborator ate the judgment.
         if session.slots.get(_SLOT_PROMOTE_PATHS) and (
             session.stage == "authoring-promote"
@@ -250,7 +377,7 @@ class AuthoringProgrammeService(BaseBusinessService):
                     initiative=picked,
                 )
                 return True
-        return True  # chatter while authoring open
+        return True  # chatter while authoring open (already acked)
 
     async def _ask_for_init(
         self,
@@ -462,7 +589,23 @@ class AuthoringProgrammeService(BaseBusinessService):
             {f"C{_run_from_path(p)}": p for p in think_paths}
         )
         session.stage = "authoring-promote"
-        session.open_brief = self._briefs.build_brief(
+        from src.adh_agents.collaboration.gate_coach import TokenAction
+
+        promote_tokens = [
+            TokenAction(
+                lab,
+                f"promote `{think_paths[i]}` → `prd/{initiative}.md` and continue the lane",
+            )
+            for i, lab in enumerate(labels)
+        ]
+        promote_tokens.extend(
+            [
+                TokenAction("skip", "skip promote for now"),
+                TokenAction("none", "decline all C-labels"),
+                TokenAction("iterate", "run another think/quality pass"),
+            ]
+        )
+        brief = self._briefs.build_brief(
             purpose="authoring-promote",
             node_id="authoring-promote",
             question=f"Which product bet should become the PRD for {initiative}?",
@@ -480,44 +623,31 @@ class AuthoringProgrammeService(BaseBusinessService):
             reply_tokens=reply_tokens,
             artefact_path=brief_path,
         )
-        session.awaiting = AWAITING_JUDGMENT
-        await self._store.save(session)
-        from src.adh_agents.collaboration.gate_coach import TokenAction
-
-        promote_tokens = [
-            TokenAction(
-                lab,
-                f"promote `{think_paths[i]}` → `prd/{initiative}.md` and continue the lane",
-            )
-            for i, lab in enumerate(labels)
-        ]
-        promote_tokens.extend(
-            [
-                TokenAction("skip", "skip promote for now"),
-                TokenAction("none", "decline all C-labels"),
-                TokenAction("iterate", "run another think/quality pass"),
-            ]
-        )
-        await self._poster.post_human_next(
-            room,
-            i_did=f"Finished think/quality for **{initiative}** and wrote the promote brief.",
-            recommend=judgment.recommend or (labels[0] if labels else "iterate"),
-            recommend_why=judgment.bluf,
-            evidence=f"`{brief_path}`",
-            outside_adh=(
-                f"Read the promote brief (`{brief_path}`) and the C-label think files "
-                "in Cursor before picking."
+        god_token = await self._gates.open(
+            session,
+            brief=brief,
+            coach=CoachSpec(
+                i_did=f"Finished think/quality for **{initiative}** and wrote the promote brief.",
+                recommend=judgment.recommend or (labels[0] if labels else "iterate"),
+                recommend_why=judgment.bluf,
+                evidence=f"`{brief_path}`",
+                outside_adh=(
+                    f"Read the promote brief (`{brief_path}`) and the C-label think files "
+                    "in Cursor before picking."
+                ),
+                tokens=promote_tokens,
+                hop="authoring-promote",
+                example=judgment.example,
+                payload={
+                    "status": "need_promote",
+                    "initiative": initiative,
+                    "choices": labels,
+                    "purpose": "authoring-promote",
+                },
             ),
-            tokens=promote_tokens,
-            hop="authoring-promote",
-            example=judgment.example,
-            payload={
-                "status": "need_promote",
-                "initiative": initiative,
-                "choices": labels,
-                "purpose": "authoring-promote",
-            },
         )
+        if god_token:
+            await self._on_promote_reply(tenant, room, session, god_token)
 
     async def _on_promote_reply(
         self, tenant: TenantContext, room: str, session: AgentWorkSession, body: str
@@ -563,6 +693,12 @@ class AuthoringProgrammeService(BaseBusinessService):
             return True
         self._workspace.write_local(tenant, dest, contents)
         await self._store.clear(tenant.slug, self.role_id, initiative)
+        if clean:
+            await self._purge_scratch(tenant, room, initiative)
+        # God: Hermes already judged promote — chain validate without Lead `post-pm`.
+        if self._autonomy.is_god:
+            await self._god_chain_post_pm(tenant, room, initiative, dest)
+            return True
         await self._poster.post_status(
             room,
             self._poster.copy(
@@ -578,8 +714,101 @@ class AuthoringProgrammeService(BaseBusinessService):
                 "programme_slug": tenant.slug,
             },
         )
-        if clean:
-            await self._purge_scratch(tenant, room, initiative)
+        return True
+
+    async def _god_chain_post_pm(
+        self,
+        tenant: TenantContext,
+        room: str,
+        initiative: str,
+        dest: str,
+    ) -> None:
+        """After promote in god mode: start meta-pm; Hermes recommend gates auto-play."""
+        try:
+            await self._buzz.set_task_state(
+                tenant.slug, initiative, TaskState.RUNNING, role_id=self.role_id
+            )
+        except Exception:
+            self.logger.exception(
+                "god chain task state → running failed",
+                task_id=initiative,
+                tenant=tenant.slug,
+            )
+        await self._poster.post_status(
+            room,
+            (
+                f"Promoted `{dest}` for {initiative}. "
+                "**God chaining** post-pm / validate — Hermes recommend tokens auto-play."
+            ),
+            EventType.PROGRESS,
+            {
+                "status": "god_chain_post_pm",
+                "hop": "promote",
+                "initiative": initiative,
+                "path": dest,
+                "programme_slug": tenant.slug,
+            },
+            identity_handle="adh.system",
+        )
+        await self._autonomy.begin_chain(tenant=tenant.slug, initiative=initiative)
+        meta = AgentWorkSession(
+            tenant_slug=tenant.slug,
+            role_id=self.role_id,
+            room=room,
+            programme=PROGRAMME_META_PM,
+        )
+        meta.bind_initiative(initiative)
+        await self._meta_pm.start_programme(tenant, room, meta)
+
+    async def god_resume_awaiting_post_pm(
+        self, tenant: TenantContext, room: str, initiative: str
+    ) -> bool:
+        """Boot helper for the promote→post-pm seam only (no Lead `post-pm` in god).
+
+        Fires when PRD exists but meta-pm has not started (no post-pm brief / Impact-Map)
+        and there is no live open PM gate. Later stages are owned by GateOpener + catch-up.
+        """
+        if not self._autonomy.is_god:
+            return False
+        init = (initiative or "").strip().upper()
+        if not init:
+            return False
+        live = await self._store.load(tenant.slug, self.role_id, init)
+        if live is not None:
+            awaiting = (live.awaiting or "").strip()
+            if awaiting not in ("", "none"):
+                return False
+            if (live.programme or "") == PROGRAMME_META_PM:
+                return False
+        prd = (self._workspace.read_local(tenant, prd_path(init)) or "").strip()
+        if not prd:
+            return False
+        if (self._workspace.read_local(tenant, hermes_post_pm_brief_path(init)) or "").strip():
+            return False
+        if (self._workspace.read_local(tenant, impact_map_path(init)) or "").strip():
+            return False
+        try:
+            await self._buzz.set_task_state(
+                tenant.slug, init, TaskState.RUNNING, role_id=self.role_id
+            )
+        except Exception:
+            self.logger.exception(
+                "god resume task state → running failed",
+                task_id=init,
+                tenant=tenant.slug,
+            )
+        await self._poster.post_status(
+            room,
+            (
+                f"**God resume** `{init}` — chaining post-pm / validate "
+                "(Hermes recommend tokens auto-play; no Lead gate)."
+            ),
+            EventType.PROGRESS,
+            {"status": "god_resume_post_pm", "initiative": init},
+            identity_handle="adh.system",
+        )
+        await self._autonomy.begin_chain(tenant=tenant.slug, initiative=init)
+        await self._meta_pm.resume_programme(tenant, room, init)
         return True
 
     def _progress_callback(

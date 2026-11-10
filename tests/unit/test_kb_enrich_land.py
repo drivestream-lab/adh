@@ -55,14 +55,44 @@ class _FakePoster:
         )
 
 
+class _FakeGateOpener:
+    """Minimal GateOpener stand-in for unit tests (human path)."""
+
+    def __init__(self, poster: _FakePoster, store: Any) -> None:
+        self._poster = poster
+        self._store = store
+
+    async def open(self, session: AgentWorkSession, *, brief, coach, awaiting=AWAITING_JUDGMENT):
+        session.open_brief = brief
+        session.awaiting = awaiting
+        await self._store.save(session)
+        await self._poster.post_human_next(
+            session.room,
+            i_did=coach.i_did,
+            recommend=coach.recommend,
+            outside_adh=coach.outside_adh,
+            tokens=list(coach.tokens),
+            recommend_why=coach.recommend_why,
+            evidence=coach.evidence,
+            hop=coach.hop,
+            example=coach.example,
+            event_type=coach.event_type,
+            payload=coach.payload,
+            identity_handle=coach.identity_handle,
+        )
+        return None
+
+
 @pytest.mark.asyncio
 async def test_open_land_gate_coach_forbids_forge_click() -> None:
     poster = _FakePoster()
+    store = AsyncMock()
     prog = object.__new__(KbEnrichProgramme)
     prog.role_id = "adh.kb"
     prog._poster = poster  # type: ignore[attr-defined]
     prog._briefs = HermesBriefService()  # type: ignore[attr-defined]
-    prog._store = AsyncMock()  # type: ignore[attr-defined]
+    prog._store = store  # type: ignore[attr-defined]
+    prog._gates = _FakeGateOpener(poster, store)  # type: ignore[attr-defined]
 
     tenant = TenantContext(
         slug="demo",
@@ -123,11 +153,13 @@ async def test_land_calls_land_pull_request() -> None:
     }
     workspace.purge_local_paths.return_value = []
 
+    store = AsyncMock()
     prog = object.__new__(KbEnrichProgramme)
     prog.role_id = "adh.kb"
     prog._poster = poster  # type: ignore[attr-defined]
     prog._briefs = HermesBriefService()  # type: ignore[attr-defined]
-    prog._store = AsyncMock()  # type: ignore[attr-defined]
+    prog._store = store  # type: ignore[attr-defined]
+    prog._gates = _FakeGateOpener(poster, store)  # type: ignore[attr-defined]
     prog._forge = forge  # type: ignore[attr-defined]
     prog._workspace = workspace  # type: ignore[attr-defined]
     prog._settings = MagicMock(reviewer_app_slug="adh-reviewer")  # type: ignore[attr-defined]
@@ -176,11 +208,13 @@ async def test_land_failure_reopens_buzz_gate() -> None:
     workspace.pm_app_role.return_value = MagicMock(name="pm")
     workspace.app_role.return_value = MagicMock(name="reviewer")
 
+    store = AsyncMock()
     prog = object.__new__(KbEnrichProgramme)
     prog.role_id = "adh.kb"
     prog._poster = poster  # type: ignore[attr-defined]
     prog._briefs = HermesBriefService()  # type: ignore[attr-defined]
-    prog._store = AsyncMock()  # type: ignore[attr-defined]
+    prog._store = store  # type: ignore[attr-defined]
+    prog._gates = _FakeGateOpener(poster, store)  # type: ignore[attr-defined]
     prog._forge = forge  # type: ignore[attr-defined]
     prog._workspace = workspace  # type: ignore[attr-defined]
     prog._settings = MagicMock(reviewer_app_slug="adh-reviewer")  # type: ignore[attr-defined]
@@ -209,7 +243,7 @@ async def test_land_failure_reopens_buzz_gate() -> None:
     await prog._land_enrich_pr(tenant, "demo-ops", session)  # type: ignore[attr-defined]
     assert session.awaiting == AWAITING_JUDGMENT
     assert session.open_brief is not None
-    prog._store.save.assert_awaited()  # type: ignore[attr-defined]
+    store.save.assert_awaited()
     body, et, payload = poster.posts[-1]
     assert et == EventType.STALL
     assert payload.get("status") == "kb_enrich_land_failed"

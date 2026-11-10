@@ -108,14 +108,17 @@ class Orchestrator(BaseBusinessService):
         unbound = await self._store.load_unbound(tenant.slug, self.role_id)
 
         if body.lower() == _STOP_ALL:
+            await self._ack_ingest(room, body, message)
             await self._store.clear(tenant.slug, self.role_id)
             await self._say(room, "Stopped. All sessions cleared.", EventType.DONE)
             return True
         if body.lower() == _STOP:
+            await self._ack_ingest(room, body, message)
             return await self._on_stop(tenant, room, active)
 
         # Resume-pick / post-pm clarify on unbound session.
         if unbound is not None and unbound.awaiting == AWAITING_CLARIFY:
+            await self._ack_ingest(room, body, message)
             if unbound.slots.get(_RESUME_CANDIDATES):
                 return await self._on_resume_pick(tenant, room, unbound, body)
             return await self._on_clarify(tenant, room, unbound, body)
@@ -131,8 +134,10 @@ class Orchestrator(BaseBusinessService):
         ]
         gate_hits = self._sessions_matching_gate(meta_sessions, body)
         if len(gate_hits) == 1:
+            await self._ack_ingest(room, body, message)
             return await self._dispatch_gate(tenant, room, gate_hits[0], body)
         if len(gate_hits) > 1:
+            await self._ack_ingest(room, body, message)
             return await self._ask_init_pick(
                 tenant,
                 room,
@@ -142,8 +147,10 @@ class Orchestrator(BaseBusinessService):
             )
         if len(open_gates) == 1 and not gate_hits:
             # Unmatched reply on the only open gate — ask back (do not clear).
+            await self._ack_ingest(room, body, message)
             return await self._dispatch_gate(tenant, room, open_gates[0], body)
         if len(open_gates) > 1 and not gate_hits:
+            await self._ack_ingest(room, body, message)
             return await self._ask_init_pick(
                 tenant,
                 room,
@@ -154,13 +161,16 @@ class Orchestrator(BaseBusinessService):
 
         # Recovery / orphan gate / resume — never silent-drop.
         if _mentions_resume(body) or _looks_like_bare_gate(body):
+            await self._ack_ingest(room, body, message)
             return await self._recover(tenant, room, body, meta_sessions)
 
         # Per-session clarify (bound INIT, pending catalogue node).
         clarifying = [s for s in meta_sessions if s.awaiting == AWAITING_CLARIFY]
         if len(clarifying) == 1:
+            await self._ack_ingest(room, body, message)
             return await self._on_clarify(tenant, room, clarifying[0], body)
         if len(clarifying) > 1:
+            await self._ack_ingest(room, body, message)
             return await self._ask_init_pick(
                 tenant,
                 room,
@@ -182,7 +192,28 @@ class Orchestrator(BaseBusinessService):
 
         # Fresh catalogue / post-pm intent.
         focus = self._focus_session(meta_sessions, room, tenant.slug)
+        # Ack only when fresh intent will actually bind (avoid false ack → authoring).
+        if await self._fresh_will_consume(tenant, focus, body):
+            await self._ack_ingest(room, body, message)
         return await self._on_fresh(tenant, room, focus, body)
+
+    async def _ack_ingest(self, room: str, body: str, message: MessageRead) -> None:
+        """Base premise — Lead must see ingest before long hops."""
+        await self._poster.ack_received(
+            room,
+            lead_body=body,
+            identity_handle=self.role_id,
+            source_message_id=str(message.id) if message.id else None,
+        )
+
+    async def _fresh_will_consume(
+        self, tenant: TenantContext, session: AgentWorkSession, body: str
+    ) -> bool:
+        prefix = tenant.init_prefix
+        candidates = self._understand.candidates_for_node_mention(body, init_prefix=prefix)
+        if candidates:
+            return True
+        return _mentions_post_pm(body)
 
     def _focus_session(
         self, meta_sessions: list[AgentWorkSession], room: str, slug: str
@@ -696,7 +727,8 @@ class Orchestrator(BaseBusinessService):
         return True
 
     async def _say(self, room: str, body: str, event_type: EventType = EventType.PROGRESS) -> None:
-        await self._poster.post_status(room, body, event_type)
+        # Always post as the bound role (PM/PE/KB workers) — never default Hermes handle.
+        await self._poster.post_status(room, body, event_type, identity_handle=self.role_id)
 
 
 def match_reply_token(body: str, tokens: list[str]) -> Optional[str]:

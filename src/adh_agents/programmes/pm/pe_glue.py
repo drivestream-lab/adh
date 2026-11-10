@@ -23,8 +23,9 @@ from src.adh_agents.collaboration.temp_papers import (
 )
 from src.adh_agents.forge_acl import forge_allowed
 from src.adh_agents.programmes.pm.pe_answers import PmPeAnswersProgramme
+from src.adh_agents.runtime.gate_opener import CoachSpec, GateOpener
+from src.adh_agents.runtime.room_resolve import collaboration_room
 from src.adh_agents.runtime.work_models import (
-    AWAITING_JUDGMENT,
     AWAITING_NONE,
     PROGRAMME_META_PM,
     AgentWorkSession,
@@ -33,11 +34,12 @@ from src.adh_agents.runtime.work_store import AgentWorkStore
 from src.adh_agents.settings import PmAgentSettings
 from src.adh_agents.surface.buzz_poster import HermesBuzzPoster
 from src.business_services.base_business_service import BaseBusinessService
+from src.business_services.buzz_service import BuzzService
 from src.exceptions.app_exceptions import ValidationError
 from src.infra_services.forge_action_service import ForgeActionService
 from src.infra_services.pm_workspace_service import PmWorkspaceService
 from src.infra_services.tenant_registry_service import TenantRegistryService
-from src.models.buzz_models import EventType
+from src.models.buzz_models import EventType, TaskEventCreate, TaskEventKind
 from src.models.tenant_models import TenantContext
 
 
@@ -58,6 +60,8 @@ class PmPeGlueProgramme(BaseBusinessService):
         workspace: PmWorkspaceService,
         tenants: TenantRegistryService,
         pe_answers: PmPeAnswersProgramme,
+        gates: GateOpener,
+        buzz: BuzzService,
     ) -> None:
         super().__init__()
         self._store = store
@@ -68,6 +72,8 @@ class PmPeGlueProgramme(BaseBusinessService):
         self._workspace = workspace
         self._tenants = tenants
         self._pe_answers = pe_answers
+        self._gates = gates
+        self._buzz = buzz
         self._settings = PmAgentSettings.get_instance()
 
     async def handle_baton(self, baton: Baton, *, room: str) -> Rollup:
@@ -94,10 +100,17 @@ class PmPeGlueProgramme(BaseBusinessService):
                 correlation_id=baton.correlation_id,
                 error="unknown_tenant",
             )
+        # Remount hub → task room once INIT is bound (army never posts on hub).
+        ops = await collaboration_room(
+            self._buzz,
+            tenant,
+            initiative=baton.initiative,
+            fallback=room or baton.ops_room,
+        )
         if baton.type == "pm.pe_questions":
-            await self._on_pe_questions(tenant, room or baton.ops_room, baton)
+            await self._on_pe_questions(tenant, ops, baton)
         elif baton.type == "pm.prd_merge_ready":
-            await self._on_merge_ready(tenant, room or baton.ops_room, baton)
+            await self._on_merge_ready(tenant, ops, baton)
         else:
             await self._batons.mark_done(baton, ttl=ttl, error="unsupported")
             return Rollup(
@@ -219,10 +232,6 @@ class PmPeGlueProgramme(BaseBusinessService):
             bluf="Army finished the PE↔PM rally and PE attested — your call to land.",
             reply_tokens=merge_gate_tokens(),
         )
-        session.open_brief = brief
-        # Judgment (not catalogue authorize): pe_glue.after_judgment runs product merge.
-        session.awaiting = AWAITING_JUDGMENT
-        await self._store.save(session)
         evidence_bits = [
             b
             for b in (
@@ -231,28 +240,38 @@ class PmPeGlueProgramme(BaseBusinessService):
             )
             if b
         ]
-        await self._poster.post_human_next(
-            room,
-            i_did=(
-                f"Clarifications settled for **{init}**. "
-                "PE attested the product PR head after the agent↔agent rally."
+        # Judgment (not catalogue authorize): pe_glue.after_judgment runs product merge.
+        god_token = await self._gates.open(
+            session,
+            brief=brief,
+            coach=CoachSpec(
+                i_did=(
+                    f"Clarifications settled for **{init}**. "
+                    "PE attested the product PR head after the agent↔agent rally."
+                ),
+                recommend=MERGE_PRODUCT_PR,
+                recommend_why=(
+                    "Review the question/answer briefs, then land when product stance looks right."
+                ),
+                evidence=" · ".join(evidence_bits) if evidence_bits else "",
+                outside_adh=(
+                    "Read the product PR thread (PE questions + PM answers), the product brief, "
+                    "and attestation in GitHub / Cursor. Do **not** merge on GitHub yourself."
+                ),
+                tokens=[
+                    TokenAction(tok, wills.get(tok, "continue")) for tok in merge_gate_tokens()
+                ],
+                hop="clarifications_settled",
+                payload={
+                    "status": "need_prd_merge",
+                    "initiative": init,
+                    "purpose": "prd-merge",
+                    "pr_number": pr_number,
+                },
             ),
-            recommend=MERGE_PRODUCT_PR,
-            recommend_why="Review the question/answer briefs, then land when product stance looks right.",
-            evidence=" · ".join(evidence_bits) if evidence_bits else "",
-            outside_adh=(
-                "Read the product PR thread (PE questions + PM answers), the product brief, "
-                "and attestation in GitHub / Cursor. Do **not** merge on GitHub yourself."
-            ),
-            tokens=[TokenAction(tok, wills.get(tok, "continue")) for tok in merge_gate_tokens()],
-            hop="clarifications_settled",
-            payload={
-                "status": "need_prd_merge",
-                "initiative": init,
-                "purpose": "prd-merge",
-                "pr_number": pr_number,
-            },
         )
+        if god_token:
+            await self.after_judgment(tenant, room, session, god_token)
 
     async def _run_merge(self, tenant: TenantContext, room: str, session: AgentWorkSession) -> None:
         init = (session.initiative or "").strip().upper()
@@ -288,12 +307,11 @@ class PmPeGlueProgramme(BaseBusinessService):
         try:
             sync = self._workspace.sync_integration_branch(tenant)
         except ValidationError as exc:
-            session.awaiting = AWAITING_JUDGMENT
             session.stage = "prd-merge"
             session.slots["merge_sha"] = result.url or ""
             session.slots["sync_stall"] = "dirty"
             brief = self._briefs.build_brief(
-                purpose="prd-merge",
+                purpose="prd-merge-sync",
                 node_id="prd-merge",
                 question=(
                     f"Product PR #{pr_number} merged for {init}, but local meta is dirty. "
@@ -308,26 +326,32 @@ class PmPeGlueProgramme(BaseBusinessService):
                 bluf="Remote is landed; local meta must match before KB continues cleanly.",
                 reply_tokens=["discard local", "hold"],
             )
-            session.open_brief = brief
-            await self._store.save(session)
-            await self._poster.post_human_next(
-                room,
-                i_did=f"Merged product PR #{pr_number} for **{init}**, but local meta is dirty.",
-                recommend="discard local",
-                recommend_why=str(exc),
-                evidence=f"PR #{pr_number}" + (f" · {result.url}" if result.url else ""),
-                outside_adh="Inspect local meta dirty files in Cursor before discarding.",
-                tokens=[
-                    TokenAction(
-                        "discard local",
-                        "hard-reset local meta to origin develop, purge, hand off to KB",
+            god_token = await self._gates.open(
+                session,
+                brief=brief,
+                coach=CoachSpec(
+                    i_did=(
+                        f"Merged product PR #{pr_number} for **{init}**, "
+                        "but local meta is dirty."
                     ),
-                    TokenAction("hold", "leave local dirty — KB baton not emitted yet"),
-                ],
-                hop="prd-merge",
-                event_type=EventType.STALL,
-                payload={"status": "sync_stall", "initiative": init, "pr": pr_number},
+                    recommend="discard local",
+                    recommend_why=str(exc),
+                    evidence=f"PR #{pr_number}" + (f" · {result.url}" if result.url else ""),
+                    outside_adh="Inspect local meta dirty files in Cursor before discarding.",
+                    tokens=[
+                        TokenAction(
+                            "discard local",
+                            "hard-reset local meta to origin develop, purge, hand off to KB",
+                        ),
+                        TokenAction("hold", "leave local dirty — KB baton not emitted yet"),
+                    ],
+                    hop="prd-merge",
+                    event_type=EventType.STALL,
+                    payload={"status": "sync_stall", "initiative": init, "pr": pr_number},
+                ),
             )
+            if god_token:
+                await self.after_judgment(tenant, room, session, god_token)
             return
 
         session.awaiting = AWAITING_NONE
@@ -346,6 +370,21 @@ class PmPeGlueProgramme(BaseBusinessService):
             EventType.DONE,
             {"status": "prd_merged", "initiative": init, "pr": pr_number},
         )
+        try:
+            await self._buzz.append_task_event(
+                TaskEventCreate(
+                    tenant_slug=tenant.slug,
+                    task_id=init,
+                    kind=TaskEventKind.LAND,
+                    role_id=self.role_id,
+                    purpose="prd-merge",
+                    token=str(pr_number),
+                    evidence_ref=result.url or "",
+                    payload={"pr": pr_number, "sync_sha": sync.get("sha") or ""},
+                )
+            )
+        except Exception:
+            self.logger.exception("prd land trajectory failed", initiative=init)
         await self._purge_temps(tenant, room, init, PurgeEvent.PRD_MERGED)
         await self._emit_kb_enrich(tenant, room, init, pr_number)
 
@@ -392,7 +431,6 @@ class PmPeGlueProgramme(BaseBusinessService):
         init: str,
         exc: Exception,
     ) -> None:
-        del tenant  # brief reopen only
         msg = str(exc)
         wills = merge_gate_wills()
         hint = f"Reply `{MERGE_PRODUCT_PR}` to retry or `{PARK}`."
@@ -414,21 +452,25 @@ class PmPeGlueProgramme(BaseBusinessService):
             bluf="Nothing merges until you authorize.",
             reply_tokens=merge_gate_tokens(),
         )
-        session.open_brief = brief
-        session.awaiting = AWAITING_JUDGMENT
         session.stage = "prd-merge"
-        await self._store.save(session)
-        await self._poster.post_human_next(
-            room,
-            i_did=f"Tried to land the product PR for **{init}** and hit an error.",
-            recommend=MERGE_PRODUCT_PR,
-            recommend_why=f"{exc}. {hint}",
-            outside_adh="Check the product PR status on GitHub / Cursor, then retry here.",
-            tokens=[TokenAction(tok, wills.get(tok, "continue")) for tok in merge_gate_tokens()],
-            hop="clarifications_settled",
-            event_type=EventType.STALL,
-            payload={"status": "prd_merge_failed", "initiative": init},
+        god_token = await self._gates.open(
+            session,
+            brief=brief,
+            coach=CoachSpec(
+                i_did=f"Tried to land the product PR for **{init}** and hit an error.",
+                recommend=MERGE_PRODUCT_PR,
+                recommend_why=f"{exc}. {hint}",
+                outside_adh="Check the product PR status on GitHub / Cursor, then retry here.",
+                tokens=[
+                    TokenAction(tok, wills.get(tok, "continue")) for tok in merge_gate_tokens()
+                ],
+                hop="clarifications_settled",
+                event_type=EventType.STALL,
+                payload={"status": "prd_merge_failed", "initiative": init},
+            ),
         )
+        if god_token:
+            await self.after_judgment(tenant, room, session, god_token)
 
     async def _purge_temps(
         self,
@@ -487,12 +529,13 @@ class PmPeGlueProgramme(BaseBusinessService):
         await self._poster.post_status(
             room,
             (
-                f"baton `kb.enrich` → `adh.kb` (init={initiative}; "
+                f"@{baton.to_role} baton `kb.enrich` (init={initiative}; "
                 f"correlation={stored.correlation_id})"
             ),
             EventType.PROGRESS,
             {
                 "status": "baton_emitted",
+                "collab": True,
                 "baton_type": "kb.enrich",
                 "baton_id": stored.id,
                 "idempotency_key": stored.idempotency_key,

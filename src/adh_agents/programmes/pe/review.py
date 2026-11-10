@@ -29,6 +29,7 @@ from src.adh_agents.collaboration.temp_papers import (
     buzz_purge_notice,
     execute_purge,
 )
+from src.adh_agents.runtime.room_resolve import collaboration_room
 from src.adh_agents.runtime.work_models import (
     AWAITING_NONE,
     PROGRAMME_PE,
@@ -38,6 +39,7 @@ from src.adh_agents.runtime.work_store import AgentWorkStore
 from src.adh_agents.settings import PeAgentSettings
 from src.adh_agents.surface.buzz_poster import HermesBuzzPoster
 from src.business_services.base_business_service import BaseBusinessService
+from src.business_services.buzz_service import BuzzService
 from src.infra_services.forge_action_service import ForgeActionService
 from src.infra_services.pm_workspace_service import PmWorkspaceService
 from src.infra_services.tenant_registry_service import TenantRegistryService
@@ -61,6 +63,7 @@ class PeReviewProgramme(BaseBusinessService):
         forge: ForgeActionService,
         workspace: PmWorkspaceService,
         tenants: TenantRegistryService,
+        buzz: BuzzService,
     ) -> None:
         super().__init__()
         self._store = store
@@ -70,6 +73,7 @@ class PeReviewProgramme(BaseBusinessService):
         self._forge = forge
         self._workspace = workspace
         self._tenants = tenants
+        self._buzz = buzz
         self._settings = PeAgentSettings.get_instance()
 
     async def list_active(self, tenant_slug: str) -> list[AgentWorkSession]:
@@ -141,8 +145,13 @@ class PeReviewProgramme(BaseBusinessService):
                 correlation_id=baton.correlation_id,
                 error="unknown_tenant",
             )
-        ops = room or baton.ops_room
         init = (baton.initiative or "").strip().upper()
+        ops = await collaboration_room(
+            self._buzz,
+            tenant,
+            initiative=init,
+            fallback=room or baton.ops_room,
+        )
         session = await self._store.load(tenant.slug, self.role_id, init)
         if session is None:
             session = AgentWorkSession(
@@ -158,6 +167,8 @@ class PeReviewProgramme(BaseBusinessService):
                     "question_round": str((baton.payload or {}).get("round") or "1"),
                 },
             )
+        else:
+            session.room = ops
         payload = baton.payload or {}
         answers_path = str(payload.get("answers_path") or "")
         questions_path = str(
@@ -268,10 +279,16 @@ class PeReviewProgramme(BaseBusinessService):
                 error="unknown_tenant",
             )
         pr_url = str((baton.payload or {}).get("pr_url") or "")
+        ops = await collaboration_room(
+            self._buzz,
+            tenant,
+            initiative=init,
+            fallback=room or baton.ops_room,
+        )
         session = AgentWorkSession(
             tenant_slug=baton.tenant,
             role_id=self.role_id,
-            room=room or baton.ops_room,
+            room=ops,
             work_id=init,
             initiative=init if baton.initiative else None,
             programme=self.programme_id,
@@ -283,19 +300,20 @@ class PeReviewProgramme(BaseBusinessService):
             },
         )
         await self._store.save(session)
-        await self._poster.post_status(
-            room or baton.ops_room,
-            (
-                f"PE claimed product review for {init}. "
-                f"PR: {pr_url or 'n/a'}. "
-                "Read fan-out + product questions next."
+        await self._poster.post_collab(
+            ops,
+            body=(
+                f"claimed product review for {init}. "
+                f"PR: {pr_url or 'n/a'}. Read fan-out + product questions next."
             ),
-            EventType.START,
-            {"status": "pe_claimed", "initiative": init, "baton_id": baton.id},
             identity_handle=self.role_id,
+            status="pe_claimed",
+            mention="adh.pm",
+            payload={"initiative": init, "baton_id": baton.id, "baton_type": baton.type},
+            event_type=EventType.START,
         )
-        await self._emit_read_walk(tenant, baton, init, room or baton.ops_room, ttl)
-        await self._post_questions(tenant, room or baton.ops_room, session, bump_round=True)
+        await self._emit_read_walk(tenant, baton, init, ops, ttl)
+        await self._post_questions(tenant, ops, session, bump_round=True)
         done = await self._batons.mark_done(baton, ttl=ttl)
         return Rollup(
             baton_id=done.id,
@@ -358,12 +376,14 @@ class PeReviewProgramme(BaseBusinessService):
         ttl: int,
     ) -> None:
         repo_ref = tenant.meta_repo
+        # Prefer the remounted task room over a stale hub ops_room on the parent.
+        collab = room or parent.ops_room
         walk = Baton(
             type="read.walk",
             from_role=self.role_id,
             to_role="adh.read",
             tenant=parent.tenant,
-            ops_room=parent.ops_room or room,
+            ops_room=collab,
             initiative=init,
             idempotency_key=f"read.walk:{parent.tenant}:{init}:{repo_ref}",
             payload={
@@ -382,14 +402,15 @@ class PeReviewProgramme(BaseBusinessService):
             )
             return
         await self._poster.post_status(
-            room,
+            collab,
             (
-                f"baton `read.walk` → `adh.read` (init={init}; "
+                f"@{walk.to_role} baton `read.walk` (init={init}; "
                 f"correlation={stored_walk.correlation_id})"
             ),
             EventType.PROGRESS,
             {
                 "status": "baton_emitted",
+                "collab": True,
                 "baton_type": "read.walk",
                 "baton_id": stored_walk.id,
                 "idempotency_key": stored_walk.idempotency_key,
@@ -642,12 +663,14 @@ class PeReviewProgramme(BaseBusinessService):
     ) -> None:
         init = (session.initiative or session.work_id).strip().upper()
         ttl = int(self._settings.baton_ttl_seconds)
+        # Army batons + CollabPosts always target the task room (session.room).
+        collab = session.room or tenant.ops_room
         baton = Baton(
             type="pm.pe_questions",
             from_role=self.role_id,
             to_role="adh.pm",
             tenant=tenant.slug,
-            ops_room=tenant.ops_room,
+            ops_room=collab,
             initiative=init,
             idempotency_key=(
                 f"pm.pe_questions:{tenant.slug}:{init}:r{session.slots.get('question_round') or '0'}"
@@ -669,14 +692,15 @@ class PeReviewProgramme(BaseBusinessService):
             )
             return
         await self._poster.post_status(
-            tenant.ops_room,
+            collab,
             (
-                f"baton `pm.pe_questions` → `adh.pm` (init={init}; "
+                f"@{baton.to_role} baton `pm.pe_questions` (init={init}; "
                 f"correlation={stored.correlation_id})"
             ),
             EventType.PROGRESS,
             {
                 "status": "baton_emitted",
+                "collab": True,
                 "baton_type": "pm.pe_questions",
                 "baton_id": stored.id,
                 "idempotency_key": stored.idempotency_key,
@@ -692,12 +716,13 @@ class PeReviewProgramme(BaseBusinessService):
     ) -> None:
         init = (session.initiative or session.work_id).strip().upper()
         ttl = int(self._settings.baton_ttl_seconds)
+        collab = session.room or tenant.ops_room
         baton = Baton(
             type="pm.prd_merge_ready",
             from_role=self.role_id,
             to_role="adh.pm",
             tenant=tenant.slug,
-            ops_room=tenant.ops_room,
+            ops_room=collab,
             initiative=init,
             idempotency_key=f"pm.prd_merge_ready:{tenant.slug}:{init}",
             payload={
@@ -714,14 +739,15 @@ class PeReviewProgramme(BaseBusinessService):
             )
             return
         await self._poster.post_status(
-            tenant.ops_room,
+            collab,
             (
-                f"baton `pm.prd_merge_ready` → `adh.pm` (init={init}; "
+                f"@{baton.to_role} baton `pm.prd_merge_ready` (init={init}; "
                 f"correlation={stored.correlation_id})"
             ),
             EventType.PROGRESS,
             {
                 "status": "baton_emitted",
+                "collab": True,
                 "baton_type": "pm.prd_merge_ready",
                 "baton_id": stored.id,
                 "idempotency_key": stored.idempotency_key,

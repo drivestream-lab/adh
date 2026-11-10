@@ -23,6 +23,9 @@ from src.adh_agents.programmes.kb.heads import (
     stub_heads_from_signals,
     write_patches,
 )
+from src.adh_agents.programmes.pm.task_lifecycle import TaskLifecycleProgramme
+from src.adh_agents.runtime.gate_opener import CoachSpec, GateOpener
+from src.adh_agents.runtime.room_resolve import collaboration_room
 from src.adh_agents.runtime.work_models import (
     AWAITING_JUDGMENT,
     AWAITING_NONE,
@@ -33,12 +36,13 @@ from src.adh_agents.runtime.work_store import AgentWorkStore
 from src.adh_agents.settings import KbAgentSettings
 from src.adh_agents.surface.buzz_poster import HermesBuzzPoster
 from src.business_services.base_business_service import BaseBusinessService
+from src.business_services.buzz_service import BuzzService
 from src.exceptions.app_exceptions import ValidationError
 from src.infra_services.forge_action_service import ForgeActionService
 from src.infra_services.litellm_service import LiteLLMService
 from src.infra_services.pm_workspace_service import PmWorkspaceService
 from src.infra_services.tenant_registry_service import TenantRegistryService
-from src.models.buzz_models import EventType
+from src.models.buzz_models import EventType, TaskEventCreate, TaskEventKind, TaskState
 from src.models.tenant_models import TenantContext
 
 
@@ -57,6 +61,9 @@ class KbEnrichProgramme(BaseBusinessService):
         workspace: PmWorkspaceService,
         forge: ForgeActionService,
         litellm: LiteLLMService,
+        gates: GateOpener,
+        buzz: BuzzService,
+        lifecycle: TaskLifecycleProgramme,
     ) -> None:
         super().__init__()
         self._store = store
@@ -67,6 +74,9 @@ class KbEnrichProgramme(BaseBusinessService):
         self._workspace = workspace
         self._forge = forge
         self._litellm = litellm
+        self._gates = gates
+        self._buzz = buzz
+        self._lifecycle = lifecycle
         self._settings = KbAgentSettings.get_instance()
 
     async def start_programme(
@@ -190,8 +200,13 @@ class KbEnrichProgramme(BaseBusinessService):
                 correlation_id=baton.correlation_id,
                 error="unknown_tenant",
             )
-        ops = room or baton.ops_room
         init = (baton.initiative or "").strip().upper()
+        ops = await collaboration_room(
+            self._buzz,
+            tenant,
+            initiative=init,
+            fallback=room or baton.ops_room,
+        )
         payload = baton.payload or {}
         repo_ref = str(payload.get("repo_ref") or tenant.meta_repo)
         signals = _load_signals(tenant, init, repo_ref)
@@ -233,48 +248,55 @@ class KbEnrichProgramme(BaseBusinessService):
             bluf="Nothing is pushed until you authorize.",
             reply_tokens=["go ahead", "authorize kb_enrich_pr", "hold"],
         )
-        session.open_brief = brief
-        session.awaiting = AWAITING_JUDGMENT
-        await self._store.save(session)
         heads_preview = ", ".join(f"`{p}`" for p in written[:6])
         if len(written) > 6:
             heads_preview += f" (+{len(written) - 6} more)"
-        await self._poster.post_human_next(
-            ops,
-            i_did=(
-                f"Prepared knowledge head stubs for **{init or baton.id}** "
-                f"({len(written)} file(s))."
-            ),
-            recommend="go ahead",
-            recommend_why="Open a draft knowledge docs PR so heads can land on develop.",
-            evidence=heads_preview or "(no heads written)",
-            outside_adh=(
-                "Skim the local `knowledge/` head files in Cursor before authorizing. "
-                "Do **not** open the PR yourself on GitHub."
-            ),
-            tokens=[
-                TokenAction(
-                    "go ahead",
-                    "open the draft knowledge docs PR, then ask you to land it",
+        # Prefer human alias `go ahead` as recommend so god can auto-take it.
+        brief.recommend = "go ahead"
+        god_token = await self._gates.open(
+            session,
+            brief=brief,
+            coach=CoachSpec(
+                i_did=(
+                    f"Prepared knowledge head stubs for **{init or baton.id}** "
+                    f"({len(written)} file(s))."
                 ),
-                TokenAction("authorize kb_enrich_pr", "same as go ahead"),
-                TokenAction("hold", "keep local stubs only — nothing pushed"),
-            ],
-            hop="kb-enrich",
-            payload={
-                "status": "kb_enrich_ready",
-                "baton_id": baton.id,
-                "heads": written,
-                "purpose": "kb-enrich",
-            },
-            identity_handle=self.role_id,
+                recommend="go ahead",
+                recommend_why="Open a draft knowledge docs PR so heads can land on develop.",
+                evidence=heads_preview or "(no heads written)",
+                outside_adh=(
+                    "Skim the local `knowledge/` head files in Cursor before authorizing. "
+                    "Do **not** open the PR yourself on GitHub."
+                ),
+                tokens=[
+                    TokenAction(
+                        "go ahead",
+                        "open the draft knowledge docs PR, then ask you to land it",
+                    ),
+                    TokenAction("authorize kb_enrich_pr", "same as go ahead"),
+                    TokenAction("hold", "keep local stubs only — nothing pushed"),
+                ],
+                hop="kb-enrich",
+                payload={
+                    "status": "kb_enrich_ready",
+                    "baton_id": baton.id,
+                    "heads": written,
+                    "purpose": "kb-enrich",
+                },
+                identity_handle=self.role_id,
+            ),
         )
         done = await self._batons.mark_done(baton, ttl=ttl)
+        if god_token:
+            await self.after_judgment(tenant, ops, session, god_token)
         return Rollup(
             baton_id=done.id,
             role=self.role_id,
             status=done.status,
-            summary=f"KB enrich stubs ready ({len(written)} heads); awaiting Lead",
+            summary=(
+                f"KB enrich stubs ready ({len(written)} heads); "
+                + ("god took" if god_token else "awaiting Lead")
+            ),
             correlation_id=done.correlation_id,
             artefact_refs=written,
             tools_used=["kb.stub", "kb.llm_fill"],
@@ -432,7 +454,6 @@ class KbEnrichProgramme(BaseBusinessService):
         payload: dict | None = None,
     ) -> None:
         """Persist open land gate + Buzz coach so Lead retry hits KB (not PM merged)."""
-        del tenant
         brief = self._briefs.build_brief(
             purpose="kb-enrich-land",
             node_id="kb-enrich-land",
@@ -445,45 +466,47 @@ class KbEnrichProgramme(BaseBusinessService):
                 "authorize kb_enrich_land — merge now",
                 "hold — leave draft open",
             ],
-            recommend="authorize",
+            recommend="go ahead",
             bluf="Nothing merges until you authorize.",
             reply_tokens=["go ahead", "authorize kb_enrich_land", "hold"],
         )
-        session.open_brief = brief
-        session.awaiting = AWAITING_JUDGMENT
         session.stage = "kb-enrich-land"
-        await self._store.save(session)
-        await self._poster.post_human_next(
-            room,
-            i_did=i_did,
-            recommend="go ahead",
-            recommend_why=recommend_why,
-            evidence=f"PR: {pr_url or 'n/a'}"
-            + (f" (#{pr_number})" if pr_number is not None else ""),
-            outside_adh=outside_adh,
-            tokens=[
-                TokenAction(
-                    "go ahead",
-                    (
-                        "undraft + APPROVE + merge the knowledge docs PR, "
-                        "sync local develop, purge temps"
+        god_token = await self._gates.open(
+            session,
+            brief=brief,
+            coach=CoachSpec(
+                i_did=i_did,
+                recommend="go ahead",
+                recommend_why=recommend_why,
+                evidence=f"PR: {pr_url or 'n/a'}"
+                + (f" (#{pr_number})" if pr_number is not None else ""),
+                outside_adh=outside_adh,
+                tokens=[
+                    TokenAction(
+                        "go ahead",
+                        (
+                            "undraft + APPROVE + merge the knowledge docs PR, "
+                            "sync local develop, purge temps"
+                        ),
                     ),
-                ),
-                TokenAction("authorize kb_enrich_land", "same as go ahead"),
-                TokenAction("hold", "leave the draft open — nothing lands"),
-            ],
-            hop="kb-enrich-land",
-            event_type=event_type,
-            payload=payload
-            or {
-                "status": "kb_enrich_need_land",
-                "initiative": init,
-                "pr": pr_url,
-                "pr_number": pr_number,
-                "purpose": "kb-enrich-land",
-            },
-            identity_handle=self.role_id,
+                    TokenAction("authorize kb_enrich_land", "same as go ahead"),
+                    TokenAction("hold", "leave the draft open — nothing lands"),
+                ],
+                hop="kb-enrich-land",
+                event_type=event_type,
+                payload=payload
+                or {
+                    "status": "kb_enrich_need_land",
+                    "initiative": init,
+                    "pr": pr_url,
+                    "pr_number": pr_number,
+                    "purpose": "kb-enrich-land",
+                },
+                identity_handle=self.role_id,
+            ),
         )
+        if god_token:
+            await self.after_judgment(tenant, room, session, god_token)
 
     async def _land_enrich_pr(
         self, tenant: TenantContext, room: str, session: AgentWorkSession
@@ -552,7 +575,7 @@ class KbEnrichProgramme(BaseBusinessService):
             session.slots["land_sha"] = result.url or ""
             session.slots["sync_stall"] = "dirty"
             brief = self._briefs.build_brief(
-                purpose="kb-enrich-land",
+                purpose="kb-enrich-sync",
                 node_id="kb-enrich-land",
                 question=(
                     f"Knowledge docs PR #{pr_number} merged for {init}, but local meta is dirty. "
@@ -567,31 +590,33 @@ class KbEnrichProgramme(BaseBusinessService):
                 bluf="Remote is landed; local must match.",
                 reply_tokens=["discard local", "hold"],
             )
-            session.open_brief = brief
-            session.awaiting = AWAITING_JUDGMENT
             session.stage = "kb-enrich-land"
-            await self._store.save(session)
-            await self._poster.post_human_next(
-                room,
-                i_did=(
-                    f"Merged knowledge docs PR #{pr_number} for **{init}**, "
-                    "but local meta is dirty."
-                ),
-                recommend="discard local",
-                recommend_why=str(exc),
-                outside_adh="Inspect local dirty files in Cursor before discarding.",
-                tokens=[
-                    TokenAction(
-                        "discard local",
-                        "hard-reset local meta to origin develop, then purge temps",
+            god_token = await self._gates.open(
+                session,
+                brief=brief,
+                coach=CoachSpec(
+                    i_did=(
+                        f"Merged knowledge docs PR #{pr_number} for **{init}**, "
+                        "but local meta is dirty."
                     ),
-                    TokenAction("hold", "leave local dirty — purge deferred"),
-                ],
-                hop="kb-enrich-land",
-                event_type=EventType.STALL,
-                payload={"status": "kb_sync_stall", "initiative": init, "pr": pr_number},
-                identity_handle=self.role_id,
+                    recommend="discard local",
+                    recommend_why=str(exc),
+                    outside_adh="Inspect local dirty files in Cursor before discarding.",
+                    tokens=[
+                        TokenAction(
+                            "discard local",
+                            "hard-reset local meta to origin develop, then purge temps",
+                        ),
+                        TokenAction("hold", "leave local dirty — purge deferred"),
+                    ],
+                    hop="kb-enrich-land",
+                    event_type=EventType.STALL,
+                    payload={"status": "kb_sync_stall", "initiative": init, "pr": pr_number},
+                    identity_handle=self.role_id,
+                ),
             )
+            if god_token:
+                await self.after_judgment(tenant, room, session, god_token)
             return
 
         await self._finish_land(tenant, room, session, init=init, pr_number=pr_number, sync=sync)
@@ -643,6 +668,22 @@ class KbEnrichProgramme(BaseBusinessService):
             {"status": "kb_enrich_landed", "initiative": init, "pr": pr_number},
             identity_handle=self.role_id,
         )
+        try:
+            await self._buzz.append_task_event(
+                TaskEventCreate(
+                    tenant_slug=tenant.slug,
+                    task_id=init,
+                    kind=TaskEventKind.LAND,
+                    role_id=self.role_id,
+                    purpose="kb-enrich-land",
+                    token=str(pr_number),
+                    evidence_ref=session.slots.get("enrich_pr") or "",
+                    payload={"pr": pr_number, "sync_sha": sync.get("sha") or ""},
+                )
+            )
+            await self._buzz.set_task_state(tenant.slug, init, TaskState.DONE, role_id=self.role_id)
+        except Exception:
+            self.logger.exception("kb land trajectory/state failed", initiative=init)
         # Purge only after successful land (U4).
         purged = execute_purge(
             self._workspace,
@@ -663,6 +704,14 @@ class KbEnrichProgramme(BaseBusinessService):
                 },
                 identity_handle=self.role_id,
             )
+        # Final gate: Hermes recommends archive; god auto-plays (delete stays Lead-only).
+        await self._lifecycle.coach_archive(
+            tenant,
+            room,
+            task_id=init,
+            i_did=f"Finished knowledge enrich for **{init}**.",
+            identity_handle=self.role_id,
+        )
 
 
 def _load_signals(tenant: TenantContext, init: str, repo_ref: str) -> list[str]:

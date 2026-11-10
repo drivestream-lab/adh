@@ -17,8 +17,13 @@ from src.adh_agents.programmes.pm.http_lanes import PmHttpLanesService
 from src.adh_agents.programmes.pm.meta_pm import MetaPmProgrammeService
 from src.adh_agents.programmes.pm.pe_answers import PmPeAnswersProgramme
 from src.adh_agents.programmes.pm.pe_glue import PmPeGlueProgramme
+from src.adh_agents.programmes.pm.task_lifecycle import TaskLifecycleProgramme
 from src.adh_agents.programmes.read.walk import ReadWalkProgramme
+from src.adh_agents.ingress.github_ingress import GitHubIngressService
+from src.adh_agents.runtime.autonomy import AutonomyPolicy
+from src.adh_agents.runtime.gate_opener import GateOpener
 from src.adh_agents.runtime.orchestrator import Orchestrator
+from src.adh_agents.runtime.presence import PresenceService
 from src.adh_agents.runtime.work_store import AgentWorkStore
 from src.adh_agents.surface.buzz_poster import HermesBuzzPoster
 from src.adh_agents.understanding.understand_service import HermesUnderstandService
@@ -39,6 +44,11 @@ class BusinessServicesModule(Module):
         binder.bind(HermesNavigatorService, to=HermesNavigatorService, scope=singleton)
         binder.bind(HermesDispatchService, to=HermesDispatchService, scope=singleton)
         binder.bind(HermesBuzzPoster, to=HermesBuzzPoster, scope=singleton)
+        binder.bind(PresenceService, to=PresenceService, scope=singleton)
+        binder.bind(AutonomyPolicy, to=AutonomyPolicy, scope=singleton)
+        binder.bind(GateOpener, to=GateOpener, scope=singleton)
+        binder.bind(TaskLifecycleProgramme, to=TaskLifecycleProgramme, scope=singleton)
+        binder.bind(GitHubIngressService, to=GitHubIngressService, scope=singleton)
         binder.bind(Orchestrator, to=Orchestrator, scope=singleton)
         binder.bind(PmPeAnswersProgramme, to=PmPeAnswersProgramme, scope=singleton)
         binder.bind(PmPeGlueProgramme, to=PmPeGlueProgramme, scope=singleton)

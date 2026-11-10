@@ -25,6 +25,8 @@ from src.adh_agents.programmes.pm.decision_cards import apply_validate_briefs
 from src.adh_agents.programmes.pm.pe_glue import PmPeGlueProgramme
 from src.adh_agents.execution.dispatch_service import HermesDispatchService
 from src.adh_agents.catalogue.navigator import HermesNavigatorService
+from src.adh_agents.runtime.autonomy import AutonomyPolicy
+from src.adh_agents.runtime.gate_opener import CoachSpec, GateOpener
 from src.adh_agents.runtime.work_store import AgentWorkStore
 from src.adh_agents.surface.buzz_poster import HermesBuzzPoster
 from src.adh_agents.programmes.pm.validation_report import (
@@ -97,6 +99,8 @@ class MetaPmProgrammeService(BaseBusinessService):
         workspace: PmWorkspaceService,
         prompts: PromptService,
         pe_glue: PmPeGlueProgramme,
+        gates: GateOpener,
+        autonomy: AutonomyPolicy,
     ) -> None:
         super().__init__()
         self._store = store
@@ -107,6 +111,8 @@ class MetaPmProgrammeService(BaseBusinessService):
         self._workspace = workspace
         self._prompts = prompts
         self._pe_glue = pe_glue
+        self._gates = gates
+        self._autonomy = autonomy
         self._settings = HermesSettings.get_instance()
 
     async def start_programme(
@@ -283,20 +289,22 @@ class MetaPmProgrammeService(BaseBusinessService):
                 "hop": hop,
             },
         )
-        if session.awaiting == AWAITING_JUDGMENT and session.open_brief is not None:
-            await self._poster.post_status(
-                room,
-                self._briefs.format_brief_markdown(session.open_brief),
-                EventType.PROGRESS,
-            )
-            return
-        if session.awaiting == AWAITING_AUTHORIZATION and session.open_brief is not None:
-            await self._poster.post_status(
-                room,
-                self._briefs.format_brief_markdown(session.open_brief),
-                EventType.PROGRESS,
-            )
-            return
+        if (
+            session.awaiting in {AWAITING_JUDGMENT, AWAITING_AUTHORIZATION}
+            and session.open_brief is not None
+        ):
+            if self._autonomy.is_god:
+                # Re-enter stage handlers so GateOpener can auto-play Hermes recommend.
+                session.awaiting = AWAITING_NONE
+                session.open_brief = None
+                await self._store.save(session)
+            else:
+                await self._poster.post_status(
+                    room,
+                    self._briefs.format_brief_markdown(session.open_brief),
+                    EventType.PROGRESS,
+                )
+                return
         stage = session.stage or hop
         if stage in ("validate-requirements", "requirements-human-decision"):
             pass_number = int(session.slots.get(_SLOT_VALIDATE_PASS) or "1")
@@ -670,7 +678,9 @@ class MetaPmProgrammeService(BaseBusinessService):
             reply_tokens.extend(brief.reply_tokens)
             reply_tokens.append(f"{item.get('id')}: explain")
         session.stage = "requirements-human-decision"
-        session.open_brief = self._briefs.build_brief(
+        from src.adh_agents.collaboration.gate_coach import TokenAction
+
+        brief = self._briefs.build_brief(
             purpose="requirements-clarification",
             node_id="requirements-human-decision",
             question=f"Decide open validation findings for {initiative}.",
@@ -681,19 +691,32 @@ class MetaPmProgrammeService(BaseBusinessService):
             reply_tokens=reply_tokens,
             artefact_path=validation_report_path(initiative),
         )
-        session.awaiting = AWAITING_JUDGMENT
-        await self._store.save(session)
         body = "\n\n".join(blocks) + "\n\nOr `accept-recs` for this wave only."
-        await self._poster.post_status(
-            room,
-            body,
-            EventType.PROGRESS,
-            {
-                "status": "need_validate_decisions",
-                "initiative": initiative,
-                "choices": [item.get("id") for item in briefs],
-            },
+        god_token = await self._gates.open(
+            session,
+            brief=brief,
+            coach=CoachSpec(
+                i_did=f"Prepared validation findings wave for **{initiative}**.",
+                recommend="accept-recs",
+                recommend_why=(
+                    "Accept Hermes recommendations for this wave when they match your intent."
+                ),
+                evidence=body[:1500],
+                outside_adh="Read the VF cards / validation report in Cursor before deciding.",
+                tokens=[
+                    TokenAction("accept-recs", "accept Hermes recommendations for this wave"),
+                    TokenAction("hold", "park — leave findings open"),
+                ],
+                hop="requirements-human-decision",
+                payload={
+                    "status": "need_validate_decisions",
+                    "initiative": initiative,
+                    "choices": [item.get("id") for item in briefs],
+                },
+            ),
         )
+        if god_token:
+            await self._apply_vf_token(tenant, room, session, god_token)
 
     async def _build_validate_briefs(
         self, initiative: str, wave: list[dict[str, Any]]
@@ -859,7 +882,9 @@ class MetaPmProgrammeService(BaseBusinessService):
             )
             await self._run_validate_cycle(tenant, room, session, pass_number=pass_number + 1)
             return
-        session.open_brief = self._briefs.build_brief(
+        from src.adh_agents.collaboration.gate_coach import TokenAction
+
+        brief = self._briefs.build_brief(
             purpose="update-manifest",
             node_id="update-documents",
             question=f"Apply document updates for {initiative} from your VF decisions?",
@@ -869,14 +894,24 @@ class MetaPmProgrammeService(BaseBusinessService):
             recommend_why="Keep the PRD aligned with what you just decided.",
             reply_tokens=["apply", "hold", "CHG-01: apply", "CHG-01: hold"],
         )
-        session.awaiting = AWAITING_JUDGMENT
-        await self._store.save(session)
-        await self._poster.post_status(
-            room,
-            self._briefs.format_brief_markdown(session.open_brief),
-            EventType.PROGRESS,
-            {"status": "need_manifest", "initiative": initiative},
+        god_token = await self._gates.open(
+            session,
+            brief=brief,
+            coach=CoachSpec(
+                i_did=f"Prepared document-update options for **{initiative}**.",
+                recommend="apply",
+                recommend_why="Keep the PRD aligned with what you just decided.",
+                outside_adh="Skim Resolution / PRD in Cursor before applying.",
+                tokens=[
+                    TokenAction("apply", "update the PRD from Resolution now"),
+                    TokenAction("hold", "pause updates"),
+                ],
+                hop="update-documents",
+                payload={"status": "need_manifest", "initiative": initiative},
+            ),
         )
+        if god_token:
+            await self._after_manifest(tenant, room, session, god_token)
 
     async def _after_manifest(
         self, tenant: TenantContext, room: str, session: AgentWorkSession, token: str
@@ -1014,7 +1049,9 @@ class MetaPmProgrammeService(BaseBusinessService):
         session.programme = _PROGRAMME
         session.room = room
         session.stage = "prd-impact-acceptance"
-        session.open_brief = self._briefs.build_brief(
+        from src.adh_agents.collaboration.gate_coach import TokenAction
+
+        brief = self._briefs.build_brief(
             purpose="prd-impact-acceptance",
             node_id="prd-impact-acceptance",
             question=(
@@ -1034,18 +1071,30 @@ class MetaPmProgrammeService(BaseBusinessService):
             reply_tokens=["confirm", "revise"],
             artefact_path=brief_path,
         )
-        session.awaiting = AWAITING_JUDGMENT
-        await self._store.save(session)
-        await self._poster.post_status(
-            room,
-            self._briefs.format_brief_markdown(session.open_brief),
-            EventType.PROGRESS,
-            {
-                "status": "need_post_pm_confirm",
-                "initiative": initiative,
-                "artefact": brief_path,
-            },
+        god_token = await self._gates.open(
+            session,
+            brief=brief,
+            coach=CoachSpec(
+                i_did=f"Finished validate for **{initiative}** and wrote the post-PM brief.",
+                recommend=judgment.recommend or "confirm",
+                recommend_why=judgment.bluf,
+                evidence=f"`{brief_path}`",
+                outside_adh="Read the post-PM brief / PRD in Cursor before confirming.",
+                tokens=[
+                    TokenAction("confirm", "proceed — Hermes runs impact-map now"),
+                    TokenAction("revise", "hold — edit PRD / re-run validate first"),
+                ],
+                hop="prd-impact-acceptance",
+                example=judgment.example,
+                payload={
+                    "status": "need_post_pm_confirm",
+                    "initiative": initiative,
+                    "artefact": brief_path,
+                },
+            ),
         )
+        if god_token:
+            await self._after_post_pm_brief(tenant, room, session, god_token)
 
     async def _after_post_pm_brief(
         self, tenant: TenantContext, room: str, session: AgentWorkSession, token: str
@@ -1118,7 +1167,6 @@ class MetaPmProgrammeService(BaseBusinessService):
                 {"status": "refuse_superseding_draft", "initiative": init_check},
             )
             return
-        del tenant  # forge uses tenant at authorize time
         session.stage = "prd-pr-action"
         node = self._navigator.current(session)
         # Navigator may still be on impact-map; force forge node if needed.
@@ -1133,36 +1181,70 @@ class MetaPmProgrammeService(BaseBusinessService):
             session.slots.setdefault("validation_path", validation_report_path(init))
             session.slots.setdefault("head_branch", f"chore/{init}-prd")
             session.slots.setdefault("title", f"[{init}] PRD draft")
-        session.open_brief = self._briefs.brief_authorization(node, session.initiative)
-        session.awaiting = AWAITING_AUTHORIZATION
-        await self._store.save(session)
+        brief = self._briefs.brief_authorization(node, session.initiative)
         impact = impact_map_path(init)
         from src.adh_agents.collaboration.gate_coach import TokenAction
 
-        await self._poster.post_human_next(
-            room,
-            i_did=f"Impact-Map ready for **{init}** (`{impact}`). Product write-up is ready for a draft PR.",
-            recommend="go ahead",
-            recommend_why="Open the product draft PR when you are ready — nothing pushes until you authorize.",
-            evidence=f"`{impact}`",
-            outside_adh=(
-                f"Skim the Impact-Map and PRD in Cursor (`{impact}`, `prd/{init}.md`) "
-                "before authorizing. Do **not** open the PR yourself on GitHub."
+        god_token = await self._gates.open(
+            session,
+            brief=brief,
+            awaiting=AWAITING_AUTHORIZATION,
+            coach=CoachSpec(
+                i_did=(
+                    f"Impact-Map ready for **{init}** (`{impact}`). "
+                    "Product write-up is ready for a draft PR."
+                ),
+                recommend="go ahead",
+                recommend_why=(
+                    "Open the product draft PR when you are ready — nothing pushes until you authorize."
+                ),
+                evidence=f"`{impact}`",
+                outside_adh=(
+                    f"Skim the Impact-Map and PRD in Cursor (`{impact}`, `prd/{init}.md`) "
+                    "before authorizing. Do **not** open the PR yourself on GitHub."
+                ),
+                tokens=[
+                    TokenAction("go ahead", "open the product draft PR on meta"),
+                    TokenAction("authorize open_draft_pr", "same as go ahead"),
+                    TokenAction("hold", "park — no draft PR yet"),
+                ],
+                hop="prd-pr-action",
+                payload={
+                    "status": "need_pr_authorize",
+                    "initiative": session.initiative,
+                    "artefact": impact,
+                    "head_branch": session.slots.get("head_branch"),
+                    "purpose": "prd-pr-action",
+                },
             ),
-            tokens=[
-                TokenAction("go ahead", "open the product draft PR on meta"),
-                TokenAction("authorize open_draft_pr", "same as go ahead"),
-                TokenAction("hold", "park — no draft PR yet"),
-            ],
-            hop="prd-pr-action",
-            payload={
-                "status": "need_pr_authorize",
-                "initiative": session.initiative,
-                "artefact": impact,
-                "head_branch": session.slots.get("head_branch"),
-                "purpose": "prd-pr-action",
-            },
         )
+        if god_token:
+            session.handoff_outcome = god_token
+            session.slots[f"reply:{brief.node_id}"] = god_token
+            try:
+                result = await self._dispatch.run_external_action(
+                    tenant,
+                    node,
+                    session.initiative or "",
+                    authorized=True,
+                    slots=session.slots,
+                )
+            except Exception as exc:
+                await self._poster.post_status(
+                    room,
+                    f"Authorize failed for `{brief.node_id}`: {exc}. Gate stays open.",
+                    EventType.STALL,
+                )
+                return
+            self._navigator.advance(session, "pass")
+            session.awaiting = AWAITING_NONE
+            session.open_brief = None
+            await self._store.save(session)
+            await self._poster.post_status(
+                room,
+                f"Ran `{result.action}` on {result.repo}: {result.url or 'ok'}",
+                EventType.DONE,
+            )
 
 
 # Back-compat name used by tests / callers.

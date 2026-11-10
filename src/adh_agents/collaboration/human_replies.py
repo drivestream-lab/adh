@@ -8,6 +8,9 @@ from typing import Iterable, Optional, Sequence
 MERGE_PRODUCT_PR = "merge the product PR"
 PARK = "park"
 NEED_ANOTHER_ROUND = "need another round"
+ARCHIVE_TASK = "archive task"
+DELETE_TASK = "delete task"
+KEEP_OPEN = "keep open"
 
 # Canonical → accepted aliases (case-insensitive match on full line / prefix).
 _ALIASES: dict[str, tuple[str, ...]] = {
@@ -20,6 +23,9 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     ),
     PARK: (PARK, "hold"),
     NEED_ANOTHER_ROUND: (NEED_ANOTHER_ROUND, "new_round", "round_again"),
+    ARCHIVE_TASK: (ARCHIVE_TASK, "archive"),
+    DELETE_TASK: (DELETE_TASK, "delete"),
+    KEEP_OPEN: (KEEP_OPEN, "keep"),
 }
 
 

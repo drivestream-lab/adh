@@ -8,6 +8,7 @@ from injector import inject
 
 from src.adh_agents.baton.models import Baton
 from src.adh_agents.baton.redis_store import RedisBatonStore
+from src.adh_agents.runtime.room_resolve import collaboration_room
 from src.adh_agents.settings import PmAgentSettings
 from src.business_services.base_business_service import BaseBusinessService
 from src.business_services.buzz_service import BuzzService
@@ -212,12 +213,15 @@ class HermesDispatchService(BaseBusinessService):
         if not self._pm_settings.emit_pe_review_baton:
             return
         refs = [r for r in artefact_refs if r]
+        collab = await collaboration_room(
+            self._buzz, tenant, initiative=initiative, fallback=tenant.ops_room
+        )
         baton = Baton(
             type="pe.review",
             from_role="adh.pm",
             to_role="adh.pe",
             tenant=tenant.slug,
-            ops_room=tenant.ops_room,
+            ops_room=collab,
             initiative=initiative,
             idempotency_key=f"pe.review:{tenant.slug}:{initiative}:{pr_url or 'draft'}",
             payload={
@@ -230,14 +234,14 @@ class HermesDispatchService(BaseBusinessService):
         ttl = int(self._pm_settings.baton_ttl_seconds)
         stored, created = await self._batons.create_pending(baton, ttl=ttl)
         notice = (
-            f"baton `pe.review` → `adh.pe` (init={initiative}; "
-            f"waiting for PE worker; correlation={stored.correlation_id})"
+            f"@{baton.to_role} baton `pe.review` "
+            f"(init={initiative}; waiting for PE; correlation={stored.correlation_id})"
         )
         if not created:
             notice = f"(idempotent) {notice}"
         try:
             await self._buzz.post_message(
-                tenant.ops_room,
+                collab,
                 MessageCreate(
                     identity_handle="adh.pm",
                     body=notice,
@@ -245,6 +249,7 @@ class HermesDispatchService(BaseBusinessService):
                     event_type=EventType.PROGRESS,
                     payload={
                         "status": "baton_emitted",
+                        "collab": True,
                         "baton_type": "pe.review",
                         "baton_id": stored.id,
                         "created": created,

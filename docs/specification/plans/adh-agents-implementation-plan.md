@@ -1,390 +1,293 @@
 # Implementation plan — ADH Agents Team OS
 
-**Status:** D1–D5 + U1–U5 code landed. **Next wave U6 (mandatory) — agent↔agent clarification rally; human only after briefs settle.**  
+**Status:** D1–D5 + U1–U6 landed on `develop`. **Next: Floor wave F1–F9 in one PR** (durable Buzz floor + task rooms + god mode + trajectory).  
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md)  
 **Product:** [adh-agents-team-os.md](../product/adh-agents-team-os.md)  
 **KB heads:** [adh-kb-heads.md](../references/adh-kb-heads.md)  
 **As-built:** [implementation-status.md](../as-built/implementation-status.md)
 
-This is the **work tracker SSOT**. Architecture framing: Team OS control plane + role workers — not a Hermes facade router.  
-**Delivery workflow is fixed.** Product excellence means we **remove** drift (jargon Buzz, forge-click Next, mid-rally `ack_pe`, unsynced meta) — we do not leave dual paths or “optional later” for the army UX.  
-**Hermes value:** army runs capped PE↔PM ping-pong + helpful briefs; human judges after settled; KB heads compound as prompt context.
+This is the **work tracker SSOT**.  
+**No legacy / dual paths.** Greenfield replacements delete the old path in the same PR.  
+**ADH is the product**; RealWorld is guinea pig only.
 
 ---
 
-## Work tracker (follow this)
+## Work tracker
 
 ```text
 ADH Agents Team OS
 
-0.  Product / ADR lock                              ✅
-0a. PM on BaseHermesAgent + baton emit              ✅  PRs #6–#14
-0b. Greenfield control plane + delete legacy        ✅  PR #16
-V1. PM live on new OS (RealWorld guinea pig)        ✅
-V2. PE claims pe.review → read.walk                 ✅
-D1. PE: Q caps, Buzz+PR, attest                     ✅  PR #17
-D2. PM glue: pe answers + prd_merge authorize       ✅  PR #17
-D3. Read: one-repo walk / structured rollup         ✅
-D4. KB: knowledge/ heads + enrich draft PR          ✅
-D5. Harden: dup/timeout/authorize/SSE + no regex    ✅
-    Gate‑1 decision paper + global temp purge       ✅  PR #21
-    Forge undraft via GraphQL before merge          ✅  PR #22
+0–0b / V1–V2 / D1–D5     ✅  PRs #6–#22 (spine, Gate‑1, read/kb, purge, undraft)
+U1–U5 helpful-army land  ✅  coach, single gate, land+sync, KB land, hygiene
+U6 PE↔PM agent rally     ✅  PR #23; ack_pe gone; human merge after settle
+KB land approve-before   ✅  PR #24; reopen Buzz gate on stall
 
-── UX + land autonomy ──
-U1. Helpful-army coach on BaseHermesAgent           ✅  gate_coach + delivery_voice + post_human_next
-U2. Single open human gate (no cross-role resume)   ✅
-U3. Shared land_pr + sync local develop             ✅
-U4. KB authorize → agent land (not “merge on forge”)✅
-U5. Zombie draft hygiene + unit proof               ✅  RealWorld guinea pig after U6
-
-── next (Hermes value loop) ──
-U6. Agent↔agent PE↔PM rally + post-rally human merge ✅  drop ack_pe; KB prompt context
+── NEXT (single PR) ──
+F1–F9 Team floor         🟨  T1–T4 polish landed → **god verify** next
 
 ── later hires ──
-dev / qa / iac / sre / obs + codegraph MCP          ⬜
+dev / qa / iac / sre / obs + codegraph MCP + TaskGraph hire   ⬜
 ```
 
-**Rule:** architecture is closed after 0b. Remaining work deepens programmes on this spine.  
-**Product rule:** ADH is the product; RealWorld is a guinea pig only — no tenant/INIT/repo hardcoding in programmes.
-
 ---
 
-## Hermes intent — helpful army (locked 2026-11-10)
-
-We are a **helpful army of agents**. On Buzz the **role that did the work** posts:
-
-1. **I did** — plain delivery language (product PR, knowledge docs PR, spec PR, …).  
-2. **Recommendation** — recommend + short why.  
-3. **Evidence + example** — brief/PR/ADR we generated (DecisionCard depth in the artefact).  
-4. **You are the human \<role\>** — what we expect from them.  
-5. **Before you post** — what to read **outside ADH** (Cursor / PR / local meta).  
-6. **Exact Buzz reply** — tokens + what **I** will do after each token.
-
-Humans **review outside ADH**; they **decide on Buzz**. Agents **execute** (including merge + refresh local develop). Never “merge it yourself on GitHub” as the primary Next.  
-Internal ids (`pe.review`, Gate‑1, `kb.enrich`, catalogue node ids) stay in **logs/payloads** — not Buzz headlines.
-
-### Delivery voice lexicon (Buzz body)
-
-| Prefer | Avoid on Buzz |
-|--------|----------------|
-| product PR / product brief / product questions | Gate‑1, pe.review, meta jargon |
-| knowledge docs PR / ADR updates | kb.enrich as the headline |
-| spec PR / implementation PR (later) | catalogue node ids |
-| merge into develop | raw forge action names as Next |
-| cleaned up working notes | PurgeEvent enum names |
-
----
-
-## Buzz UX contract (all roles)
-
-Ops is for **human input and next steps**, not evidence dumps.
-
-| Field | Rule |
-|-------|------|
-| **I did** | First person; delivery language |
-| **Recommend** | One recommend + bluf |
-| **Evidence** | Brief path and/or PR URL (`artefact_refs`) |
-| **Outside ADH** | What to read before replying |
-| **On Buzz** | Exact tokens + what the agent will do |
-| **Never** | Full diffs, forge JSON, laundry lists, code gate names as headlines |
-
-Progress ticks while working (still-working); one short DONE rollup. Same DecisionCard pattern in artefacts; Buzz carries the coach skeleton.
-
----
-
-## Locked decisions
-
-### Spine (unchanged)
-
-| Topic | Choice |
-|-------|--------|
-| Product | ADH Team OS; RealWorld = guinea pig only |
-| Package | `src/adh_agents/` only — no hermes runtime twin |
-| Control plane | Orchestrator + work store + runner registry in `adh_agents/runtime` (**mandatory**) |
-| Enabler | `BaseHermesAgent` = listen / baton / forge ACL / progress / **human-next coach** |
-| Agents | Embed control plane; role-scoped ops filter; one process per role |
-| Programmes | Register on plane; under `adh_agents/programmes/{pm,pe,read,kb}/` |
-| Redis work | `adh:agent:work:{tenant}:{role}:{work_id}` |
-| Workers | `make adh-pm` / `adh-pe` / `adh-read` / `adh-kb` |
-| Legacy | **Deleted** in #16 |
-| Sequence | OS → V1 → V2 → D1–D5 → **U1–U5** → later hires |
-
-### D3–D5 locks (2026-11-09) — unchanged summary
-
-D3 one-repo `repo_ref` · D4 OKF heads + post-merge `kb.enrich` · D5 reclaim/SSE/no regex SSOT · global `TempFamily`×`PurgeEvent` purge · Gate‑1 decision paper · GraphQL undraft before merge.
-
-### Helpful-army locks (2026-11-10) — **mandatory** (fixed delivery workflow)
-
-| # | Topic | Choice |
-|---|-------|--------|
-| U.1 | Who posts | **Working role only** via **`BaseHermesAgent.post_human_next`** — no ad-hoc human-gate Buzz strings |
-| U.2 | Review | Outside ADH; decide on Buzz — **only** decision channel for Team OS lands |
-| U.3 | Land | Authorize ⇒ undraft+merge+**sync integration branch** — **required** on every durable land |
-| U.4 | Lexicon | Delivery voice on Buzz; machine ids **only** in payload/logs |
-| U.5 | Routing | **Exactly one** open human gate per INIT; silent if no open brief |
-| U.6 | Purge | Agent `execute_purge` after success — **required**; not a human step |
-| U.7 | KB | Same authorize→land→sync as product PR — **required** |
-| U.8 | Authorize bind | Token binds `{initiative, purpose, pr?, head_sha?}` — no bare cross-phase `go ahead` |
-| U.9 | No dual paths | Delete forge-click Next, Gate‑1 Buzz jargon, resume spam, optional coach skips |
-
-### Debt to **remove** this wave (do not carry)
-
-| Debt | Removal |
-|------|---------|
-| “review/merge on forge” Buzz Next | Delete; coach + agent land |
-| “Gate‑1” / catalogue node ids on Buzz bodies | Delivery lexicon only |
-| Cross-role “Resume PE/KB…” on every Lead line | Delete unless open human gate / explicit resume |
-| Idempotent baton lines on Buzz (`(idempotent) baton…`) | Log only; no ops post when `created=false` |
-| Stale “PM still working on outline” labels mid-lane | Hop-accurate still-working labels |
-| Swallow undraft failure then merge | Already fixed (#22); keep fail-closed land |
-| Unsynced local meta after merge | **Required** `sync_integration_branch` |
-| Second product draft after merge (PR #6 class) | Refuse/close superseding drafts |
-| Free-text human-gate posts bypassing base | All gates call `post_human_next` |
-
-### Agentic harness locks (2026-11-09) — still bind
-
-H1 understand→catalogue · H2 no regex SSOT · H3 soft gates · H4 stub+LLM KB · H5 Read sensor / PE interprets · H6 ask-back on LLM-down.
-
----
-
-## File-level implementation plan (U1–U5) — mandatory
-
-### U1 — Coach on base + delivery voice (**required**)
-
-| File | Action |
-|------|--------|
-| `src/adh_agents/collaboration/gate_coach.py` | **NEW** — `format_human_next` (I did / recommend / evidence / outside ADH / tokens / I will) |
-| `src/adh_agents/collaboration/delivery_voice.py` | **NEW** — fixed hop→phrase map (`product_pr`, `product_brief`, `knowledge_docs_pr`, …) |
-| `src/adh_agents/base.py` | **ADD** `post_human_next`; **CHANGE** baton emit: no Buzz when `created=false` |
-| `src/adh_agents/collaboration/brief_service.py` | Artefact DecisionCard stays; **Buzz human gates must not** use raw `format_brief_markdown` alone |
-| `src/adh_agents/programmes/pm/authoring.py` | Promote → `post_human_next` only |
-| `src/adh_agents/programmes/pm/meta_pm.py` | Post-pm + open-product-PR authorize → `post_human_next` only |
-| `src/adh_agents/programmes/pm/pe_glue.py` | Merge authorize → `post_human_next`; delete forge-click copy |
-| `src/adh_agents/programmes/pe/gate1_brief.py` | **Rewrite** Buzz strings to product-brief voice; strip Gate‑1 from human body |
-| `src/adh_agents/programmes/pe/review.py` | Questions / hold / attest prompts via agent `post_human_next`; delete jargon status lines from ops |
-| `src/adh_agents/programmes/kb/enrich.py` | **Delete** “merge on forge”; coach only |
-| `src/adh_agents/agents/pm_agent.py` | Programmes obtain agent/base for human-next (DI or callback) |
-| `src/adh_agents/agents/pe_agent.py` | Same |
-| `src/adh_agents/agents/kb_agent.py` | Same |
-| `src/adh_agents/agents/read_agent.py` | Read stays BLUF+waiting-on; no fake human gate |
-| `tests/unit/test_gate_coach.py` | **NEW** — forbid Gate‑1 / kb.enrich / “merge on forge” in bodies |
-
-**Exit:** Zero human-gate Buzz posts outside `post_human_next`.
-
-### U2 — Single open human gate (**required**)
-
-| File | Action |
-|------|--------|
-| `src/adh_agents/runtime/orchestrator.py` | Lead text binds **only** open judgment/authorization brief; fence `prd_merged` from draft-PR reopen |
-| `src/adh_agents/agents/pe_agent.py` | **Remove** resume-on-any-Lead; resume only explicit / open gate |
-| `src/adh_agents/agents/kb_agent.py` | Same |
-| `src/adh_agents/agents/pm_agent.py` | `go ahead` matches open brief purpose only |
-| `src/adh_agents/runtime/work_models.py` | If needed: purpose/slot for authorize bind (`pr_number`, `head_sha`) |
-| `tests/unit/test_adh_orchestrator.py` | **Required** cases: post-merge go-ahead → KB only; PE silent |
-
-**Exit:** One Lead message → one gate; debt resume spam gone.
-
-### U3 — Land + sync (**required** on every durable land)
-
-| File | Action |
-|------|--------|
-| `src/infra_services/forge_action_service.py` | **ADD** `land_pull_request` (undraft+merge); `prd_merge` → calls it |
-| `src/infra_services/github_app_service.py` | GraphQL undraft (landed) |
-| `src/infra_services/pm_workspace_service.py` | **ADD** `sync_integration_branch` — dirty → stall coach (`discard local` / `hold`) |
-| `src/adh_agents/programmes/pm/pe_glue.py` | authorize → land → sync → purge → DONE coach |
-| `tests/unit/test_workspace_sync.py` | **NEW** |
-| `tests/unit/test_github_ready_for_review.py` | Keep |
-
-**Exit:** After product merge, local meta **equals** `origin/develop` or explicit stall — never silent drift.
-
-### U4 — Knowledge docs PR land (**required**)
-
-| File | Action |
-|------|--------|
-| `src/adh_agents/programmes/kb/enrich.py` | Brief + coach; `go ahead` → `land_pull_request` + sync + purge **after** land |
-| `src/adh_agents/collaboration/temp_papers.py` | `KB_ENRICH_DONE` only post-land |
-| `src/adh_agents/forge_acl/__init__.py` | **KB** allowed to land/merge knowledge PRs |
-| `src/adh_agents/agents/kb_agent.py` | Orchestrator + judgment → land path |
-| `tests/unit/test_kb_enrich_land.py` | **NEW** |
-
-**Exit:** Knowledge docs PR never asks human to merge on GitHub.
-
-### U5 — Hygiene + proof (**required**)
-
-| File | Action |
-|------|--------|
-| `src/adh_agents/programmes/pm/meta_pm.py` | After product merge: **refuse** new product draft for same INIT unless explicit new intent |
-| Forge close helper (workspace or forge_action) | Close superseding open product drafts for that INIT |
-| `docs/specification/*` | Already seeded; tick as-built when green |
-| RealWorld proof | Coach → land+sync → KB land → no second product review |
-
-**Exit:** No PR #6-class debt; guinea pig green.
-
-### Order (fixed)
-
-```text
-U1 → U2 → U3 → U4 → U5
-```
-
-No parallel “optional coach later.” U1/U2 before U4 so KB land cannot regress routing.
-
----
-
-## U6 — Agent↔agent clarification rally (mandatory)
-
-### Product lock (2026-11-10)
-
-```text
-PE asks (PR + brief) → PM answers (PR + answers brief) → ≤2 agent rounds
-  → PE attests when settled (agent)
-  → PM posts “clarifications settled” coach
-  → Human reviews briefs outside ADH → merge / park
-  → land + sync → KB enrich (heads become next-run prompt context)
-```
+## Locked decisions (Floor wave)
 
 | # | Lock |
 |---|------|
-| U6.1 | **No** human mid-rally (`ack_pe` deleted) |
-| U6.2 | Default **`max_question_rounds = 2`** |
-| U6.3 | PM **auto-answers** on product PR (LLM + Impact-Map + OKF heads) |
-| U6.4 | PE may one follow-up round from answers; then stop |
-| U6.5 | After settle: PE **agent attest**; PM opens **only** human merge coach |
-| U6.6 | Human reply lexicon: `merge the product PR` / `park` (aliases: `go ahead`) |
-| U6.7 | KB heads **read** into PE question gen + PM answer prompts (thin now; compound later) |
-| U6.8 | Dead paths removed — no dual “human ack OR auto answer” |
+| F.1 | **Postgres** = durable chat (rooms, members, messages, tasks, archive, `buzz_task_events`) |
+| F.2 | **Redis** = live OS only (sessions **7d**, batons **1d**, presence, short god-chain) — **never** chat/archive/trajectory SSOT |
+| F.3 | **No Redis Task SSOT** — canonical task = `buzz_tasks` |
+| F.4 | Hub `#{tenant}-ops` + task `#task-{TASK_ID}`; Lead `archive task` / `delete task` / `keep open` |
+| F.4b | Hub = intake/announce only; **all** bound-INIT army/coach talk in task room; baton `ops_room` = task slug |
+| F.5 | Ingress: `init` ← outline; `bug`/`enhancement` ← GH **bind API + poll stub** (RealWorld label path) |
+| F.6 | UI: last **20**, scroll-up page, stick-to-latest; sidebar active task rooms; **desktop only** — delete duplicate `buzz_ui` |
+| F.7 | Workers listen **hub + all non-archived task rooms** |
+| F.8 | CollabPost on baton emit/claim/done; batons remain claim SSOT |
+| F.9 | God: `ADH_AUTONOMY_MODE=god`; GateOpener plays `recommend ∈ reply_tokens`; Lead ignored on open gates; halt → `god_mode_halt` |
+| F.10 | Trajectory = **`buzz_task_events` only** — no trajectory files in meta git |
+| F.11 | Done coach recommends **`archive task`**; god never auto-**delete**; `discard local` still allow-flag only |
+| F.12 | Guinea pig: **1 INIT human**, then **1 INIT god** → KB land |
+| F.13 | Ship **F1–F9 in a single PR** (wave-ordered commits OK) |
+| F.14 | **Delivery harness** — `buzz_tasks` kind (`init`/`bug`/`enhancement`) + state (`bound`→`running`→`gated`→`done`/`halted`→`archived`) is resume SSOT; catch-up never replays full chat history |
+| F.15 | **Hub → task UX** — hub one-liner always; desktop **guarded auto-switch** to `#task-…` when Lead is on that tenant hub (never steal focus from another active task room) |
+| F.16 | **Trajectory hub mirror** — every `buzz_task_events` append also posts a **Buzz-light** one-liner on `#{tenant}-ops` (pointer + kind/state; no evidence dumps). SSOT remains PG events |
+| F.17 | **God: no rewind.** Rewind/reason gates are human-mode only (later). God plays forward `recommend` or `god_mode_halt` |
+| F.18 | **Ingress:** outline → `init` only; `bug`/`enhancement` → GitHub ticket bind only (no Buzz outline creates bug/enh) |
 
-### Debt to delete
+---
+
+## Floor polish → god verify (file-level plan)
+
+**Goal:** Finish collab/harness polish that blocks a clean god-mode guinea pig, then run verify INIT #2 (`ADH_AUTONOMY_MODE=god`).
+
+**Order:** T1 → T2 → T3 → T4 → T5 → **god verify**. Do not start god verify until T1–T4 green.
+
+### T1 — Trajectory densify + hub mirror
+
+| File | Change |
+|------|--------|
+| `src/models/buzz_models.py` | Ensure `TaskEventKind` covers: `GATE_OPEN`, `GOD_TAKEN`, `GOD_HALT`, `BATON`, `LAND`, `ARCHIVE`, `DELETE`, `INGRESS`, **`STATE`** (optional), **`REWIND`/`REWIND_DENIED`** stubs OK unused in god |
+| `src/business_services/buzz_service.py` | In `append_task_event`: after PG insert, **hub mirror** — `post_message` on task’s `hub_room_slug` (Buzz-light: ``traj `{kind}` `{task_id}` → #{task_room}`` + state). Fail-open (log, never fail the event write). Idempotent-ish: payload `traj_mirror: true` |
+| `src/adh_agents/runtime/gate_opener.py` | Already writes gate/god events + `set_task_state(GATED/HALTED)`; confirm hub mirror via service |
+| `src/adh_agents/base.py` | Baton trajectory rows already; ensure claim/done paths hit `append_task_event` |
+| `src/adh_agents/programmes/pm/pe_glue.py` | On product merge land+sync success → `TaskEventKind.LAND` + `set_task_state(RUNNING)` or keep gated until KB; on full product done before KB prefer stay `running` |
+| `src/adh_agents/programmes/kb/enrich.py` | On knowledge land+sync success → `LAND` + `set_task_state(DONE)` then archive coach |
+| `src/adh_agents/programmes/pm/task_lifecycle.py` | Archive/delete already; DONE before archive coach (done) |
+| `src/adh_agents/programmes/pm/authoring.py` | RUNNING after bind (done); refuse non-`init` if any outline path tries other kinds |
+| `tests/unit/test_traj_hub_mirror.py` | **NEW** — append_task_event posts hub mirror once; event row exists |
+
+### T2 — Desktop guarded auto-switch + listening strip
+
+| File | Change |
+|------|--------|
+| `apps/buzz-desktop/src/main.ts` | On hub SSE `payload.status=task_opened`: if `currentSlug === hub` for that tenant → `openRoom(task_room_slug)`; if already in another `task-*` → refresh sidebar + unread badge only (no focus steal). Parse `task_room` / `task_id` from payload |
+| `apps/buzz-desktop/src/main.ts` | Room header: **Listening** strip — members (PG) + presence dot if Redis/API available; poll members on `openRoom` + every ~15s |
+| `src/api/v1/buzz_router.py` | If missing: `GET …/rooms/{slug}/members`; optional `GET …/presence?room=` or fold presence into members DTO later |
+| `src/business_services/buzz_service.py` | `list_members` already — expose cleanly; presence list helper if needed |
+| `src/adh_agents/runtime/presence.py` | Ensure heartbeat keys queryable by room (or by tenant+role); document key shape |
+| `apps/buzz-desktop` CSS | Compact roster chips (`adh.pm ●`) |
+
+### T3 — Catch-up / harness hygiene (mostly landed — close gaps)
+
+| File | Change |
+|------|--------|
+| `src/adh_agents/agents/pm_agent.py` | Task-room catch-up: open PM gate + latest unacked Lead only (**done**) |
+| `src/adh_agents/runtime/catch_up.py` | Policy helpers (**done**) |
+| `src/adh_agents/runtime/orchestrator.py` | `_say` uses bound `role_id` (**done**); ingest ack (**done**) |
+| `src/adh_agents/runtime/room_resolve.py` | `collaboration_room` for army posts (**done**) |
+| `src/adh_agents/ingress/github_ingress.py` | Only path for `bug`/`enhancement`; outline path never creates those kinds — assert in authoring |
+| `src/adh_agents/programmes/pm/authoring.py` | Hard-lock `TaskKind.INIT` on outline bind |
+
+### T4 — Product/plan copy locks
+
+| File | Change |
+|------|--------|
+| `docs/specification/product/adh-agents-team-os.md` | F.15–F.18: hub mirror traj; guarded auto-switch; god no rewind; GH-only bug/enh; listening = members + presence |
+| `docs/specification/plans/adh-agents-implementation-plan.md` | This section (SSOT) |
+| `docs/specification/as-built/implementation-status.md` | Mark T1–T4 / god verify bar |
+
+### T5 — God verify (after T1–T4)
+
+| Step | Bar |
+|------|-----|
+| Set `ADH_AUTONOMY_MODE=god` in `.env`; restart PM/PE/Read/KB | Workers ready |
+| Clean or new RealWorld INIT outline on hub | Task opens; desktop switches if on hub; hub traj lines appear |
+| Zero Lead gate tokens through product path | `buzz_task_events` shows `god_taken` (not human); hub mirrors each |
+| Hermes judges; god only auto-plays **recommend ∈ reply_tokens** | Promote / post-pm confirm / merge / land — GateOpener; halt if unplayable |
+| Promote → meta-pm chain in god | No Lead `post-pm` kickoff; authoring `_god_chain_post_pm` + boot resume seam |
+| Forge recommend = Lead token | `brief_authorization.recommend=go ahead` (was `authorize` ∉ tokens) |
+| Dirty-meta sync in god | `ADH_GOD_ALLOW_DISCARD=true` required for Hermes `discard local` |
+| KB land without Lead | `LAND` + `DONE` |
+| Archive in god | GateOpener recommend `archive task` auto-plays; **`delete task` never** (halt token) |
+| Confirm no rewind prompts in god | Halt only if recommend unplayable |
+
+**Guinea pig:** `INIT-REALWORLD-004` (god) → product PR #12 + knowledge PR #13 → `LAND` → **`archive task` god_taken** → `state=archived` (by `adh.system`).
+
+**Human INIT #1** can finish in parallel (`go ahead` on KB land) but **god verify is the exit** for this polish wave.
+
+### Explicitly deferred (not in T1–T5)
+
+- Human rewind + reason gate (design discussed; build after god verify)
+- Dev/QA hire + catalogue-on-demand membership (north star; not blocking god)
+- Per-wave child rooms (rejected: one `#task-…` war room)
+- Trajectory UI timeline panel (hub one-liners + PG API enough for now)
+
+---
+
+## Storage map (code-level)
+
+| Store | Today | Floor wave |
+|-------|--------|------------|
+| PG `buzz_identities/rooms/messages` | Hub ops + messages | + task rooms, members, tasks, events, archive |
+| Redis `adh:agent:work:*` | Sessions 48h | **7d** TTL refresh |
+| Redis `adh:baton:*` | Handoffs 1d | unchanged role |
+| Redis presence | thin heartbeats | explicit presence keys |
+| Disk meta | prd/ + knowledge/ | unchanged artefact SSOT |
+
+---
+
+## F1–F9 — file-level plan (single PR)
+
+### F1 — Message API: latest window + cursor pagination
+
+| File | Action |
+|------|--------|
+| `src/models/buzz_models.py` | Add `MessagePage` (`items`, `has_more`) |
+| `src/business_services/buzz_service.py` | `list_messages(slug, *, limit=20, before_id=None)`; chrono ascending; `has_more` |
+| `src/api/v1/buzz_router.py` | `limit` default **20**; `before_id`; return page |
+| `tests/unit/test_buzz_list_messages.py` | **NEW** |
+
+**Exit:** `GET …/messages?limit=20` and `?before_id=` against Postgres only.
+
+### F2 — Buzz desktop UI
+
+| File | Action |
+|------|--------|
+| `apps/buzz-desktop/src/main.ts` | Load 20; scroll bottom; near-top prepend via `before_id`; SSE stick; jump-to-latest; sidebar active task rooms (after F3) |
+| `apps/buzz-desktop/src/style.css` | Load-earlier + jump-to-latest |
+| `src/api/buzz_ui/index.html` | **DELETE** (no dual UI) — desktop only |
+
+**Exit:** Cursor-like thread; no full-room dump.
+
+### F3 — Postgres tasks, members, archive, trajectory
+
+| File | Action |
+|------|--------|
+| `src/database/postgres/schema/buzz_schema.py` | **ADD** `BuzzTaskSchema`, `BuzzRoomMemberSchema`, `BuzzTaskEventSchema`; room kinds `ops\|task` |
+| `postgres_migrations/versions/<ts>_buzz_tasks_members_events.py` | **NEW** |
+| `src/models/buzz_models.py` | Task / Member / Event / Archive DTOs |
+| `src/business_services/buzz_service.py` | create task+room, list active/archived, archive, delete (purge messages+room), ensure_member, list_members, append_task_event |
+| `src/api/v1/buzz_router.py` | Task + member + archive/delete + events read routes |
+| `tests/unit/test_buzz_tasks.py` | **NEW** — unique `source_ref`; archive hides; delete purges |
+
+**Exit:** Durable task model; trajectory table ready (writers in F5/F8).
+
+### F4 — Redis live-only (TTL + presence)
+
+| File | Action |
+|------|--------|
+| `src/adh_agents/settings.py` | `work_ttl_seconds` default **604800** (7d); presence TTL; document baton 1d |
+| `src/adh_agents/runtime/work_store.py` | Confirm TTL refresh on every save |
+| `src/adh_agents/runtime/presence.py` | **NEW** — short-TTL presence keys |
+| `src/adh_agents/base.py` | Refresh presence while listening |
+| `tests/unit/test_presence.py` | **NEW** |
+| **Forbidden** | Any `adh:messages:*` or Redis archive |
+
+**Exit:** Gates survive 7d; chat untouched by Redis flush.
+
+### F5 — Hub join + CollabPost
+
+| File | Action |
+|------|--------|
+| `src/adh_agents/base.py` | Boot: ensure identity + hub member; presence |
+| `src/adh_agents/surface/buzz_poster.py` | `post_collab(...)` |
+| `src/adh_agents/base.py` emit_baton | CollabPost on create (task room); no idempotent spam |
+| Claim/done sites | `programmes/pe/review.py`, `pm/pe_glue.py`, `kb/enrich.py`, `read/walk.py`, `execution/dispatch_service.py` |
+| `tests/unit/test_collab_post_baton.py` | **NEW** |
+
+**Exit:** Army @-talk visible; baton NX unchanged.
+
+### F6 — Outline → task room; multi-room listen
+
+| File | Action |
+|------|--------|
+| `src/adh_agents/programmes/pm/authoring.py` | On outline bind: PG task `kind=init` + task room; hub announce; `session.room` = task room |
+| `src/adh_agents/baton/models.py` | `ops_room` = task room for army hops |
+| `src/adh_agents/base.py` / agents | Subscribe hub + `list_active_task_rooms(tenant)` |
+| `src/business_services/buzz_service.py` | `list_active_task_rooms` |
+| `src/adh_agents/runtime/orchestrator.py` | Gates bind in task room context |
+| `tests/unit/test_outline_opens_task_room.py` | **NEW** |
+
+**Exit:** INIT talk lives in `#task-INIT-…`.
+
+### F7 — Archive / delete tokens + UI lists
+
+| File | Action |
+|------|--------|
+| `src/adh_agents/collaboration/human_replies.py` | `archive task` / `delete task` / `keep open` |
+| `src/adh_agents/programmes/pm/task_lifecycle.py` | **NEW** (or wire meta_pm/pe_glue) — after done/halt coach archive |
+| `apps/buzz-desktop/src/main.ts` | Active vs archived lists; archived read-only |
+| `tests/unit/test_task_archive_tokens.py` | **NEW** |
+
+**Exit:** Lead puts work away without destroying history (unless delete).
+
+### F8 — GateOpener + god mode + trajectory writers
+
+| File | Action |
+|------|--------|
+| `src/adh_agents/runtime/autonomy.py` | **NEW** — `human\|god`; halt tokens refused; chain cap (Redis short); recommend ∈ reply_tokens |
+| `src/adh_agents/runtime/gate_opener.py` | **NEW** — save brief, coach, human return \| god `on_token` + Buzz audit + **`buzz_task_events`** |
+| `src/adh_agents/settings.py` | `AdhAutonomySettings` (`ADH_AUTONOMY_MODE`) |
+| `src/di/…` | Bind AutonomyPolicy + GateOpener singletons |
+| Route all live gates | `authoring.py`, `meta_pm.py`, `pe_glue.py`, `kb/enrich.py` — **only** GateOpener; delete direct open_brief clusters |
+| Fence | Unit/CI: no new `awaiting = AWAITING_JUDGMENT` outside `gate_opener.py` |
+| `tests/unit/test_autonomy_policy.py` | **NEW** |
+| `tests/unit/test_gate_opener.py` | **NEW** |
+
+**Exit:** God env closes gates via Hermes recommend; trajectory rows in PG; Lead ignored while god.
+
+### F9 — GitHub ingress stub (guinea pig)
+
+| File | Action |
+|------|--------|
+| `src/adh_agents/ingress/github_ingress.py` | **NEW** — bind API: issue/label → PG task `bug\|enhancement` + room; unique `source_ref` |
+| Poll stub | Minimal RealWorld label path (one poll/loop or make target) — **no** dual webhook path in this PR |
+| Fail closed | Missing hired role → Buzz stall |
+| `tests/unit/test_github_ingress_bind.py` | **NEW** |
+
+**Exit:** One labeled GH issue binds a task room; full Dev graph still later hire.
+
+---
+
+## Commit order inside the single PR
+
+```text
+F1 → F2 → F3 → F4 → F5 → F6 → F7 → F8 → F9
+```
+
+---
+
+## Guinea pig (RealWorld)
+
+| # | Mode | Bar |
+|---|------|-----|
+| 1 | `ADH_AUTONOMY_MODE=human` | Outline → task room → pagination/CollabPost → PE↔PM → merge → KB → **archive task** |
+| 2 | `ADH_AUTONOMY_MODE=god` | New outline → zero Lead gate tokens → KB land; `buzz_task_events` + **hub traj mirrors** show `god_taken` per gate; halt not auto-played; **no rewind** |
+
+---
+
+## Debt to delete in this PR
 
 | Debt | Removal |
 |------|---------|
-| `ack_pe` / stage `pm-pe-acked` / human `pm-pe-answers` gate | Delete |
-| Human-required `attest` before merge-ready | PE attests after settle (Lead may still `park`) |
-| `max_question_rounds` default 4 | Default 2 |
-| Forge jargon reply tokens at merge | Human phrases + aliases |
-| PE/PM prompts ignoring `knowledge/` | Shared OKF context loader |
-| Idempotent baton Buzz spam in PE emit helpers | Log only (match base.emit_baton) |
-
-### Target baton flow
-
-```text
-pe.review
-  → read.walk (unchanged)
-  → PE questions round 1 + brief + PR comment
-  → baton pm.pe_questions
-PM answers on PR + answers artefact (no human gate)
-  → baton pe.pm_answers
-PE evaluates: follow-up round 2 OR settle
-  → if round 2: questions again → pm.pe_questions (final)
-  → if settle: PE attest → baton pm.prd_merge_ready
-PM opens human merge coach only
-  → human: merge the product PR | park
-  → land + sync + kb.enrich
-```
-
-### File-level plan
-
-#### U6a — Shared OKF prompt context + human lexicon (**required**)
-
-| File | Action |
-|------|--------|
-| `src/adh_agents/collaboration/okf_context.py` | **NEW** — load thin OKF excerpts from `knowledge/{foundation,stacks,repos,contracts}` for initiative/repos; empty-safe |
-| `src/adh_agents/collaboration/human_replies.py` | **NEW** — canonical reply phrases + aliases (`merge the product PR` ↔ `go ahead` / `authorize prd_merge`; `park` ↔ `hold`) |
-| `src/adh_agents/collaboration/gate_coach.py` | Prefer human phrases in TokenAction examples |
-| `src/adh_agents/collaboration/delivery_voice.py` | Add hops: `clarifications_settled`, `product_answers` |
-| `tests/unit/test_okf_context.py` | **NEW** — missing heads → empty; present heads truncated |
-| `tests/unit/test_human_replies.py` | **NEW** — alias normalization |
-
-**Exit:** One loader; one lexicon SSOT. No programme-private synonym tables.
-
-#### U6b — PM auto-answer programme (**required** — replace ack gate)
-
-| File | Action |
-|------|--------|
-| `src/adh_agents/programmes/pm/pe_answers.py` | **NEW** — greenfield: load questions artefact; PromptService/LiteLLM answer; write `prd/reports/{INIT}-pm-pe-answers.md`; `comment_pr` on product PR; optional minimal PRD note section; emit `pe.pm_answers` |
-| `src/adh_agents/programmes/pm/pe_glue.py` | **REWRITE** — `pm.pe_questions` → call `pe_answers` (no human gate). Keep merge authorize path only; use human_replies lexicon |
-| `src/adh_agents/forge_acl/__init__.py` | PM may `comment_pr` (answers on product PR) |
-| `src/adh_agents/agents/pm_agent.py` | Catch `pm.pe_questions` → pe_glue/pe_answers; drop any ack_pe handling |
-| `src/adh_agents/runtime/work_models.py` | Drop reliance on `pm-pe-answers` / `pm-pe-acked` stages (or mark obsolete) |
-| `tests/unit/test_pm_pe_answers.py` | **NEW** — answers artefact shape; emits `pe.pm_answers`; **no** open brief |
-
-**Exit:** Zero `ack_pe` in repo. `pm.pe_questions` never opens AWAITING_JUDGMENT.
-
-#### U6c — PE settle loop + agent attest (**required**)
-
-| File | Action |
-|------|--------|
-| `src/adh_agents/programmes/pe/settle.py` | **NEW** — consume `pe.pm_answers`; decide follow-up vs settle (round < 2 and open deltas → round 2; else settle) |
-| `src/adh_agents/programmes/pe/review.py` | Wire settle; after settle call `_attest` then `pm.prd_merge_ready`; progress Buzz only mid-rally (no human gate); delete human-required attest as the happy path |
-| `src/adh_agents/programmes/pe/gate1_brief.py` | Post-settle brief variant: “clarifications settled — human review for merge”; delivery voice |
-| `src/adh_agents/programmes/pe/questions.py` | Optional: pass OKF context into recommendations; strip Gate‑1 jargon from human-facing question docs |
-| `src/adh_agents/agents/pe_agent.py` | Handle `pe.pm_answers` baton; keep Lead `park` / explicit `need another round` escape only; remove mid-rally ack dependency |
-| `src/adh_agents/settings.py` | `max_question_rounds` default **2**; document agent rally |
-| `src/adh_agents/baton/models.py` / emit sites | Register types `pe.pm_answers` (and keep `pm.pe_questions`, `pm.prd_merge_ready`) |
-| `tests/unit/test_pe_settle.py` | **NEW** — round1→answers→settle; round1→answers→round2→settle; cap stop |
-
-**Exit:** Happy path reaches merge coach with **no** human Buzz between draft-open and merge authorize (except optional `park`).
-
-#### U6d — Post-rally human merge coach only (**required**)
-
-| File | Action |
-|------|--------|
-| `src/adh_agents/programmes/pm/pe_glue.py` | `_open_merge_gate` / DONE coach: “Clarifications settled. Review briefs outside ADH.” Tokens via `human_replies` |
-| `src/adh_agents/programmes/pm/meta_pm.py` | Ensure resume never reopens pe-answers human gate |
-| `src/adh_agents/runtime/orchestrator.py` | Bind aliases through human_replies when matching tokens |
-| `tests/unit/test_merge_lexicon.py` | **NEW** — `merge the product PR` and `go ahead` both land path |
-
-**Exit:** One human judgment after settle = land or park.
-
-#### U6e — Docs + dead code sweep + proof (**required**)
-
-| File | Action |
-|------|--------|
-| Grep purge | Delete all `ack_pe`, `pm-pe-acked`, “ack the answers” human copy |
-| `docs/specification/product/adh-agents-team-os.md` | Lock U6 rally + human-after-briefs |
-| `docs/specification/plans/adh-agents-implementation-plan.md` | This section |
-| `docs/specification/as-built/implementation-status.md` | Tick U6 when green |
-| RealWorld scratch guinea pig | After U6: outline→…→army Q&A (no ack_pe)→merge coach→KB |
-
-**Exit:** Guinea pig transcript matches product lock; no mid-rally human tokens.
-
-### Order (fixed)
-
-```text
-U6a (context + lexicon) → U6b (PM answers) → U6c (PE settle + attest) → U6d (merge coach) → U6e (sweep + proof)
-```
-
----
-
-## Develop merge ledger (recent)
-
-| PR | Summary |
-|----|---------|
-| #17 | PE questions/attest + PM pe_glue / `prd_merge` |
-| #21 | Gate‑1 decision paper + global temp purge |
-| #22 | GraphQL undraft before `prd_merge` |
-| next | U1–U5 helpful-army coach + land/sync |
-
----
-
-## Layout (landed + planned)
-
-```text
-src/adh_agents/
-  base.py                 # + post_human_next
-  collaboration/
-    brief_service.py
-    temp_papers.py
-    gate_coach.py         # NEW
-    delivery_voice.py     # NEW
-  runtime/orchestrator.py # U2 routing
-  programmes/pm|pe|read|kb/
-  agents/
-
-src/infra_services/
-  forge_action_service.py # + land_pull_request
-  github_app_service.py   # GraphQL undraft
-  pm_workspace_service.py # + sync_integration_branch
-```
+| Default message dump limit 200 in UI | UI uses 20 + cursor |
+| `src/api/buzz_ui/index.html` dual client | Delete |
+| Direct gate open_brief+post clusters | GateOpener only |
+| Machine-only baton Buzz as primary collab UX | CollabPost |
+| Any Redis message/archive design | Forbidden |
+| Trajectory markdown under `prd/reports/` | Forbidden |
+| “One ops room forever / no per-task rooms” product copy | Superseded by hub+task |
 
 ---
 
@@ -392,18 +295,42 @@ src/infra_services/
 
 | Gate | Bar |
 |------|-----|
-| D1–D5 | As before (PE/PM/read/kb/harden/purge/undraft) |
-| U1 | Working role posts coach; delivery lexicon; outside-ADH + exact tokens |
-| U2 | One open human gate; no false PE/KB resume on Lead tokens |
-| U3 | Authorize → merge + local develop == `origin/develop` |
-| U4 | KB `go ahead` lands knowledge PR; no “merge on forge” Next |
-| U5 | No zombie product draft after merge; RealWorld proof |
+| F1–F2 | Last 20 + scroll-up page; live stick-to-bottom |
+| F3 | Tasks/members/events/archive in Postgres |
+| F4 | Work TTL 7d; presence; no chat in Redis |
+| F5–F6 | Hub roster; task room army talk; multi-room listen |
+| F7 | Archive/delete Lead-controlled |
+| F8 | God INIT with trajectory; human INIT still works |
+| F9 | GH bind stub creates task without double-bind |
 
-## Out of scope (unchanged)
+---
 
-- Stratum 20-repo production fan-out  
-- Full QA docker programme  
-- Codegraph MCP (port stub until later hire)  
-- Reviving HermesService / dual session stores  
-- TaskGraph as a separate hire (Impact-Map remains SSOT for repo DAG until then)  
-- Replacing Cursor/IDE as the human reading surface  
+## Out of scope (this PR)
+
+- Webhook-grade GH ingress (poll stub only)
+- Dev / QA / IaC / TaskGraph hires
+- Auto-delete task rooms on Redis TTL
+- Trajectory files in meta git
+- Splitting F1–F9 across multiple product PRs
+
+---
+
+## Landed reference (condensed)
+
+U1–U6 file plans executed: `gate_coach`, `delivery_voice`, `post_human_next`, land+sync, KB land+approve, PE↔PM settle, OKF context, human_replies. See git history PRs #21–#24 and as-built.
+
+### Develop merge ledger (recent)
+
+| PR | Summary |
+|----|---------|
+| #21 | Gate‑1 decision paper + global temp purge |
+| #22 | GraphQL undraft before merge |
+| #23 | U1–U6 helpful-army + clarification rally |
+| #24 | KB land pre-approve + reopen Buzz gate |
+| next | **F1–F9 Team floor (single PR)** |
+
+---
+
+## Later hires (unchanged north star)
+
+dev / qa / iac / sre / obs · codegraph MCP · TaskGraph as hire when Impact-Map alone is insufficient for mutate tiers.

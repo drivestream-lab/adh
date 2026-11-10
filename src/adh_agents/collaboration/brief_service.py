@@ -117,7 +117,8 @@ class HermesBriefService(BaseBusinessService):
             question=f"Authorize `{action}`{target}? Nothing runs until you say so.",
             example=f"Hermes will run the forge action `{action}` as the product App. It never merges.",
             options=[f"authorize{_MEANS_SEP}run {action} now"],
-            recommend="authorize",
+            # Lead-facing token must equal recommend so god can auto-play Hermes judgment.
+            recommend="go ahead",
             bluf="Nothing is pushed until you authorize this action.",
             reply_tokens=["go ahead", f"authorize {action}"],
         )
