@@ -644,6 +644,41 @@ class GitHubAppService(BaseInfraService):
         logger.info("Merged pull request", repo=repo, pr=pr_number, sha=sha)
         return sha or f"https://github.com/{org}/{repo}/pull/{pr_number}"
 
+    async def close_pull_request(
+        self,
+        token: str,
+        repo: str,
+        *,
+        pr_number: int,
+        comment: str | None = None,
+    ) -> None:
+        """Close a PR (zombie / superseding draft hygiene). Optionally comment first."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        headers = _token_headers(token)
+        if comment and comment.strip():
+            await self.create_issue_comment(
+                token, repo, issue_number=pr_number, body=comment.strip()
+            )
+        closed = await self._request(
+            "PATCH",
+            f"{api}/repos/{org}/{repo}/pulls/{pr_number}",
+            headers=headers,
+            json={"state": "closed"},
+        )
+        if closed.status_code >= 400:
+            logger.info(
+                "GitHub close pull request failed",
+                repo=repo,
+                pr=pr_number,
+                status=closed.status_code,
+                body=closed.text[:300],
+            )
+            closed.raise_for_status()
+        logger.info("Closed pull request", repo=repo, pr=pr_number)
+
     async def replace_issue_labels(
         self,
         token: str,

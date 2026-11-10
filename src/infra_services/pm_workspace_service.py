@@ -364,6 +364,97 @@ class PmWorkspaceService(BaseInfraService):
                 purged.append(relative)
         return purged
 
+    def sync_integration_branch(
+        self, tenant: TenantContext, *, force: bool = False
+    ) -> dict[str, str]:
+        """Fetch + fast-forward (or hard-reset) local meta to ``origin/{integration_branch}``.
+
+        Dirty worktree without ``force`` raises ``ValidationError`` — never silent drift.
+        Returns ``{"branch", "sha", "mode"}``.
+        """
+        import subprocess
+
+        root = Path(tenant.meta_root).expanduser()
+        if not root.is_dir():
+            raise ValidationError(f"meta root missing for sync: {root}")
+        git_dir = root / ".git"
+        if not git_dir.exists():
+            raise ValidationError(f"meta root is not a git checkout: {root}")
+        branch = (tenant.integration_branch or "develop").strip() or "develop"
+
+        def _run(*args: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                ["git", *args],
+                cwd=str(root),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        status = _run("status", "--porcelain")
+        if status.returncode != 0:
+            raise ValidationError(
+                f"git status failed in {root}: {(status.stderr or status.stdout)[:200]}"
+            )
+        dirty = bool((status.stdout or "").strip())
+        if dirty and not force:
+            raise ValidationError(
+                f"local meta is dirty under {root}; reply `discard local` to reset "
+                f"to origin/{branch}, or `hold`"
+            )
+
+        fetch = _run("fetch", "origin", branch)
+        if fetch.returncode != 0:
+            raise ValidationError(
+                f"git fetch origin {branch} failed: {(fetch.stderr or fetch.stdout)[:300]}"
+            )
+
+        if dirty and force:
+            reset = _run("reset", "--hard", f"origin/{branch}")
+            if reset.returncode != 0:
+                raise ValidationError(
+                    f"git reset --hard origin/{branch} failed: "
+                    f"{(reset.stderr or reset.stdout)[:300]}"
+                )
+            # Untracked temps also trip porcelain dirty — discard them with force.
+            cleaned = _run("clean", "-fd")
+            if cleaned.returncode != 0:
+                raise ValidationError(
+                    f"git clean -fd failed: {(cleaned.stderr or cleaned.stdout)[:300]}"
+                )
+            mode = "hard_reset"
+        else:
+            # Prefer checkout + ff-only merge so we never invent history.
+            checkout = _run("checkout", branch)
+            if checkout.returncode != 0:
+                raise ValidationError(
+                    f"git checkout {branch} failed: {(checkout.stderr or checkout.stdout)[:300]}"
+                )
+            merge = _run("merge", "--ff-only", f"origin/{branch}")
+            if merge.returncode != 0:
+                # Fall back to hard reset when ff-only cannot (diverged local tip).
+                reset = _run("reset", "--hard", f"origin/{branch}")
+                if reset.returncode != 0:
+                    raise ValidationError(
+                        f"git sync failed (ff-only + reset): "
+                        f"{(merge.stderr or '')[:150]} | {(reset.stderr or '')[:150]}"
+                    )
+                mode = "hard_reset_diverged"
+            else:
+                mode = "ff_only"
+
+        rev = _run("rev-parse", "HEAD")
+        sha = (rev.stdout or "").strip() if rev.returncode == 0 else ""
+        logger.info(
+            "Synced integration branch",
+            slug=tenant.slug,
+            branch=branch,
+            sha=sha,
+            mode=mode,
+            force=force,
+        )
+        return {"branch": branch, "sha": sha, "mode": mode}
+
     def move_local(
         self, tenant: TenantContext, relative_path: str, dest_relative: str
     ) -> Optional[Path]:

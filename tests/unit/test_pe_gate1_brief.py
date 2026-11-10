@@ -69,9 +69,12 @@ def test_gate1_buzz_stays_light() -> None:
         brief_path="prd/reports/INIT-X-hermes-gate1-brief.md",
         questions_path="prd/reports/PE-Product-Questions-INIT-X.md",
     )
-    assert "decision paper ready" in bluf
+    assert "**I did.**" in bluf
     assert "**Buying.**" not in bluf
-    assert "attest" in bluf
+    assert "ack_pe" not in bluf
+    assert "Gate‑1" not in bluf
+    assert "Gate-1" not in bluf
+    assert "park" in bluf or "another round" in bluf
 
 
 def test_gate1_temp_paths_include_brief() -> None:

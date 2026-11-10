@@ -203,8 +203,7 @@ class Orchestrator(BaseBusinessService):
                 if match_reply_token(body, brief.reply_tokens) is not None:
                     hits.append(session)
             elif session.awaiting == AWAITING_AUTHORIZATION:
-                lowered = body.lower()
-                if any(t.lower() in lowered for t in brief.reply_tokens):
+                if match_reply_token(body, brief.reply_tokens) is not None:
                     hits.append(session)
         return hits
 
@@ -278,10 +277,14 @@ class Orchestrator(BaseBusinessService):
             return True
 
         # Live Redis sessions (stalled mid-hop or mid-programme) before artefacts.
+        # U2/U5: never auto-resume a landed product merge as if it needed another draft PR.
+        _MERGED = frozenset({"prd-merged", "prd_merged"})
         live_resume = [
             s
             for s in meta_sessions
             if (s.initiative or "").strip()
+            and (s.stage or "").strip() not in _MERGED
+            and not (s.slots.get("merge_sha") or "").strip()
             and (
                 bool(s.slots.get("stalled_hop"))
                 or (
@@ -308,7 +311,38 @@ class Orchestrator(BaseBusinessService):
                 ),
             )
 
-        resumable = runner.list_resumable(tenant)
+        # U5: if every live meta session is already merged, do not fall through to
+        # artefact-backed draft-PR authorize (Impact-Map still on disk).
+        merged_only = [
+            s
+            for s in meta_sessions
+            if (s.stage or "").strip() in _MERGED or (s.slots.get("merge_sha") or "").strip()
+        ]
+        if merged_only and not live_resume and not open_gates:
+            inits = sorted(
+                {(s.initiative or "").strip().upper() for s in merged_only if s.initiative}
+            )
+            label = ", ".join(f"`{i}`" for i in inits) or "this initiative"
+            await self._say(
+                room,
+                (
+                    f"Product PR already merged for {label}. "
+                    "No product draft to reopen — waiting on knowledge docs / a new intent."
+                ),
+                EventType.DONE,
+            )
+            return True
+
+        merged_inits = {
+            (s.initiative or "").strip().upper()
+            for s in meta_sessions
+            if (s.stage or "").strip() in _MERGED or (s.slots.get("merge_sha") or "").strip()
+        }
+        resumable = [
+            row
+            for row in runner.list_resumable(tenant)
+            if (row.get("initiative") or "").strip().upper() not in merged_inits
+        ]
         if len(resumable) == 1:
             init = resumable[0]["initiative"]
             await self._say(
@@ -551,8 +585,7 @@ class Orchestrator(BaseBusinessService):
         brief: JudgmentRequest,
         body: str,
     ) -> bool:
-        lowered = body.lower()
-        if not any(t.lower() in lowered for t in brief.reply_tokens):
+        if match_reply_token(body, brief.reply_tokens) is None:
             await self._say(
                 room,
                 f"Not authorized yet. Reply {_fmt(brief.reply_tokens)} (or `stop`).",
@@ -667,7 +700,13 @@ class Orchestrator(BaseBusinessService):
 
 
 def match_reply_token(body: str, tokens: list[str]) -> Optional[str]:
-    """Exact (case-insensitive) or line-prefix match against the brief's own tokens."""
+    """Match Lead body to a brief token, including human-reply aliases (U6)."""
+    from src.adh_agents.collaboration.human_replies import normalize_reply
+
+    hit = normalize_reply(body, tokens)
+    if hit is not None:
+        return hit
+    # Fallback: exact / prefix without alias table (custom VF tokens etc.).
     lines = [ln.strip().lower() for ln in body.splitlines() if ln.strip()]
     for token in tokens:
         key = token.strip().lower()

@@ -8,6 +8,8 @@ from src.adh_agents.base import BaseHermesAgent
 from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.programmes.kb.enrich import KbEnrichProgramme
 from src.adh_agents.runtime.orchestrator import Orchestrator
+from src.adh_agents.runtime.work_models import AWAITING_AUTHORIZATION, AWAITING_JUDGMENT
+from src.adh_agents.runtime.work_store import AgentWorkStore
 from src.adh_agents.settings import KbAgentSettings
 from src.business_services.buzz_service import BuzzService
 from src.configs.hermes_settings import HermesSettings
@@ -26,12 +28,14 @@ class KbAgent(BaseHermesAgent):
         tenants: TenantRegistryService,
         orchestrator: Orchestrator,
         enrich: KbEnrichProgramme,
+        work_store: AgentWorkStore,
     ) -> None:
         settings = KbAgentSettings.get_instance()
         super().__init__(buzz=buzz, batons=batons, settings=settings)
         self._tenants = tenants
         self._orchestrator = orchestrator
         self._enrich = enrich
+        self._work_store = work_store
         self._lead = HermesSettings.get_instance().lead_handle
 
     async def initialize(self) -> None:
@@ -71,4 +75,17 @@ class KbAgent(BaseHermesAgent):
                 await self._enrich.handle_baton(baton, room=room)
                 return
         if message.kind == MessageKind.MESSAGE and (message.identity_handle or "") == self._lead:
-            await self._orchestrator.handle_lead_message(tenant, room, message)
+            body = (message.body or "").strip()
+            # U2: KB silent unless open knowledge gate or explicit resume.
+            if "resume" in body.lower():
+                await self._orchestrator.handle_lead_message(tenant, room, message)
+                return
+            active = await self._work_store.list_active(tenant.slug, self.role_id)
+            open_gates = [
+                s
+                for s in active
+                if s.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION)
+                and s.open_brief is not None
+            ]
+            if open_gates:
+                await self._orchestrator.handle_lead_message(tenant, room, message)

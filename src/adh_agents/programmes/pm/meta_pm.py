@@ -136,10 +136,16 @@ class MetaPmProgrammeService(BaseBusinessService):
         await self._run_validate_cycle(tenant, room, session, pass_number=1)
 
     def list_resumable(self, tenant: TenantContext) -> list[dict[str, str]]:
-        """Artefact-backed recovery candidates: initiative + gate label."""
+        """Artefact-backed recovery candidates: initiative + gate label.
+
+        U5: skip INITs whose product PR already merged (no zombie draft-PR authorize).
+        """
         listing = self._workspace.inventory(tenant)
         rows: list[dict[str, str]] = []
         for init in listing.inits:
+            # Merged product PRs must not reappear as draft-PR authorize candidates.
+            # Live session stage wins when present.
+            # (Artefact-only path cannot see Redis; callers with live sessions prefer those.)
             impact = (self._workspace.read_local(tenant, impact_map_path(init)) or "").strip()
             if impact:
                 rows.append(
@@ -313,6 +319,19 @@ class MetaPmProgrammeService(BaseBusinessService):
                 return
             await self._impact_pass(tenant, room, session)
             return
+        if stage in {"prd-merged", "prd_merged"}:
+            # U5 — product already landed; never reopen draft-PR authorize.
+            await self._poster.post_status(
+                room,
+                (
+                    f"**{init}** product PR already merged. "
+                    "No new product draft unless you start an explicit new intent. "
+                    "Waiting on KB for knowledge docs."
+                ),
+                EventType.DONE,
+                {"status": "prd_already_merged", "initiative": init},
+            )
+            return
         if stage == "prd-pr-action":
             await self._open_forge_auth(tenant, room, session)
             return
@@ -327,6 +346,18 @@ class MetaPmProgrammeService(BaseBusinessService):
             )
             return
         # Unknown stage — fall through to artefact resume without wiping slots.
+        # U5: if merge_sha already on session, refuse draft reopen.
+        if (session.slots.get("merge_sha") or "").strip():
+            await self._poster.post_status(
+                room,
+                (
+                    f"**{init}** already has a landed product merge marker. "
+                    "Refusing another product draft PR authorize."
+                ),
+                EventType.STALL,
+                {"status": "refuse_superseding_draft", "initiative": init},
+            )
+            return
         await self._poster.post_status(
             room,
             (
@@ -396,8 +427,22 @@ class MetaPmProgrammeService(BaseBusinessService):
     ) -> None:
         """Continue after Lead answered an open brief."""
         stage = session.stage
-        if stage in {"pm-pe-answers", "prd-merge"}:
+        if stage == "prd-merge":
             await self._pe_glue.after_judgment(tenant, room, session, token)
+            return
+        if stage in {"pm-pe-answers", "pm-pe-acked"}:
+            # U6 dead path — mid-rally human ack removed; ignore stale sessions.
+            session.awaiting = AWAITING_NONE
+            session.open_brief = None
+            await self._store.save(session)
+            await self._poster.post_status(
+                room,
+                (
+                    f"Ignoring obsolete mid-rally ack for {session.initiative} "
+                    "(clarifications are agent↔agent now)."
+                ),
+                EventType.PROGRESS,
+            )
             return
         if stage == "requirements-human-decision" or stage == "validate-requirements":
             await self._apply_vf_token(tenant, room, session, token)
@@ -1056,7 +1101,23 @@ class MetaPmProgrammeService(BaseBusinessService):
 
         Slots for forge ``open_draft_pr`` are seeded here; dispatch also fills
         defaults and pushes the draft head via GitHub Contents API (not ``gh``).
+        U5: refuse when this INIT already merged a product PR.
         """
+        init_check = (session.initiative or "").strip().upper()
+        if (session.slots.get("merge_sha") or "").strip() or (session.stage or "").strip() in {
+            "prd-merged",
+            "prd_merged",
+        }:
+            await self._poster.post_status(
+                room,
+                (
+                    f"**{init_check}** product PR already merged — "
+                    "refusing a superseding product draft authorize."
+                ),
+                EventType.STALL,
+                {"status": "refuse_superseding_draft", "initiative": init_check},
+            )
+            return
         del tenant  # forge uses tenant at authorize time
         session.stage = "prd-pr-action"
         node = self._navigator.current(session)
@@ -1076,19 +1137,30 @@ class MetaPmProgrammeService(BaseBusinessService):
         session.awaiting = AWAITING_AUTHORIZATION
         await self._store.save(session)
         impact = impact_map_path(init)
-        await self._poster.post_status(
+        from src.adh_agents.collaboration.gate_coach import TokenAction
+
+        await self._poster.post_human_next(
             room,
-            (
-                f"Impact-Map ready (`{impact}`). "
-                "PRD is ready for draft PR — authorize when you want.\n\n"
-                + self._briefs.format_brief_markdown(session.open_brief)
+            i_did=f"Impact-Map ready for **{init}** (`{impact}`). Product write-up is ready for a draft PR.",
+            recommend="go ahead",
+            recommend_why="Open the product draft PR when you are ready — nothing pushes until you authorize.",
+            evidence=f"`{impact}`",
+            outside_adh=(
+                f"Skim the Impact-Map and PRD in Cursor (`{impact}`, `prd/{init}.md`) "
+                "before authorizing. Do **not** open the PR yourself on GitHub."
             ),
-            EventType.PROGRESS,
-            {
+            tokens=[
+                TokenAction("go ahead", "open the product draft PR on meta"),
+                TokenAction("authorize open_draft_pr", "same as go ahead"),
+                TokenAction("hold", "park — no draft PR yet"),
+            ],
+            hop="prd-pr-action",
+            payload={
                 "status": "need_pr_authorize",
                 "initiative": session.initiative,
                 "artefact": impact,
                 "head_branch": session.slots.get("head_branch"),
+                "purpose": "prd-pr-action",
             },
         )
 

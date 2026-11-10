@@ -15,6 +15,7 @@ from src.adh_agents.programmes.pe.review import PeReviewProgramme
 from src.adh_agents.programmes.pm.authoring import AuthoringProgrammeService
 from src.adh_agents.programmes.pm.http_lanes import PmHttpLanesService
 from src.adh_agents.programmes.pm.meta_pm import MetaPmProgrammeService
+from src.adh_agents.programmes.pm.pe_answers import PmPeAnswersProgramme
 from src.adh_agents.programmes.pm.pe_glue import PmPeGlueProgramme
 from src.adh_agents.programmes.read.walk import ReadWalkProgramme
 from src.adh_agents.runtime.orchestrator import Orchestrator
@@ -39,6 +40,7 @@ class BusinessServicesModule(Module):
         binder.bind(HermesDispatchService, to=HermesDispatchService, scope=singleton)
         binder.bind(HermesBuzzPoster, to=HermesBuzzPoster, scope=singleton)
         binder.bind(Orchestrator, to=Orchestrator, scope=singleton)
+        binder.bind(PmPeAnswersProgramme, to=PmPeAnswersProgramme, scope=singleton)
         binder.bind(PmPeGlueProgramme, to=PmPeGlueProgramme, scope=singleton)
         binder.bind(MetaPmProgrammeService, to=MetaPmProgrammeService, scope=singleton)
         binder.bind(AuthoringProgrammeService, to=AuthoringProgrammeService, scope=singleton)

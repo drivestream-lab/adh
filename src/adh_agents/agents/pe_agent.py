@@ -1,4 +1,4 @@
-"""PEAgent — Gate-1; embeds Orchestrator; claims pe.review batons."""
+"""PEAgent — product brief / clarification rally; embeds Orchestrator."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.programmes.pe.review import PeReviewProgramme
 from src.adh_agents.programmes.pm.lead_tokens import extract_initiative
 from src.adh_agents.runtime.orchestrator import Orchestrator
+from src.adh_agents.runtime.work_models import AWAITING_AUTHORIZATION, AWAITING_JUDGMENT
 from src.adh_agents.settings import PeAgentSettings
 from src.business_services.buzz_service import BuzzService
 from src.configs.hermes_settings import HermesSettings
@@ -17,9 +18,9 @@ from src.models.buzz_models import MessageKind, MessageRead
 from src.models.tenant_models import TenantContext
 
 _GATE1_VERBS = frozenset({"gate1", "review"})
-# Conversational forks while auto-awaiting PM (no open brief / judgment gate).
+# Lead escape hatches only — happy path is agent settle after pe.pm_answers (U6).
 _GATE1_FORK_TOKENS = frozenset(
-    {"attest", "approve", "new_round", "round_again", "hold", "await_pm"}
+    {"attest", "approve", "new_round", "round_again", "hold", "park", "await_pm"}
 )
 
 
@@ -52,24 +53,29 @@ class PEAgent(BaseHermesAgent):
         self.logger.info("PEAgent listening", rooms=rooms)
 
     async def _catch_up_pending_batons(self) -> None:
-        """Claim pe.review batons parked before this worker was online."""
+        """Claim pe.review / pe.pm_answers batons parked before this worker was online."""
         ttl = int(self._agent_settings.baton_ttl_seconds)
         for tenant in self._tenants.active():
             await self._batons.reclaim_stale(tenant=tenant.slug, max_age_seconds=ttl)
-            pending = await self._batons.list_pending_for(
-                tenant=tenant.slug, to_role=self.role_id, baton_type="pe.review"
-            )
-            for baton in pending:
-                await self._pe.handle_baton(baton, room=tenant.ops_room)
+            for baton_type in ("pe.review", "pe.pm_answers"):
+                pending = await self._batons.list_pending_for(
+                    tenant=tenant.slug, to_role=self.role_id, baton_type=baton_type
+                )
+                for baton in pending:
+                    if baton.type == "pe.pm_answers":
+                        await self._pe.handle_pm_answers(baton, room=tenant.ops_room)
+                    else:
+                        await self._pe.handle_baton(baton, room=tenant.ops_room)
 
     async def handle_ops_message(self, room: str, message: MessageRead) -> None:
         tenant = self._tenants.by_ops_room(room)
         if tenant is None:
             return
         payload = message.payload or {}
+        baton_type = str(payload.get("baton_type") or "")
         if (
             payload.get("status") == "baton_emitted"
-            and payload.get("baton_type") == "pe.review"
+            and baton_type in {"pe.review", "pe.pm_answers"}
             and payload.get("idempotency_key")
         ):
             baton = await self._batons.get(
@@ -77,7 +83,10 @@ class PEAgent(BaseHermesAgent):
                 idempotency_key=str(payload["idempotency_key"]),
             )
             if baton is not None:
-                await self._pe.handle_baton(baton, room=room)
+                if baton_type == "pe.pm_answers":
+                    await self._pe.handle_pm_answers(baton, room=room)
+                else:
+                    await self._pe.handle_baton(baton, room=room)
                 return
         if message.kind == MessageKind.MESSAGE and (message.identity_handle or "") == self._lead:
             body = (message.body or "").strip()
@@ -90,22 +99,40 @@ class PEAgent(BaseHermesAgent):
                 return
             if await self._try_gate1_fork(tenant, room, body):
                 return
-            await self._orchestrator.handle_lead_message(tenant, room, message)
+            # U2: PE stays silent unless open human gate or explicit resume.
+            lowered = body.lower()
+            if "resume" in lowered:
+                await self._orchestrator.handle_lead_message(tenant, room, message)
+                return
+            active = await self._pe.list_active(tenant.slug)
+            open_gates = [
+                s
+                for s in active
+                if s.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION)
+                and s.open_brief is not None
+            ]
+            if open_gates:
+                await self._orchestrator.handle_lead_message(tenant, room, message)
 
     async def _try_gate1_fork(self, tenant: TenantContext, room: str, body: str) -> bool:
-        """Handle attest / new_round / hold while stage=gate1_await_pm (auto await_pm)."""
-        token = body.strip().lower().split()[0] if body.strip() else ""
-        if token not in _GATE1_FORK_TOKENS:
-            return False
+        """Lead escape: attest / need another round / park (happy path is agent settle)."""
+        lowered = (body or "").strip().lower()
+        if lowered.startswith("need another round"):
+            token = "need another round"
+        else:
+            token = lowered.split()[0] if lowered else ""
+            if token not in _GATE1_FORK_TOKENS:
+                return False
         active = await self._pe.list_active(tenant.slug)
         candidates = [
-            s for s in active if s.stage in {"gate1_await_pm", "gate1_questions", "gate1_review"}
+            s
+            for s in active
+            if s.stage in {"gate1_await_pm", "gate1_questions", "gate1_review", "gate1_settled"}
         ]
         if not candidates:
             return False
         session = candidates[0]
         if len(candidates) > 1:
-            # Prefer INIT mentioned in body when several Gate‑1 sessions are open.
             mentioned = extract_initiative(body, tenant.init_prefix)
             if mentioned:
                 matched = [
@@ -133,10 +160,7 @@ class PEAgent(BaseHermesAgent):
 
 
 def _parse_gate1_command(body: str, tenant: TenantContext) -> tuple[str, str] | None:
-    """Lead shorthand: ``gate1 INIT-…`` / ``pe review INIT-…`` [optional PR URL].
-
-    Uses shared initiative extraction — not a private INIT- regex.
-    """
+    """Lead shorthand: ``gate1 INIT-…`` / ``pe review INIT-…`` [optional PR URL]."""
     parts = body.split()
     if not parts:
         return None

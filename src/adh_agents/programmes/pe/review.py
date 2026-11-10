@@ -22,6 +22,7 @@ from src.adh_agents.programmes.pe.questions import (
     format_questions_document,
     impact_map_path,
 )
+from src.adh_agents.programmes.pe.settle import decide_settle
 from src.adh_agents.collaboration.temp_papers import (
     PurgeContext,
     PurgeEvent,
@@ -88,31 +89,134 @@ class PeReviewProgramme(BaseBusinessService):
     async def after_judgment(
         self, tenant: TenantContext, room: str, session: AgentWorkSession, token: str
     ) -> None:
+        """Lead escape hatches only — happy path is agent settle after pe.pm_answers."""
         lowered = (token or "").strip().lower()
         if lowered in {"attest", "approve"}:
             await self._attest(tenant, room, session)
             return
-        if lowered in {"new_round", "round_again"}:
+        if lowered in {"new_round", "round_again", "need another round"}:
             await self._post_questions(tenant, room, session, bump_round=True)
             return
-        if lowered in {"hold", "await_pm"}:
+        if lowered in {"hold", "park", "await_pm"}:
             session.stage = "gate1_await_pm"
             session.awaiting = AWAITING_NONE
             session.open_brief = None
             await self._store.save(session)
             await self._poster.post_status(
                 room,
-                f"PE holding Gate‑1 for {session.initiative} — waiting on PM answers.",
+                f"PE holding product brief for {session.initiative} — parked by Lead.",
                 EventType.PROGRESS,
                 identity_handle=self.role_id,
             )
-            await self._emit_pm_questions_baton(tenant, session)
             return
         await self._poster.post_status(
             room,
             f"PE recorded `{token}` for {session.initiative or session.work_id}.",
             EventType.PROGRESS,
             identity_handle=self.role_id,
+        )
+
+    async def handle_pm_answers(self, baton: Baton, *, room: str) -> Rollup:
+        """U6: consume pe.pm_answers → follow-up round or settle+attest."""
+        ttl = int(self._settings.baton_ttl_seconds)
+        claimed = await self._batons.claim(baton, claimant=self.role_id, ttl=ttl)
+        if not claimed:
+            return Rollup(
+                baton_id=baton.id,
+                role=self.role_id,
+                status=BatonStatus.FAILED,
+                summary="claim failed",
+                correlation_id=baton.correlation_id,
+                error="claim_failed",
+            )
+        await self._batons.mark_running(baton, ttl=ttl)
+        tenant = self._tenants.by_slug(baton.tenant)
+        if tenant is None:
+            await self._batons.mark_done(baton, ttl=ttl, error="unknown_tenant")
+            return Rollup(
+                baton_id=baton.id,
+                role=self.role_id,
+                status=BatonStatus.FAILED,
+                summary="unknown tenant",
+                correlation_id=baton.correlation_id,
+                error="unknown_tenant",
+            )
+        ops = room or baton.ops_room
+        init = (baton.initiative or "").strip().upper()
+        session = await self._store.load(tenant.slug, self.role_id, init)
+        if session is None:
+            session = AgentWorkSession(
+                tenant_slug=tenant.slug,
+                role_id=self.role_id,
+                room=ops,
+                work_id=init,
+                initiative=init,
+                programme=self.programme_id,
+                stage="gate1_await_pm",
+                slots={
+                    "pr_url": str((baton.payload or {}).get("pr_url") or ""),
+                    "question_round": str((baton.payload or {}).get("round") or "1"),
+                },
+            )
+        payload = baton.payload or {}
+        answers_path = str(payload.get("answers_path") or "")
+        questions_path = str(
+            payload.get("questions_path") or session.slots.get("questions_path") or ""
+        )
+        if payload.get("pr_url"):
+            session.slots["pr_url"] = str(payload.get("pr_url"))
+        session.slots["answers_path"] = answers_path
+        round_n = int(session.slots.get("question_round") or payload.get("round") or "1")
+        max_rounds = int(self._settings.max_question_rounds)
+        answers_body = self._workspace.read_local(tenant, answers_path) if answers_path else ""
+        questions_body = (
+            self._workspace.read_local(tenant, questions_path) if questions_path else ""
+        )
+        decision = decide_settle(
+            round_number=round_n,
+            max_rounds=max_rounds,
+            answers_body=answers_body,
+            questions_body=questions_body,
+        )
+        await self._poster.post_status(
+            ops,
+            (
+                f"PE reviewed PM answers for **{init}** (round {round_n}/{max_rounds}): "
+                f"**{decision.action}** — {decision.reason}."
+            ),
+            EventType.PROGRESS,
+            {
+                "status": "pe_settle",
+                "initiative": init,
+                "action": decision.action,
+                "round": round_n,
+            },
+            identity_handle=self.role_id,
+        )
+        if decision.action == "follow_up":
+            await self._store.save(session)
+            await self._post_questions(tenant, ops, session, bump_round=True)
+            done = await self._batons.mark_done(baton, ttl=ttl)
+            return Rollup(
+                baton_id=done.id,
+                role=self.role_id,
+                status=done.status,
+                summary=f"PE follow-up round after PM answers ({init})",
+                correlation_id=done.correlation_id,
+            )
+        # Settle: agent attest → merge-ready for human.
+        session.stage = "gate1_settled"
+        session.awaiting = AWAITING_NONE
+        session.open_brief = None
+        await self._store.save(session)
+        await self._attest(tenant, ops, session)
+        done = await self._batons.mark_done(baton, ttl=ttl)
+        return Rollup(
+            baton_id=done.id,
+            role=self.role_id,
+            status=done.status,
+            summary=f"PE settled clarifications and attested ({init})",
+            correlation_id=done.correlation_id,
         )
 
     async def resume_programme(self, tenant: TenantContext, room: str, work_id: str) -> None:
@@ -182,9 +286,9 @@ class PeReviewProgramme(BaseBusinessService):
         await self._poster.post_status(
             room or baton.ops_room,
             (
-                f"PE claimed `pe.review` for {init}. "
+                f"PE claimed product review for {init}. "
                 f"PR: {pr_url or 'n/a'}. "
-                "Read fan-out + Gate‑1 questions next."
+                "Read fan-out + product questions next."
             ),
             EventType.START,
             {"status": "pe_claimed", "initiative": init, "baton_id": baton.id},
@@ -197,7 +301,7 @@ class PeReviewProgramme(BaseBusinessService):
             baton_id=done.id,
             role=self.role_id,
             status=done.status,
-            summary=f"PE Gate‑1 started for {init}; questions posted",
+            summary=f"PE product brief started for {init}; questions posted",
             correlation_id=done.correlation_id,
             artefact_refs=list(done.artefact_refs or []),
             tools_used=["baton.claim", "baton.emit_read_walk", "gate1.questions"],
@@ -226,7 +330,7 @@ class PeReviewProgramme(BaseBusinessService):
         await self._store.save(session)
         await self._poster.post_status(
             room,
-            f"PE starting Gate‑1 for {init} (Lead trigger). PR: {pr_url or 'n/a'}.",
+            f"PE starting product brief for {init} (Lead trigger). PR: {pr_url or 'n/a'}.",
             EventType.START,
             {"status": "pe_gate1_start", "initiative": init},
             identity_handle=self.role_id,
@@ -270,15 +374,19 @@ class PeReviewProgramme(BaseBusinessService):
             artefact_refs=list(parent.artefact_refs or []),
         )
         stored_walk, created = await self._batons.create_pending(walk, ttl=ttl)
-        notice = (
-            f"baton `read.walk` → `adh.read` (init={init}; "
-            f"correlation={stored_walk.correlation_id})"
-        )
         if not created:
-            notice = f"(idempotent) {notice}"
+            self.logger.info(
+                "read.walk baton idempotent (no Buzz)",
+                baton_id=stored_walk.id,
+                initiative=init,
+            )
+            return
         await self._poster.post_status(
             room,
-            notice,
+            (
+                f"baton `read.walk` → `adh.read` (init={init}; "
+                f"correlation={stored_walk.correlation_id})"
+            ),
             EventType.PROGRESS,
             {
                 "status": "baton_emitted",
@@ -287,7 +395,7 @@ class PeReviewProgramme(BaseBusinessService):
                 "idempotency_key": stored_walk.idempotency_key,
                 "initiative": init,
                 "tenant": parent.tenant,
-                "created": created,
+                "created": True,
             },
             identity_handle=self.role_id,
         )
@@ -314,7 +422,7 @@ class PeReviewProgramme(BaseBusinessService):
             await self._poster.post_status(
                 room,
                 (
-                    f"Gate‑1 question budget exhausted for {init} "
+                    f"Product-question budget exhausted for {init} "
                     f"({max_rounds} rounds × ≤{max_q} Q). Hold — revise PRD or stop."
                 ),
                 EventType.STALL,
@@ -412,7 +520,7 @@ class PeReviewProgramme(BaseBusinessService):
                 await self._store.save(session)
                 await self._poster.post_status(
                     room,
-                    f"Posted Gate‑1 questions on meta PR #{pr_number}: {comment_url or 'ok'}",
+                    f"Posted product questions on product PR #{pr_number}: {comment_url or 'ok'}",
                     EventType.DONE,
                     identity_handle=self.role_id,
                 )
@@ -447,11 +555,11 @@ class PeReviewProgramme(BaseBusinessService):
             )
             return
         body = (
-            f"Gate‑1 attestation for `{init}` by adh.pe.\n\n"
+            f"Product brief attestation for `{init}` by adh.pe.\n\n"
             f"Questions round: {session.slots.get('question_round') or '?'} / "
             f"{self._settings.max_question_rounds}; "
             f"count: {session.slots.get('question_count') or '?'}.\n"
-            "Effective approval is for the exact current meta PR head SHA."
+            "Effective approval is for the exact current product PR head SHA."
         )
         try:
             app = self._workspace.app_role(self._settings.reviewer_app_slug)
@@ -484,7 +592,10 @@ class PeReviewProgramme(BaseBusinessService):
         await self._store.save(session)
         await self._poster.post_status(
             room,
-            f"PE attested `{init}` on PR #{pr_number}: {result.url or 'ok'}. PM may authorize merge.",
+            (
+                f"PE attested `{init}` on product PR #{pr_number}: {result.url or 'ok'}. "
+                "PM may authorize product merge."
+            ),
             EventType.DONE,
             {
                 "status": "pe_attested",
@@ -550,15 +661,19 @@ class PeReviewProgramme(BaseBusinessService):
             artefact_refs=[session.slots.get("questions_path") or ""],
         )
         stored, created = await self._batons.create_pending(baton, ttl=ttl)
-        notice = (
-            f"baton `pm.pe_questions` → `adh.pm` (init={init}; "
-            f"correlation={stored.correlation_id})"
-        )
         if not created:
-            notice = f"(idempotent) {notice}"
+            self.logger.info(
+                "pm.pe_questions baton idempotent (no Buzz)",
+                baton_id=stored.id,
+                initiative=init,
+            )
+            return
         await self._poster.post_status(
             tenant.ops_room,
-            notice,
+            (
+                f"baton `pm.pe_questions` → `adh.pm` (init={init}; "
+                f"correlation={stored.correlation_id})"
+            ),
             EventType.PROGRESS,
             {
                 "status": "baton_emitted",
@@ -567,7 +682,7 @@ class PeReviewProgramme(BaseBusinessService):
                 "idempotency_key": stored.idempotency_key,
                 "initiative": init,
                 "tenant": tenant.slug,
-                "created": created,
+                "created": True,
             },
             identity_handle=self.role_id,
         )
@@ -591,15 +706,19 @@ class PeReviewProgramme(BaseBusinessService):
             },
         )
         stored, created = await self._batons.create_pending(baton, ttl=ttl)
-        notice = (
-            f"baton `pm.prd_merge_ready` → `adh.pm` (init={init}; "
-            f"correlation={stored.correlation_id})"
-        )
         if not created:
-            notice = f"(idempotent) {notice}"
+            self.logger.info(
+                "pm.prd_merge_ready baton idempotent (no Buzz)",
+                baton_id=stored.id,
+                initiative=init,
+            )
+            return
         await self._poster.post_status(
             tenant.ops_room,
-            notice,
+            (
+                f"baton `pm.prd_merge_ready` → `adh.pm` (init={init}; "
+                f"correlation={stored.correlation_id})"
+            ),
             EventType.PROGRESS,
             {
                 "status": "baton_emitted",
@@ -608,7 +727,7 @@ class PeReviewProgramme(BaseBusinessService):
                 "idempotency_key": stored.idempotency_key,
                 "initiative": init,
                 "tenant": tenant.slug,
-                "created": created,
+                "created": True,
             },
             identity_handle=self.role_id,
         )
