@@ -22,7 +22,11 @@ _REVIEWER = "adh-reviewer"
 
 
 def app_for_repo(workspace: PmWorkspaceService, repo: str) -> AppRole:
-    """Pick a roles.yaml app that lists ``repo`` (prefer non-reviewer writers)."""
+    """Pick a roles.yaml app for ``repo``.
+
+    Prefer non-reviewer writers that already pin ``installation_id`` (live install).
+    Listing a repo without an install (e.g. orphan frontend app) must not win.
+    """
     short = (repo or "").strip().rsplit("/", 1)[-1]
     roles_path = workspace._roles_path()
     if roles_path is None:
@@ -30,8 +34,10 @@ def app_for_repo(workspace: PmWorkspaceService, repo: str) -> AppRole:
     with roles_path.open(encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
     apps = data.get("apps") or {}
-    preferred: Optional[AppRole] = None
-    fallback: Optional[AppRole] = None
+    writers_installed: list[AppRole] = []
+    writers_bare: list[AppRole] = []
+    reviewer_installed: Optional[AppRole] = None
+    reviewer_bare: Optional[AppRole] = None
     for slug, raw in apps.items():
         if not isinstance(raw, dict):
             continue
@@ -39,15 +45,45 @@ def app_for_repo(workspace: PmWorkspaceService, repo: str) -> AppRole:
         if short not in listed:
             continue
         role = AppRole.model_validate(raw)
+        has_install = role.installation_id is not None
         if slug == _REVIEWER:
-            fallback = role
+            if has_install:
+                reviewer_installed = role
+            else:
+                reviewer_bare = role
             continue
-        preferred = role
-        break
-    chosen = preferred or fallback
+        if has_install:
+            writers_installed.append(role)
+        else:
+            writers_bare.append(role)
+    # Installed identities always beat bare (uninstalled) app rows — otherwise an
+    # orphan frontend app with no org install blocks reviewer/backend mint paths.
+    chosen = (
+        (writers_installed[0] if writers_installed else None)
+        or reviewer_installed
+        or (writers_bare[0] if writers_bare else None)
+        or reviewer_bare
+    )
     if chosen is None:
         raise ValidationError(f"no roles.yaml app lists repo {short!r}")
     return chosen
+
+
+def apps_with_installation(workspace: PmWorkspaceService) -> list[AppRole]:
+    """All roles.yaml apps that pin an installation_id (mintable writers/reviewers)."""
+    roles_path = workspace._roles_path()
+    if roles_path is None:
+        return []
+    with roles_path.open(encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+    out: list[AppRole] = []
+    for raw in (data.get("apps") or {}).values():
+        if not isinstance(raw, dict):
+            continue
+        role = AppRole.model_validate(raw)
+        if role.installation_id is not None:
+            out.append(role)
+    return out
 
 
 async def push_local_paths(

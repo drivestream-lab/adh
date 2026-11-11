@@ -167,13 +167,34 @@ class PmSkillRunnerService(BaseInfraService):
             app = _pm_app(roles_path)
             if tenant.meta_repo not in app.repos:
                 raise ValidationError(f"{tenant.meta_repo} is not on identity {_PM_APP_SLUG}")
-        else:
-            from src.adh_agents.programmes.dev.forge_ops import app_for_repo
+            token, _granted = await self._github.installation_token(
+                app,
+                write=True,
+                repositories=[short],
+            )
+            return token
 
-            app = app_for_repo(self._workspace, short)
-        token, _granted = await self._github.installation_token(
-            app,
-            write=True,
-            repositories=[short],
-        )
-        return token
+        from src.adh_agents.programmes.dev.forge_ops import app_for_repo, apps_with_installation
+
+        candidates = [
+            app_for_repo(self._workspace, short),
+            *apps_with_installation(self._workspace),
+        ]
+        seen: set[int] = set()
+        errors: list[str] = []
+        for app in candidates:
+            if app.app_id in seen:
+                continue
+            seen.add(app.app_id)
+            try:
+                token, _granted = await self._github.installation_token(
+                    app,
+                    write=True,
+                    repositories=[short],
+                )
+                return token
+            except ValidationError as exc:
+                errors.append(f"app {app.app_id}: {exc}")
+                continue
+        detail = "; ".join(errors) or "no candidate apps"
+        raise ValidationError(f"cannot mint GitHub token for repo {short!r} ({detail})")
