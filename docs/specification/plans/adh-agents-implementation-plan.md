@@ -168,12 +168,16 @@ Coder hire (`adh.coder`) + verify agent + qa / iac / sre / obs + codegraph MCP +
 
 **Live slate reset (2026-11-11):** Deleted `#engg-init-realworld-001`, `#task-init-realworld-001`, task row/events, and Redis work/baton/god-chain for **INIT-REALWORLD-001**. Guinea pigs restart from scratch after the rewrite.
 
-**Guinea pig product PRs (realworld-meta, merged):**
+**Verify slate (RealWorld guinea pig — after rewrite):**
 
-| INIT | Product PRD PR | Mode after rewrite |
-|------|----------------|--------------------|
-| INIT-REALWORLD-001 | [#5](https://github.com/drivestream-lab/realworld-meta/pull/5) | **god** — full YAML development chain |
-| INIT-REALWORLD-002 | [#8](https://github.com/drivestream-lab/realworld-meta/pull/8) | **human** — Lead plays YAML checkpoints from briefs |
+| INIT | Lane | Product PRD PR | Mode |
+|------|------|----------------|------|
+| INIT-REALWORLD-001 | **Dev** engg | [#5](https://github.com/drivestream-lab/realworld-meta/pull/5) | **god** — full YAML development chain |
+| INIT-REALWORLD-002 | **Dev** engg | [#8](https://github.com/drivestream-lab/realworld-meta/pull/8) | **human** — Lead plays YAML checkpoints from briefs |
+| INIT-REALWORLD-007 | **PM + PE** | (product lane) | **god** |
+| INIT-REALWORLD-008 | **PM + PE** | (product lane) | **human** — Lead manual from briefs |
+
+**Platform (same PR):** `runtime/agentic_extract.py` + `agentic_decide.py` + `lead_commands.py` (phrase lists + agentic hole). No regex under `src/adh_agents/`. See [ADR 0003](../adr/0003-platform-agentic-extract-decide.md).
 
 ### Locks (greenfield)
 
@@ -213,18 +217,18 @@ Branch from `develop` (PR #28 scaffold is **not** sacred — replace Dev program
 ```text
 G0 docs → G1 delete dead Dev spine → G2 YAML programme walker
   → G3 forge: spec-pr / spec-merge / board predicates
-  → G4 god same-purpose re-entry → G5 units → G6 live 001 god → 002 human
+  → G4 god same-purpose re-entry → G5 units → G6 live verify 001/002 + 007/008
 ```
 
 | Step | Scope |
 |------|--------|
-| **G0** | This plan + Team OS Dev section = YAML quote; as-built row |
+| **G0** | This plan + Team OS Dev section = YAML quote; as-built row; ADR 0003 |
 | **G1** | Delete/replace `programmes/dev/programme.py` + deps/verification_plan programme paths; tests that asserted old spine |
 | **G2** | New Dev programme: load `development` entry from workflow projection; advance only on YAML outcomes |
 | **G3** | Dispatch `spec-draft` … forge `spec-pr-action`, `spec-merge`, `board-tickets-action` per pin |
 | **G4** | `AutonomyPolicy.record_take` — allow re-open of same purpose for loop tokens / within cap |
-| **G5** | Units: YAML order, no `deps-acceptance`, god re-entry, board predicates |
-| **G6** | Fresh `#engg-…-001` / `002`; army restart; evidence in PR |
+| **G5** | Units: YAML order, no `deps-acceptance`, god re-entry, board predicates; `rg` clean (no `re` under `adh_agents`) |
+| **G6** | Fresh rooms: Dev **001 god / 002 human**; PM+PE **007 god / 008 human**; army restart; evidence in PR |
 
 ### Out of scope (E1)
 

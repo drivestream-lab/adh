@@ -12,6 +12,7 @@ from src.adh_agents.collaboration.human_replies import REVISE_ENGG, normalize_re
 from src.adh_agents.programmes.dev.programme import DevEnggProgramme
 from src.adh_agents.programmes.pm.lead_tokens import extract_initiative
 from src.adh_agents.runtime.autonomy import AutonomyPolicy
+from src.adh_agents.runtime.lead_commands import LeadCommand, match_lead_command
 from src.adh_agents.runtime.orchestrator import Orchestrator
 from src.adh_agents.runtime.presence import PresenceService
 from src.adh_agents.runtime.room_resolve import listen_rooms_for_tenants, resolve_tenant_for_room
@@ -24,13 +25,6 @@ from src.infra_services.tenant_registry_service import TenantRegistryService
 from src.models.buzz_models import MessageKind, MessageRead
 
 _BATON_TYPE = "dev.engg_think"
-# Exact hire phrases (Lead body lowercased). No regex SSOT.
-_HIRE_PHRASES = (
-    "hire engg",
-    "hire dev",
-    "@adh.dev",
-    "engg think",
-)
 
 
 class DevAgent(BaseHermesAgent):
@@ -171,7 +165,8 @@ class DevAgent(BaseHermesAgent):
                 await self._programme.handle_revise_engg(tenant, room, session)
                 return
 
-        if _is_hire(body):
+        cmd = match_lead_command(body, allowed=[LeadCommand.HIRE_ENGG, LeadCommand.RESUME])
+        if cmd == LeadCommand.HIRE_ENGG:
             init = extract_initiative(body, tenant.init_prefix)
             if not init:
                 await self.broadcast_progress(
@@ -191,8 +186,7 @@ class DevAgent(BaseHermesAgent):
             )
             return
 
-        lowered = body.lower()
-        if lowered == "resume" or lowered.startswith("resume "):
+        if cmd == LeadCommand.RESUME:
             await self._orchestrator.handle_lead_message(tenant, room, message)
             return
 
@@ -205,11 +199,6 @@ class DevAgent(BaseHermesAgent):
         ]
         if open_gates:
             await self._orchestrator.handle_lead_message(tenant, room, message)
-
-
-def _is_hire(body: str) -> bool:
-    low = (body or "").lower()
-    return any(phrase in low for phrase in _HIRE_PHRASES)
 
 
 def _extract_pr_url(body: str) -> str:

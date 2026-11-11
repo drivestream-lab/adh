@@ -45,7 +45,6 @@ from src.adh_agents.programmes.dev.impact_repos import (
     parse_affected_repos,
     resolve_repo_root,
 )
-from src.adh_agents.programmes.dev.outcome_decide import decide_catalogue_outcome
 from src.adh_agents.programmes.dev.paths import (
     implementation_plan_path,
     spec_slice_path,
@@ -54,6 +53,7 @@ from src.adh_agents.programmes.dev.paths import (
 )
 from src.adh_agents.programmes.dev.revise import apply_revise_engg_slots, is_post_board
 from src.adh_agents.programmes.pm.validation_report import impact_map_path
+from src.adh_agents.runtime.agentic_decide import decide_catalogue_outcome
 from src.adh_agents.runtime.gate_opener import CoachSpec, GateOpener
 from src.adh_agents.runtime.room_resolve import engg_collaboration_room
 from src.adh_agents.runtime.work_models import (
@@ -455,6 +455,7 @@ class DevEnggProgramme(BaseBusinessService):
                 return False
             outcome = await decide_catalogue_outcome(
                 self._litellm,
+                role_id=self.role_id,
                 node_id=stage,
                 initiative=session.initiative or "",
                 allowed_outcomes=list(node.outcomes.keys()),
@@ -487,6 +488,7 @@ class DevEnggProgramme(BaseBusinessService):
                     return False
                 outcome = await decide_catalogue_outcome(
                     self._litellm,
+                    role_id=self.role_id,
                     node_id=stage,
                     initiative=session.initiative or "",
                     allowed_outcomes=list(node.outcomes.keys()),

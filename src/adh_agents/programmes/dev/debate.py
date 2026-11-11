@@ -1,14 +1,10 @@
-"""Multi-pass / multi-model self-debate — prompt → extract → decide.
-
-Cap is configurable (default 4). Effectiveness = converge with a clear recommend
-**∈ reply_tokens** before the ceiling. No regex SSOT.
-"""
+"""Multi-pass / multi-model self-debate — prompt → platform extract → decide."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from src.adh_agents.programmes.dev.labeled_extract import extract_allowed, extract_line
+from src.adh_agents.runtime.agentic_extract import extract_allowed, extract_line
 from src.adh_agents.settings import DevAgentSettings
 from src.configs.hermes_settings import HermesSettings
 from src.infra_services.litellm_service import LiteLLMService
@@ -38,7 +34,7 @@ async def run_dev_debate(
     reply_tokens: list[str],
     max_runs: int | None = None,
 ) -> DebateResult:
-    """Debate until a recommend ∈ reply_tokens or ceiling (fail closed on empty tokens)."""
+    """Debate until a recommend ∈ reply_tokens or ceiling."""
     settings = DevAgentSettings.get_instance()
     hermes = HermesSettings.get_instance()
     cap = int(max_runs if max_runs is not None else settings.max_think_runs)
@@ -85,7 +81,6 @@ async def run_dev_debate(
         result.hit_ceiling = False
         return result
 
-    # Ceiling: last extract if valid; else fail closed to hold when present else first token.
     last = _extract_decision(result.raw_passes[-1] if result.raw_passes else "", tokens)
     if last:
         result.recommend = last["recommend"]
@@ -107,7 +102,6 @@ async def run_dev_debate(
 def _extract_decision(body: str, tokens: list[str]) -> dict | None:
     recommend = extract_allowed(body, field="recommend", allowed=tokens)
     if recommend is None:
-        # Agents sometimes label as decision / final recommend.
         recommend = extract_allowed(body, field="decision", allowed=tokens)
     if recommend is None:
         return None
@@ -162,7 +156,7 @@ def _pass_prompt(
             "Prior pass:" if prior else "Prior pass: (none)",
             prior[:8000] if prior else "",
             "",
-            "Emit ONLY these labeled lines (agentic extract contract):",
+            "Emit ONLY these labeled lines (platform extract contract):",
             "recommend: <exactly one allowed reply token>",
             "example: reply `<same token>` — <one line>",
             "bluf: <one sentence>",

@@ -190,7 +190,16 @@ Human mode only. Lead posts `rewind` → coach always shows **Can / Cannot / Out
 
 Skills + forge use **PRD + impacted codebases** (`commit_workspace` as declared). GateOpener on YAML human-checkpoints only. **God must auto-progress** (including same-purpose re-entry / `another round` within cap).
 
-Guinea pig **after rewrite:** god **INIT-001** (PRD [#5](https://github.com/drivestream-lab/realworld-meta/pull/5)), human **INIT-002** (PRD [#8](https://github.com/drivestream-lab/realworld-meta/pull/8)). Prior `#engg-init-realworld-001` wiped. **Coder** later.
+**Verify slate (after rewrite):**
+
+| INIT | Lane | Mode | Notes |
+|------|------|------|-------|
+| INIT-REALWORLD-001 | Dev engg | **god** | PRD [#5](https://github.com/drivestream-lab/realworld-meta/pull/5) |
+| INIT-REALWORLD-002 | Dev engg | **human** | PRD [#8](https://github.com/drivestream-lab/realworld-meta/pull/8); Lead plays YAML checkpoints |
+| INIT-REALWORLD-007 | PM + PE | **god** | Product lane autopilot |
+| INIT-REALWORLD-008 | PM + PE | **human** | Lead manual from briefs |
+
+Prior `#engg-init-realworld-001` wiped. **Coder** later. Lead ops cmds = phrase lists + `normalize_reply` (agentic hole reserved — [ADR 0003](../adr/0003-platform-agentic-extract-decide.md)).
 
 ## KB heads (OKF in tenant meta)
 
@@ -224,4 +233,4 @@ See [`../references/adh-kb-heads.md`](../references/adh-kb-heads.md).
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md) · **As-built:** [`../as-built/implementation-status.md`](../as-built/implementation-status.md)
 
 Enabler = `BaseHermesAgent`; control plane = Orchestrator in `adh_agents/runtime`.  
-**Next:** E1 **greenfield** Dev rewrite to `workflow.yaml` development chain; then god 001 + human 002; coder hire later.
+**Next:** E1 **greenfield** Dev rewrite + platform extract/decide; verify **001/002** (Dev) and **007/008** (PM+PE); coder hire later.

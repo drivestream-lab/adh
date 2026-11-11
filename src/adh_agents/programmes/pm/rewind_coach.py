@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Optional
 
 from injector import inject
@@ -17,6 +16,7 @@ from src.adh_agents.collaboration.human_replies import (
     normalize_reply,
 )
 from src.adh_agents.programmes.pm.rewind_execute import RewindExecuteService
+from src.adh_agents.runtime.agentic_extract import find_init_token
 from src.adh_agents.runtime.autonomy import AutonomyPolicy
 from src.adh_agents.runtime.gate_opener import CoachSpec, GateOpener
 from src.adh_agents.runtime.rewind import (
@@ -46,12 +46,6 @@ _SLOT_REASON = "rewind_reason"
 _SLOT_TIP = "rewind_tip"
 _SLOT_INIT = "rewind_initiative"
 _SLOT_PRIOR = "rewind_prior_json"
-
-_PICK_RE = re.compile(
-    r"^\s*rewind\s+(\d+)\s*(?:\n+|;\s*|\s+)?(?:reason\s*:\s*)?(.*)$",
-    re.I | re.S,
-)
-_REASON_LINE = re.compile(r"^\s*reason\s*:\s*(.+)\s*$", re.I | re.M)
 
 
 class RewindCoachProgramme:
@@ -483,10 +477,9 @@ class RewindCoachProgramme:
             return task_id.strip().upper()
         if room.startswith("task-"):
             return room[len("task-") :].upper()
-        # Try INIT token in body
-        match = re.search(r"\b(INIT-[A-Z0-9-]+)\b", body or "", re.I)
-        if match:
-            return match.group(1).upper()
+        token = find_init_token(body or "")
+        if token:
+            return token
         try:
             active = await self._buzz.list_tasks(tenant.slug, include_archived=False)
         except Exception:
@@ -523,16 +516,37 @@ class RewindCoachProgramme:
 
     @staticmethod
     def _parse_pick(body: str) -> Optional[tuple[int, str]]:
+        """Parse ``rewind N`` + optional ``reason:`` (phrase lines, no regex)."""
         text = (body or "").strip()
-        match = _PICK_RE.match(text)
-        if not match:
+        if not text:
             return None
-        index = int(match.group(1))
-        rest = (match.group(2) or "").strip()
-        reason_match = _REASON_LINE.search(text)
-        if reason_match:
-            reason = reason_match.group(1).strip()
-        else:
+        first = text.splitlines()[0].strip()
+        head = first.lower()
+        if not head.startswith("rewind"):
+            return None
+        after = first[len("rewind") :].strip()
+        if after.startswith(":") or after.startswith(";"):
+            after = after[1:].strip()
+        digits = ""
+        for ch in after:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        if not digits:
+            return None
+        index = int(digits)
+        rest = after[len(digits) :].strip()
+        if rest.startswith(";") or rest.startswith(":"):
+            rest = rest[1:].strip()
+        reason = ""
+        for line in text.splitlines():
+            stripped = line.strip()
+            lower = stripped.lower()
+            if lower.startswith("reason:") or lower.startswith("reason :"):
+                reason = stripped.split(":", 1)[1].strip()
+                break
+        if not reason:
             reason = rest
             if reason.lower().startswith("reason:"):
                 reason = reason.split(":", 1)[-1].strip()

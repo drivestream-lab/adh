@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from src.adh_agents.programmes.dev.impact_repos import parse_affected_repos
-from src.adh_agents.programmes.dev.labeled_extract import extract_allowed, labeled_fields
+from src.adh_agents.runtime.agentic_extract import extract_allowed, labeled_fields
 
 
 _SAMPLE = """
