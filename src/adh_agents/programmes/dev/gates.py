@@ -1,4 +1,4 @@
-"""Dev GateOpener coaches — god-safe recommends ∈ reply_tokens."""
+"""Dev GateOpener coaches — YAML human-checkpoints + explicit forge authorizes."""
 
 from __future__ import annotations
 
@@ -7,12 +7,12 @@ from typing import Optional
 from src.adh_agents.collaboration.brief_service import HermesBriefService
 from src.adh_agents.collaboration.gate_coach import TokenAction
 from src.adh_agents.collaboration.human_replies import (
-    ACCEPT_DEPS,
     ACCEPT_TDD_ADR,
     ANOTHER_ROUND,
     AUTHORIZE_BOARD,
     CODING_READY,
     HOLD,
+    MERGE_SPEC_PR,
 )
 from src.adh_agents.programmes.dev.debate import DebateResult
 from src.adh_agents.runtime.gate_opener import CoachSpec
@@ -29,72 +29,6 @@ def _debate_payload(debate: Optional[DebateResult]) -> dict:
         "hit_ceiling": debate.hit_ceiling,
         "models_used": list(debate.models_used),
     }
-
-
-def deps_acceptance_brief(
-    briefs: HermesBriefService,
-    *,
-    initiative: str,
-    artefact: str,
-    debate: Optional[DebateResult] = None,
-) -> JudgmentRequest:
-    recommend = (debate.recommend if debate else "") or ACCEPT_DEPS
-    bluf = (debate.bluf if debate else "") or (
-        "Accept only when tiers + repos look right for board wave order."
-    )
-    example = (debate.example if debate else "") or f"reply `{ACCEPT_DEPS}`"
-    return briefs.build_brief(
-        purpose="deps-acceptance",
-        node_id="deps-acceptance",
-        question=f"Accept Engg-Deps DAG for **{initiative}**?",
-        recommend=recommend,
-        recommend_why=bluf,
-        bluf=bluf,
-        example=example,
-        locking=list(debate.locking) if debate else ["Tier mutate order / DAG"],
-        not_locking=list(debate.not_locking) if debate else ["Board ticket titles"],
-        revise_if=list(debate.revise_if) if debate else ["New repo appears in Impact-Map"],
-        reply_tokens=[ACCEPT_DEPS, ANOTHER_ROUND, HOLD],
-        artefact_path=artefact,
-        card_kind="deps",
-    )
-
-
-def deps_acceptance_coach(
-    *,
-    initiative: str,
-    artefact: str,
-    debate: Optional[DebateResult] = None,
-) -> CoachSpec:
-    recommend = (debate.recommend if debate else "") or ACCEPT_DEPS
-    why = (debate.bluf if debate else "") or (
-        "Locks multi-repo mutate order before ADR/TDD + plan."
-    )
-    example = (debate.example if debate else "") or f"reply `{ACCEPT_DEPS}`"
-    passes = debate.passes if debate else 0
-    return CoachSpec(
-        i_did=(
-            f"Wrote/updated Engg-Deps for **{initiative}** at `{artefact}`"
-            + (f" (debate {passes} pass{'es' if passes != 1 else ''})." if passes else ".")
-        ),
-        recommend=recommend,
-        recommend_why=why,
-        evidence=f"`{artefact}`",
-        outside_adh="Skim tiers in Cursor; edit the file if a repo/tier is wrong.",
-        example=example,
-        tokens=[
-            TokenAction(ACCEPT_DEPS, "accept deps DAG for this INIT"),
-            TokenAction(ANOTHER_ROUND, "ask Dev to revise Engg-Deps"),
-            TokenAction(HOLD, "park — no ADR/plan yet"),
-        ],
-        hop="deps-acceptance",
-        payload={
-            "status": "deps_acceptance",
-            "initiative": initiative,
-            "artefact": artefact,
-            **_debate_payload(debate),
-        },
-    )
 
 
 def tdd_adr_brief(
@@ -133,13 +67,13 @@ def tdd_adr_coach(
         i_did=f"Technical review ready for **{initiative}** (`{artefact}`).",
         recommend=recommend,
         recommend_why=(debate.bluf if debate else "")
-        or "Accept ADR/TDD before plan + verification plan.",
+        or "Accept ADR/TDD before plan (YAML technical-review-approval).",
         evidence=f"`{artefact}`",
         outside_adh="Read ADR/API why cards; do not invent architecture on the board.",
         example=(debate.example if debate else "") or f"reply `{ACCEPT_TDD_ADR}`",
         tokens=[
-            TokenAction(ACCEPT_TDD_ADR, "accept TDD/ADR for this INIT"),
-            TokenAction(ANOTHER_ROUND, "another technical-review pass"),
+            TokenAction(ACCEPT_TDD_ADR, "accept TDD/ADR — advance to implementation plan"),
+            TokenAction(ANOTHER_ROUND, "findings → re-run spec-technical-review"),
             TokenAction(HOLD, "park"),
         ],
         hop="tdd-adr-acceptance",
@@ -156,24 +90,23 @@ def coding_ready_brief(
     *,
     initiative: str,
     plan_path: str,
-    verification_path: str,
     debate: Optional[DebateResult] = None,
 ) -> JudgmentRequest:
     recommend = (debate.recommend if debate else "") or CODING_READY
     bluf = (debate.bluf if debate else "") or (
-        "This accepts the verification **plan**, not that proofs already ran."
+        "Accepts implementation plan + WorkManifest readiness — not that proofs already ran."
     )
     return briefs.build_brief(
         purpose="coding-readiness",
         node_id="coding-readiness",
-        question=f"Coding-ready for **{initiative}**? (plan + verification **plan**)",
+        question=f"Coding-ready for **{initiative}**? (plan + WorkManifest)",
         recommend=recommend,
         recommend_why=bluf,
         bluf=bluf,
         example=(debate.example if debate else "") or f"reply `{CODING_READY}`",
-        locking=list(debate.locking) if debate else ["Coverage table honesty"],
+        locking=list(debate.locking) if debate else ["WorkManifest honesty"],
         not_locking=list(debate.not_locking) if debate else ["CI green (run later)"],
-        revise_if=list(debate.revise_if) if debate else ["Missing proof layer"],
+        revise_if=list(debate.revise_if) if debate else ["Missing plan / WM"],
         reply_tokens=[CODING_READY, ANOTHER_ROUND, HOLD],
         artefact_path=plan_path,
         card_kind="coding-readiness",
@@ -184,28 +117,78 @@ def coding_ready_coach(
     *,
     initiative: str,
     plan_path: str,
-    verification_path: str,
     debate: Optional[DebateResult] = None,
 ) -> CoachSpec:
     recommend = (debate.recommend if debate else "") or CODING_READY
     return CoachSpec(
-        i_did=(
-            f"Implementation plan + verification plan ready for **{initiative}** "
-            f"(`{plan_path}`, `{verification_path}`)."
-        ),
+        i_did=(f"Implementation plan ready for **{initiative}** (`{plan_path}`)."),
         recommend=recommend,
         recommend_why=(debate.bluf if debate else "")
-        or "Unlocks board seed — proofs still run in CI/human later.",
-        evidence=f"`{plan_path}` · `{verification_path}`",
-        outside_adh="Confirm coverage table is honest; Dev does not run full verify yet.",
+        or "Unlocks YAML spec-merge → board authorize.",
+        evidence=f"`{plan_path}`",
+        outside_adh="Confirm plan + WorkManifest; Dev does not run full verify yet.",
         example=(debate.example if debate else "") or f"reply `{CODING_READY}`",
         tokens=[
-            TokenAction(CODING_READY, "mark coding-ready — proceed to board authorize"),
-            TokenAction(ANOTHER_ROUND, "revise plan / verification plan"),
+            TokenAction(CODING_READY, "mark coding-ready — proceed to spec-merge"),
+            TokenAction(ANOTHER_ROUND, "findings → re-run technical review / plan"),
             TokenAction(HOLD, "park"),
         ],
         hop="coding-readiness",
         payload={"status": "coding_readiness", "initiative": initiative, **_debate_payload(debate)},
+    )
+
+
+def spec_merge_brief(
+    briefs: HermesBriefService,
+    *,
+    initiative: str,
+    pr_urls: str,
+    debate: Optional[DebateResult] = None,
+) -> JudgmentRequest:
+    recommend = (debate.recommend if debate else "") or MERGE_SPEC_PR
+    bluf = (debate.bluf if debate else "") or (
+        "Land draft spec PRs on impacted repos before board seed."
+    )
+    return briefs.build_brief(
+        purpose="spec-merge",
+        node_id="spec-merge",
+        question=f"Merge spec PR(s) for **{initiative}**?",
+        recommend=recommend,
+        recommend_why=bluf,
+        bluf=bluf,
+        example=(debate.example if debate else "") or f"reply `{MERGE_SPEC_PR}`",
+        locking=list(debate.locking) if debate else ["Spec tip on develop"],
+        not_locking=list(debate.not_locking) if debate else ["Board ticket titles"],
+        revise_if=list(debate.revise_if) if debate else ["Spec still draft-wrong"],
+        reply_tokens=[MERGE_SPEC_PR, "go ahead", HOLD],
+        artefact_path=pr_urls,
+        card_kind="spec-merge",
+    )
+
+
+def spec_merge_coach(
+    *, initiative: str, pr_urls: str, debate: Optional[DebateResult] = None
+) -> CoachSpec:
+    recommend = (debate.recommend if debate else "") or MERGE_SPEC_PR
+    return CoachSpec(
+        i_did=f"Spec draft PR(s) ready to land for **{initiative}**: {pr_urls or '(none)'}",
+        recommend=recommend,
+        recommend_why=(debate.bluf if debate else "")
+        or "YAML spec-merge is explicit — then board-tickets-action.",
+        evidence=pr_urls or "(no PR urls yet)",
+        outside_adh="Skim the draft spec PRs on GitHub before authorizing merge.",
+        example=(debate.example if debate else "") or f"reply `{MERGE_SPEC_PR}`",
+        tokens=[
+            TokenAction(MERGE_SPEC_PR, "undraft + merge spec PR(s)"),
+            TokenAction("go ahead", "same as merge the spec PR"),
+            TokenAction(HOLD, "park — no merge yet"),
+        ],
+        hop="spec-merge",
+        payload={
+            "status": "spec_merge_authorize",
+            "initiative": initiative,
+            **_debate_payload(debate),
+        },
     )
 
 
@@ -217,7 +200,7 @@ def board_authorize_brief(
 ) -> JudgmentRequest:
     recommend = (debate.recommend if debate else "") or AUTHORIZE_BOARD
     bluf = (debate.bluf if debate else "") or (
-        "Dev v1 fence = board tickets seeded from WorkManifest."
+        "Dev E1 fence = board tickets seeded from WorkManifest after spec-merge."
     )
     return briefs.build_brief(
         purpose="board-tickets-action",
@@ -238,7 +221,7 @@ def board_authorize_brief(
 def board_authorize_coach(*, initiative: str, debate: Optional[DebateResult] = None) -> CoachSpec:
     recommend = (debate.recommend if debate else "") or AUTHORIZE_BOARD
     return CoachSpec(
-        i_did=f"Coding-ready for **{initiative}** — ready to seed GitHub board tickets.",
+        i_did=f"Coding-ready + spec merged for **{initiative}** — ready to seed board tickets.",
         recommend=recommend,
         recommend_why=(debate.bluf if debate else "")
         or "Seeds board from plan/WorkManifest; coder hire is later.",

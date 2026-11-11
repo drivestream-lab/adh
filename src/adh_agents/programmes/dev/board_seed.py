@@ -1,4 +1,4 @@
-"""Board seed preconditions + marker after create-board-tickets."""
+"""Board seed preconditions — YAML predicates + marker after create-board-tickets."""
 
 from __future__ import annotations
 
@@ -14,17 +14,26 @@ class BoardSeedCheck:
 
 
 def board_seed_preconditions(slots: dict[str, str]) -> BoardSeedCheck:
-    """Fail closed until deps + tdd/adr + coding-ready are accepted."""
+    """Fail closed until YAML board-tickets-action requires hold.
+
+    workflow.yaml ``board-tickets-action.requires``:
+      - spec-pr-merged
+      - implementation-plan-current
+      - workmanifest-contract-pass
+    Plus coding-readiness / technical-review-approval accepts from the walker.
+    """
     needed = (
-        ("deps_accepted", "deps-acceptance"),
-        ("tdd_adr_accepted", "tdd-adr-acceptance"),
+        ("spec_pr_merged", "spec-pr-merged"),
+        ("tdd_adr_accepted", "technical-review-approval (tdd-adr)"),
         ("coding_ready_accepted", "coding-readiness"),
+        ("implementation_plan_current", "implementation-plan-current"),
+        ("workmanifest_contract_pass", "workmanifest-contract-pass"),
     )
     missing = [label for key, label in needed if not _truthy(slots.get(key))]
     if missing:
         return BoardSeedCheck(
             ok=False,
-            reason=f"Board seed blocked — accept first: {', '.join(missing)}.",
+            reason=f"Board seed blocked — YAML predicates missing: {', '.join(missing)}.",
         )
     if _truthy(slots.get("board_seeded")) and not _truthy(slots.get("revise_engg")):
         return BoardSeedCheck(

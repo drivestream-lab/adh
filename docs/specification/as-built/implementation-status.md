@@ -27,7 +27,7 @@
 | KB land approve-before-merge | ✅ PR #24 — reviewer APPROVE for branch protection; stall reopens Buzz gate |
 | F1–F9 Team floor (single PR) | ✅ PR #25; god INIT-004 → archive; traj hub mirrors |
 | H1 Human rewind + traj-on-Buzz | ✅ PR #27; INIT-006 promote rewind + Lead `traj`; INIT-005 post-merge `rewind_denied` |
-| E1 Dev engg-think → board | 🟨 PR #28 scaffold; delta D1–D5 locked (PE→Dev, `#engg-<id>`, traj ops, multi-pass≤4); verify god **001** #5 + human **002** #8 |
+| E1 Dev engg = workflow.yaml | 🟨 Greenfield rewrite (YAML SSOT like PM); delete invented spine; live **001** rooms wiped; verify after G0–G6 |
 
 ## Landed (0b)
 

@@ -59,30 +59,35 @@ class PmSkillRunnerService(BaseInfraService):
         *,
         extra_prompt: str = "",
         on_progress: Optional[ProgressCallback] = None,
+        workspace: Optional[Path] = None,
+        repo: str = "",
+        prd_path: str = "",
+        reports_dir: str = "",
     ) -> dict[str, Any]:
         if not self._settings.pm_skill_runner_enabled:
             raise ValidationError("PM skill runner is disabled")
-        workspace = Path(tenant.meta_root).expanduser()
-        if not workspace.is_dir():
-            raise ValidationError(f"meta workspace missing: {workspace}")
+        root = Path(workspace).expanduser() if workspace else Path(tenant.meta_root).expanduser()
+        if not root.is_dir():
+            raise ValidationError(f"skill workspace missing: {root}")
         prompt = self._prompts.render_copy(
             "hermes.pm.skill.invoke",
             {
                 "skill": skill_id.lstrip("/"),
                 "initiative": initiative,
-                "prd_path": f"prd/{initiative}.md",
-                "reports_dir": "prd/reports",
+                "prd_path": (prd_path or f"prd/{initiative}.md").strip(),
+                "reports_dir": (reports_dir or "prd/reports").strip(),
                 "extra": (extra_prompt or "").strip() or "(none)",
             },
         )
-        token = await self._mint_token(tenant)
+        token = await self._mint_token(tenant, repo=(repo or "").strip() or None)
+        bot = "adh-dev[bot]" if repo else "adh-dev-pm[bot]"
         code, output, model = await self._cursor.run(
-            workspace=workspace,
+            workspace=root,
             prompt=prompt,
             mode="force",
             github_token=token,
-            git_name="adh-dev-pm[bot]",
-            git_email="adh-dev-pm[bot]@users.noreply.github.com",
+            git_name=bot,
+            git_email=f"{bot}@users.noreply.github.com",
             write=True,
             on_progress=on_progress,
             heartbeat_seconds=float(self._settings.progress_seconds),
@@ -93,6 +98,7 @@ class PmSkillRunnerService(BaseInfraService):
             slug=tenant.slug,
             skill=skill_id,
             initiative=initiative,
+            repo=repo or tenant.meta_repo,
             code=code,
             model=model,
         )
@@ -149,18 +155,25 @@ class PmSkillRunnerService(BaseInfraService):
             "ok": code == 0,
         }
 
-    async def _mint_token(self, tenant: TenantContext) -> str:
+    async def _mint_token(self, tenant: TenantContext, *, repo: Optional[str] = None) -> str:
         roles_path = self._workspace._roles_path()
         if roles_path is None:
             raise ValidationError("roles.yaml missing; cannot mint PM GitHub token")
-        from src.infra_services.pm_workspace_service import _pm_app
+        target = (repo or "").strip() or tenant.meta_repo
+        short = target.rsplit("/", 1)[-1]
+        if short == tenant.meta_repo:
+            from src.infra_services.pm_workspace_service import _pm_app
 
-        app = _pm_app(roles_path)
-        if tenant.meta_repo not in app.repos:
-            raise ValidationError(f"{tenant.meta_repo} is not on identity {_PM_APP_SLUG}")
+            app = _pm_app(roles_path)
+            if tenant.meta_repo not in app.repos:
+                raise ValidationError(f"{tenant.meta_repo} is not on identity {_PM_APP_SLUG}")
+        else:
+            from src.adh_agents.programmes.dev.forge_ops import app_for_repo
+
+            app = app_for_repo(self._workspace, short)
         token, _granted = await self._github.installation_token(
             app,
             write=True,
-            repositories=[tenant.meta_repo],
+            repositories=[short],
         )
         return token
