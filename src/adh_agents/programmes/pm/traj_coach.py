@@ -48,12 +48,20 @@ class TrajCoachProgramme:
         if not init:
             await self._poster.post_status(
                 room,
-                "Say `traj` from the task room (or include the INIT id).",
+                "Say `traj INIT-…` (or `traj` from a task/engg room).",
                 EventType.STALL,
             )
             return True
         await self._poster.ack_received(room, lead_body=TRAJ, identity_handle=self.role_id)
-        await self.post_card(tenant, room, initiative=init)
+        # Detailed card always on ops (portfolio radar) — not task/engg scroll.
+        await self.post_card(tenant, tenant.ops_room, initiative=init)
+        if (room or "").strip() != tenant.ops_room:
+            await self._poster.post_status(
+                room,
+                f"Trajectory card for `{init}` posted on `#{tenant.ops_room}`.",
+                EventType.PROGRESS,
+                {"status": "traj_card_pointer", "initiative": init, "ops": tenant.ops_room},
+            )
         return True
 
     async def post_card(
@@ -64,13 +72,15 @@ class TrajCoachProgramme:
         initiative: str,
         limit: int = _DEFAULT_LIMIT,
     ) -> None:
+        """Post detailed traj table. Callers should pass ``tenant.ops_room`` (L12)."""
         init = (initiative or "").strip().upper()
+        target = (room or "").strip() or tenant.ops_room
         try:
             events = await self._buzz.list_task_events(tenant.slug, init)
         except Exception:
             logger.exception("traj list_task_events failed", initiative=init)
             await self._poster.post_status(
-                room,
+                target,
                 f"Could not load trajectory for `{init}`.",
                 EventType.STALL,
             )
@@ -97,10 +107,10 @@ class TrajCoachProgramme:
                 lines.append(f"| `{kind}` | `{purpose}` | `{tok}`{reason} | `{who}` |")
             body = "\n".join(lines)
         await self._poster.post_status(
-            room,
+            target,
             body,
             EventType.PROGRESS,
-            {"status": "traj_card", "initiative": init, "count": len(rows)},
+            {"status": "traj_card", "initiative": init, "count": len(rows), "ops": True},
         )
 
     async def _resolve_init(
@@ -115,6 +125,8 @@ class TrajCoachProgramme:
             return task_id.strip().upper()
         if room.startswith("task-"):
             return room[len("task-") :].upper()
+        if room.startswith("engg-"):
+            return room[len("engg-") :].upper()
         match = re.search(r"\b(INIT-[A-Z0-9-]+)\b", body or "", re.I)
         if match:
             return match.group(1).upper()

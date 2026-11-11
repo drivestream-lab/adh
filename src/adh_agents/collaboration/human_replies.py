@@ -16,6 +16,15 @@ CONFIRM_REWIND = "confirm rewind"
 CANCEL_REWIND = "cancel"
 TRAJ = "traj"
 
+# Dev engg-think (E1)
+ACCEPT_DEPS = "accept deps"
+ANOTHER_ROUND = "another round"
+ACCEPT_TDD_ADR = "accept tdd-adr"
+CODING_READY = "coding ready"
+AUTHORIZE_BOARD = "authorize board"
+REVISE_ENGG = "revise engg"
+HOLD = "hold"
+
 # Canonical → accepted aliases (case-insensitive match on full line / prefix).
 _ALIASES: dict[str, tuple[str, ...]] = {
     MERGE_PRODUCT_PR: (
@@ -34,6 +43,13 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     CONFIRM_REWIND: (CONFIRM_REWIND, "confirm"),
     CANCEL_REWIND: (CANCEL_REWIND, "cancel rewind"),
     TRAJ: (TRAJ, "trajectory", "show trajectory"),
+    ACCEPT_DEPS: (ACCEPT_DEPS, "accept engg-deps", "deps ok"),
+    ANOTHER_ROUND: (ANOTHER_ROUND, NEED_ANOTHER_ROUND, "new_round", "round_again"),
+    ACCEPT_TDD_ADR: (ACCEPT_TDD_ADR, "accept adr", "accept tdd", "accept technical review"),
+    CODING_READY: (CODING_READY, "coding-ready", "ready for board"),
+    AUTHORIZE_BOARD: (AUTHORIZE_BOARD, "seed board", "create board tickets"),
+    REVISE_ENGG: (REVISE_ENGG, "revise engineering", "reopen engg"),
+    HOLD: (HOLD, PARK),
 }
 
 

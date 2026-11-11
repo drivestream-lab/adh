@@ -36,6 +36,7 @@ _FORBIDDEN_BUZZ_SUBSTRINGS: tuple[str, ...] = (
     "gate‑1",
     "pe.review",
     "kb.enrich",
+    "dev.engg_think",
     "merge on forge",
     "review/merge on forge",
     "prd_merge",

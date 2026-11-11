@@ -111,6 +111,12 @@ _SEED_IDENTITIES: tuple[IdentityCreate, ...] = (
         role=IdentityRole.KB,
     ),
     IdentityCreate(
+        handle="adh.dev",
+        display_name="Dev",
+        kind=IdentityKind.AGENT,
+        role=IdentityRole.DEV,
+    ),
+    IdentityCreate(
         handle="adh.system",
         display_name="Buzz system",
         kind=IdentityKind.AGENT,
@@ -557,6 +563,41 @@ class BuzzService(BaseBusinessService):
     async def list_active_task_rooms(self, tenant_slug: str) -> list[str]:
         tasks = await self.list_tasks(tenant_slug, include_archived=False)
         return [t.task_room_slug for t in tasks]
+
+    async def list_active_engg_rooms(self, tenant_slug: str) -> list[str]:
+        """Engg floors for non-archived tasks (`engg-{task_id}`) that exist as rooms."""
+        from src.adh_agents.runtime.room_resolve import engg_room_slug_for
+
+        out: list[str] = []
+        for task in await self.list_tasks(tenant_slug, include_archived=False):
+            slug = engg_room_slug_for(task.task_id)
+            try:
+                await self.get_room(slug)
+            except Exception:
+                continue
+            out.append(slug)
+        return out
+
+    async def ensure_engg_room(self, *, task_id: str, title: str | None = None) -> RoomRead:
+        """Idempotent `#engg-{TASK_ID}` programme floor for Dev engg-think."""
+        from src.adh_agents.runtime.room_resolve import engg_room_slug_for
+
+        slug = engg_room_slug_for(task_id)
+        init = task_id.strip().upper()
+        try:
+            return await self.get_room(slug)
+        except NotFoundError:
+            pass
+        try:
+            return await self.create_room(
+                RoomCreate(
+                    slug=slug,
+                    title=(title or f"Engg {init}")[:256],
+                    kind=RoomKind.ENGG,
+                )
+            )
+        except ValidationError:
+            return await self.get_room(slug)
 
     async def set_task_state(
         self,

@@ -36,7 +36,7 @@ Hermes/ledger Postgres DBs remain secondary (not Team OS task SSOT).
 ## Control plane (mandatory)
 
 ```text
-#tenant-hub  (+ non-archived task rooms)
+#tenant-hub  (+ non-archived task + engg rooms)
         │
         ▼
 ┌───────────────────────────────┐
@@ -44,43 +44,48 @@ Hermes/ledger Postgres DBs remain secondary (not Team OS task SSOT).
 │  programme runner registry    │
 └───────────────┬───────────────┘
                 │
-     ┌──────────┼──────────┬─────────┐
-     ▼          ▼          ▼         ▼
-    PM         PE        read       kb   …later
+     ┌──────────┼──────────┬─────────┬────────┐
+     ▼          ▼          ▼         ▼        ▼
+    PM         PE         Dev      read      kb   …later
 ```
 
 - Every role **worker embeds** this plane (role-scoped Redis work units).
 - Programmes **register**; they do not reimplement routing.
 - Agents are thin: listen, identity, batons, forge ACL, CollabPost.
-- Workers subscribe to the **hub + all non-archived task rooms** for the tenant.
+- Workers subscribe to the **hub + non-archived task homes + engg floors** for the tenant.
 
-## Rooms (hub + task)
+## Rooms (hub + task + programme floors)
+
+**Scale vantage:** many delivery units × many programmes. Hub = portfolio radar; `#task-<id>` = unit home; split **programme floors** when a stage is long, parallel, or ownership-hostile (first: engg-think).
 
 ```text
-#{tenant}-ops          HUB — front desk (intake + announces only)
-#task-{TASK_ID}        TASK ROOM — war room for one INIT/bug/enhancement
+#{tenant}-ops          HUB — intake + announces + traj radar
+#task-{TASK_ID}        TASK HOME — product lane (PM / PE Gate‑1 / KB)
+#engg-{TASK_ID}        ENGG FLOOR — Dev engg-think → board (E1)
 ```
 
 ### Mental model (do not shuttle)
 
-| | **Hub** `#{tenant}-ops` | **Task room** `#task-{TASK_ID}` |
-|--|-------------------------|----------------------------------|
-| Role | Inbox / arrivals board | Single work-item thread |
-| Lifetime | Always on | Born at bind; archive (or delete) when done |
-| Lead habit | Post **new** outlines / watch for “Opened task…” | **Live here** until archive coach |
+| | **Hub** `#{tenant}-ops` | **Task home** `#task-{TASK_ID}` | **Engg floor** `#engg-{TASK_ID}` |
+|--|-------------------------|----------------------------------|----------------------------------|
+| Role | Portfolio radar / intake | Product collaboration | Engg-think programme |
+| Lifetime | Always on | Born at bind; archive when product done | Opened by **PE→Dev**; archive independently |
+| Lead habit | Skim traj / post new outlines | Live PM/PE/KB work | Live Dev gates (`accept deps`…) |
 
-**Hub holds only:**
+**Hub holds:**
 - Ingress: Lead outline, GH bind announce, hire/presence stalls
-- One-line lifecycle: task opened / archived / deleted
+- One-line lifecycle + **Buzz-light traj mirrors**
+- Lead **detailed traj card** (`traj` / `traj <id>`) — **not** in task/engg rooms
 
-**Task room holds everything after bind for that work:**
-- Authoring (think / quality / promote)
-- Meta-PM (validate / update / post-PM / impact-map / draft-PR authorize)
-- Army CollabPosts + PE↔PM rally + merge coach + KB enrich/land
-- Gate coaches and Lead/god reply tokens
-- Done coach: `archive task` / `keep open` (`delete task` rare)
+**Task home holds (product programmes):**
+- Authoring / meta-PM / PE Gate‑1 / PE↔PM rally / merge / KB
+- Done coach for product phase
 
-**Code rule:** baton `ops_room` = **collaboration room** = task room slug once `buzz_tasks` exists — **not** the hub. Hub must not accumulate still-working / baton spam for a bound INIT.
+**Engg floor holds (Dev programme):**
+- Engg-Deps / ADR-TDD / plan / verification plan / coding-ready / board seed
+- Opened when **PE emits** `dev.engg_think` (Lead hire = escape hatch only)
+
+**Code rule:** baton `ops_room` = **owning collaboration room** for that hop (task home for PE/KB; **engg floor for Dev**) — **not** the hub. Hub must not accumulate still-working / baton spam.
 
 | Kind | Ingress | Task id |
 |------|---------|---------|
@@ -106,10 +111,12 @@ become a second task SSOT.
 | Role | Buzz id | Owns | Hire / verify |
 |------|---------|------|----------------|
 | PM | `adh.pm` | Requirements → draft PRD PR; product answers; PRD merge | Verify first on new OS |
+| Dev | `adh.dev` | Engg **think** after PRD PR: deps DAG, ADR/TDD, API/tests/verification **plan**, WorkManifest → **board seed** | E1; **not** coder |
+| Coder | `adh.coder` (later) | Execute board/WorkManifest → code PRs | After Dev fence |
 | Read | `adh.read` | Walk one repo; Buzz rollup | Before / with PE fan-out |
 | PE | `adh.pe` | Product review: fan-out reads, ≤10 Q / ≤2 agent rounds, attest, ping PM | After PM verify; consume `pe.review` |
 | KB | `adh.kb` | Patch OKF `knowledge/` heads | After merge enrich |
-| Dev / QA / IaC / SRE / Obs | later | … | later |
+| QA / IaC / SRE / Obs | later | … | later |
 
 ## Workers
 
@@ -118,6 +125,7 @@ make adh-pm    → adh_pm_worker
 make adh-pe    → adh_pe_worker
 make adh-read  → adh_read_worker
 make adh-kb    → adh_kb_worker
+make adh-dev   → adh_dev_worker   # E1 engg think → board
 ```
 
 ## Collaboration loop
@@ -167,8 +175,17 @@ Human mode only. Lead posts `rewind` → coach always shows **Can / Cannot / Out
 | Graph | SSOT | Use |
 |-------|------|-----|
 | Delivery work graph | `prayog-skills/workflow.yaml` | Stage navigation (ADR 0001) |
-| Repo dependency DAG | Impact-Map (+ KB overlays) | Parallel mutate tiers; reads stay parallel |
+| Repo dependency DAG | Impact-Map (+ KB overlays); engg refines to **`Engg-Deps-{INIT}.md`** + `deps-acceptance` | Parallel mutate tiers; board wave order |
+| Task DAG | Plan §9 WorkManifest | Coder executes TASK* in order |
 | Code graph | Fleet / MCP tool | Inside reader only |
+
+### Dev engg-think (E1)
+
+**PE → Dev** baton starts engg-think (product fence first; merged product PR OK). PM does **not** start Dev at `open_draft_pr`. Dev works on **`#engg-<id>`**. Spine: feasibility → technical review → **deps accept** → ADR/TDD accept → plan + verification **plan** → coding-readiness → **board tickets**.
+
+**Self-debate:** before each major judgment, Dev runs **multi-pass / multi-model** internal debate (cap default **4**, `ADH_DEV_MAX_THINK_RUNS`) and should **converge early** with a clear recommend — hitting the ceiling is a quality smell. Open briefs carry **examples** + locking/not-locking for human flow. Effectiveness of Hermes Dev = how often it converges with a usable brief **before** the cap.
+
+Guinea pig: **god INIT-001** (PRD [#5](https://github.com/drivestream-lab/realworld-meta/pull/5)), **human INIT-002** (PRD [#8](https://github.com/drivestream-lab/realworld-meta/pull/8)). **Coder** is a later hire.
 
 ## KB heads (OKF in tenant meta)
 
@@ -192,7 +209,7 @@ See [`../references/adh-kb-heads.md`](../references/adh-kb-heads.md).
 13. Trajectory in `buzz_task_events` only — never meta repo files for autopilot journals.
 14. **Ingest ack first** — on every consumed Lead message, post `Got it — working on …` before long hops; silence after a human post is a bug.
 15. **Delivery harness** — maintain `buzz_tasks` **kind + state**; orchestrate from workflow + task SSOT + trajectory, not chat archaeology.
-16. **Trajectory** — SSOT `buzz_task_events`; **Buzz-light mirror on `#{tenant}-ops`** (pointers only). God mode: forward-only (no rewind).
+16. **Trajectory** — SSOT `buzz_task_events`; **Buzz-light mirror on ops**; Lead **detailed traj card on ops** (never task/engg dump). God mode: forward-only (no rewind).
 17. **Ingress** — outline → `init` only; `bug`/`enhancement` → GitHub ticket only.
 18. **Hub → task** — guarded desktop auto-switch when Lead is on hub; never steal focus from another task room.
 
@@ -202,4 +219,4 @@ See [`../references/adh-kb-heads.md`](../references/adh-kb-heads.md).
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md) · **As-built:** [`../as-built/implementation-status.md`](../as-built/implementation-status.md)
 
 Enabler = `BaseHermesAgent`; control plane = Orchestrator in `adh_agents/runtime`.  
-**Next:** Human INIT-005 verify rewind + traj; then Dev hire (C) — see plan.
+**Next:** E1 delta (PE→Dev, engg rooms, traj-on-ops) then god 001 + human 002; coder hire later.

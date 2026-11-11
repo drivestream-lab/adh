@@ -24,11 +24,14 @@ KB land approve-before   ✅  PR #24; reopen Buzz gate on stall
 F1–F9 Team floor         ✅  PR #25; god INIT-004 → archive; traj hub mirrors
 
 ── done (PM lane A+B) ──
-H1 Human rewind + traj    ✅  006 promote rewind+traj; 005 post-merge `rewind_denied`; unit god-deny
+H1 Human rewind + traj    ✅  PR #27; 006 promote rewind+traj; 005 post-merge `rewind_denied`
 Human INIT-005 verify     ✅  full human forward → archive; hub traj mirrors
 
+── in progress (single PR) ──
+E1 Dev engg-think→board   🟨  PE→Dev; #engg-<id>; traj card on ops; 001 god + 002 human; coder later
+
 ── later ──
-C Dev hire (+ qa / iac / sre / obs + codegraph MCP + TaskGraph)   ⬜
+Coder hire (`adh.coder`) + verify agent + qa / iac / sre / obs + codegraph MCP + TaskGraph   ⬜
 ```
 
 ---
@@ -150,7 +153,156 @@ C Dev hire (+ qa / iac / sre / obs + codegraph MCP + TaskGraph)   ⬜
 | `src/adh_agents/agents/pm_agent.py` | Route rewind / traj |
 | `src/adh_agents/forge_acl` | `close_pull_request` for PM/KB |
 
+**Shipped:** [PR #27](https://github.com/drivestream-lab/adh/pull/27).
+
 ---
+
+## E1 — Dev engg-think → board (single PR)
+
+**Intent:** Hire **`adh.dev`** as the engg **think** agent. Sort design, multi-repo **deps DAG**, ADR/TDD, API listing, test + **verification plan**, implementation plan / WorkManifest, then **seed GitHub board**. **Coder** (`adh.coder`) is a later hire. Downstream coder/verify **consume** Dev authority; they do not re-decide architecture.
+
+**Scale vantage point:** ADH is a **delivery-teams copilot** — many concurrent delivery units (`init` \| `bug` \| `enhancement`) × many programmes. Hub = portfolio radar; `#task-<id>` = unit home; **programme floors** (e.g. `#engg-<id>`) when a stage is long, parallel, or ownership-hostile. One **owning programme** per open gate.
+
+**Validation:** units in-PR + live RealWorld: **god on INIT-001**, **human on INIT-002** (merged PRDs OK; artefacts on meta). **One PR** for remaining E1 deltas + verify.
+
+**Guinea pig product PRs (realworld-meta, merged):**
+
+| INIT | Product PRD PR | Knowledge enrich (ref) |
+|------|----------------|------------------------|
+| INIT-REALWORLD-001 | [#5](https://github.com/drivestream-lab/realworld-meta/pull/5) (earlier draft [#2](https://github.com/drivestream-lab/realworld-meta/pull/2)) | — |
+| INIT-REALWORLD-002 | [#8](https://github.com/drivestream-lab/realworld-meta/pull/8) | [#9](https://github.com/drivestream-lab/realworld-meta/pull/9) |
+
+
+### Locks (L1–L14)
+
+| # | Lock |
+|---|------|
+| L1 | Buzz role `adh.dev` (product: Dev / engg think) |
+| L2 | Coder / `loop-spec` / verify-agent **out of E1** |
+| L3 | Dev starts on **PE → Dev baton** (`engg.think` / `dev.engg_think`) after product fence — **not** PM `open_draft_pr`; merged product PR URL OK |
+| L4 | **Board tickets seeded** = Dev v1 done fence |
+| L5 | Durable `Engg-Deps-{INIT}.md` + gate `deps-acceptance` (visible DAG/tiers) |
+| L6 | Dev owns **verification plan** only; CI/human **run** proofs (no verify agent yet) |
+| L7 | Post-board: Lead `revise engg` reopens think gates; **no silent rewrite** of seeded WorkManifest/tickets (supersede + re-seed) |
+| L8 | Skills → Hermes multi-thought brief → GateOpener; human suggest/accept; **god = no Lead queries** (recommend only) |
+| L9 | Security/migrations/SLO = optional Hermes sections when PRD demands |
+| L10 | **Engg room** `#engg-<task_id>` (slug e.g. `engg-init-realworld-003`) — Dev collaboration floor; PE emit opens/binds it |
+| L11 | `#task-<id>` remains product home (PM/PE/KB); engg does **not** share that scroll by default |
+| L12 | **Traj:** Buzz-light mirrors on hub (unchanged); Lead **detailed traj card always on ops** (not task/engg room) |
+| L13 | Lead `@adh.dev` / `hire engg` = **escape hatch only**; happy path = PE trigger |
+| L14 | Guinea pig: **001 = god** full Dev spine; **002 = human** Dev gates; restart army before either pass; `prd_pr_url` = merged #5 / #8 |
+| L15 | **Multi-pass self-debate** per judgment hop: configurable cap default **4** (`ADH_DEV_MAX_THINK_RUNS`); **converge early** with a clear recommend — hitting the ceiling is a smell, not the goal |
+| L16 | **Multi-model** consideration across passes (e.g. eng/pm models) so the final recommend is not single-model mono-voice |
+| L17 | Open briefs for human flow: **examples**, locking / not-locking, revise-if, BLUF — useful enough that Lead can decide without re-reading all artefacts |
+
+### Gaps factored in
+
+| Gap | How E1 addresses it |
+|-----|---------------------|
+| Deps/DAG tribal in Impact-Map only | `Engg-Deps-*` + `deps-acceptance` before ADR/plan accept |
+| Verify plan vs run confused | Coach + docs: Dev plans layers; execution = CI/human / later verify agent |
+| Post-board revise | `revise engg` programme path + supersede policy |
+| PM steals Lead lines / same-room noise | PE→Dev + `#engg-<id>`; PM mute on engg floor |
+| Traj audit dumps in task room | Detailed `traj` card → ops only |
+| Scale (N units × N programmes) | Hub radar; task home; programme floors; one gate owner |
+| Single-shot weak engg recommend | Multi-pass debate + multi-model; effectiveness = converge **before** cap |
+
+### Catalogue spine (v1 in)
+
+`initiative-feasibility` → `spec-technical-review` → **`deps-acceptance`** → `technical-review-approval` (`tdd-adr-acceptance`) → `spec-implementation-plan` → `coding-readiness` → `board-tickets-action`
+
+### File-level plan (single PR delta on `feature/e1-dev-engg-think` / PR #28)
+
+Scaffold already landed: `adh.dev` worker, programme spine, Engg-Deps/gates/revise, units.  
+**Remaining = D0–D5 in one PR**, then verify **001 god → 002 human** one-by-one.
+
+**Greenfield (no dual path / no dead code):**
+- Delete PM→Dev emit at `open_draft_pr` entirely — do not leave `emit_dev_engg_baton=false` stubs “for later”
+- Happy path = **PE→Dev only**; Lead hire remains escape hatch (live code path, not a second SSOT)
+- Entry/coach copy must say PE trigger + merged PR OK — no leftover “after open_draft_pr” wording
+- One collaboration model: Dev owns `#engg-<id>`; do not keep task-room Dev session as alternate
+- Tests assert the deleted path is gone (no reintroduce via dispatch)
+
+#### Commit order
+
+```text
+D0 → D1 → D2 → D3 → D3b → D4 → D5 (ops evidence in PR body)
+```
+
+#### D0 — Docs
+
+| File | Change |
+|------|--------|
+| `docs/specification/plans/adh-agents-implementation-plan.md` | L1–L17; 001/002 PRs #5/#8; this file-level table |
+| `docs/specification/product/adh-agents-team-os.md` | Scale rooms; PE→Dev; `#engg-<id>`; traj on ops; multi-pass effectiveness |
+| `docs/specification/as-built/implementation-status.md` | E1 row |
+
+#### D1 — PM must not start Dev
+
+| File | Change |
+|------|--------|
+| `src/adh_agents/execution/dispatch_service.py` | **Remove** `_emit_dev_engg_baton` from `open_draft_pr` |
+| `src/adh_agents/settings.py` | **Delete** `emit_dev_engg_baton` (no stub flag) |
+
+#### D2 — PE → Dev trigger
+
+| File | Change |
+|------|--------|
+| `src/adh_agents/programmes/pe/engg_handoff.py` | **NEW** — ensure `#engg-<id>`, emit `dev.engg_think` (initiative, `prd_pr_url`, Impact-Map refs); hub announce |
+| `src/adh_agents/programmes/pe/review.py` | After Gate‑1 settle/attest → handoff (happy path) |
+| `src/adh_agents/agents/pe_agent.py` | Lead `engg go INIT-…` (merged-PR guinea pig); baton catch-up |
+| `src/di/modules/business_services_module.py` | Bind `PeEnggHandoff` if separate service |
+
+#### D3 — Engg rooms + Dev bind
+
+| File | Change |
+|------|--------|
+| `src/models/buzz_models.py` | RoomKind `engg` **or** reuse `wave` — pick one; document |
+| `src/business_services/buzz_service.py` | Create engg room; list active engg rooms for tenant |
+| `src/adh_agents/runtime/room_resolve.py` | `engg_room_slug(task_id)`; listen = hub + task + **engg** |
+| `src/adh_agents/programmes/dev/entry.py` | PE-trigger + PRD + Impact-Map; **merged** `prd_pr_url` OK |
+| `src/adh_agents/programmes/dev/programme.py` | `session.room` / baton `ops_room` = engg floor |
+| `src/adh_agents/agents/dev_agent.py` | Subscribe engg floors; `hire engg` = escape hatch only |
+
+#### D3b — Multi-pass self-debate (effectiveness)
+
+| File | Change |
+|------|--------|
+| `src/adh_agents/settings.py` (`DevAgentSettings`) | `max_think_runs: int = 4` (`ADH_DEV_MAX_THINK_RUNS`, ge=2, le=8) |
+| `src/adh_agents/programmes/dev/debate.py` | **NEW** — run ≤N passes; alternate/consider `eng_model` + `pm_model` (HermesSettings); **early stop** when recommend clear + ∈ reply_tokens; return card + `converged_at_pass` |
+| `src/adh_agents/programmes/dev/cards.py` | Ensure multi-thought sections feed debate synthesize |
+| `src/adh_agents/programmes/dev/gates.py` | Briefs: **example**, locking, not-locking, revise-if, BLUF; payload `dev_think_passes`, `converged_at_pass`, `hit_ceiling` |
+| `src/adh_agents/programmes/dev/programme.py` | Call debate before deps / tdd-adr / coding-ready / board gates |
+| `src/adh_agents/collaboration/brief_service.py` | Use if needed for example/locking fields (already supported) |
+| Session slots / traj | Persist `dev_think_passes`, `converged_at_pass`, `hit_ceiling` per hop (effectiveness SSOT) |
+
+**Effectiveness bar:** converge at pass **&lt; max_think_runs**; ceiling hit = smell (log + traj flag; still open gate with best recommend).
+
+#### D4 — Traj on ops + units
+
+| File | Change |
+|------|--------|
+| `src/adh_agents/programmes/pm/traj_coach.py` | Detailed traj card → always `tenant.ops_room`; optional one-liner in source room |
+| `tests/unit/test_traj_card_posts_ops.py` | **NEW** |
+| `tests/unit/test_pe_engg_handoff.py` | **NEW** — engg slug + baton payload |
+| `tests/unit/test_dev_entry.py` | Merged PR URL + PE-trigger framing |
+| `tests/unit/test_dev_debate.py` | **NEW** — cap, early converge, hit_ceiling flag, brief has example |
+
+#### D5 — Ops verify (after army restart)
+
+| Pass | INIT | Mode | `prd_pr_url` | Room | Also record |
+|------|------|------|--------------|------|-------------|
+| 1 | INIT-REALWORLD-001 | god | meta **#5** | `#engg-init-realworld-001` | `converged_at_pass` per hop |
+| 2 | INIT-REALWORLD-002 | human | meta **#8** | `#engg-init-realworld-002` | Lead can decide from brief alone; traj card on ops |
+
+**Prep:** stop host workers → Cursor bg: `adh-pm` / `adh-pe` / `adh-kb` / `adh-dev` on E1 branch → autonomy per pass.
+
+### Out of scope
+
+`adh.coder`, verify agent, `loop-spec` as OS bar, codegraph MCP/TaskGraph, full engg rewind ladder (revise engg is enough for v1), prod/SRE, collapsing engg back into task room (later optimization).
+
+---
+
 
 ## Storage map (code-level)
 

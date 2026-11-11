@@ -23,6 +23,7 @@ class IdentityRole(str, Enum):
     PE = "pe"
     READ = "read"
     KB = "kb"
+    DEV = "dev"
     ORCHESTRATOR = "orchestrator"
     SYSTEM = "system"
 
@@ -30,6 +31,7 @@ class IdentityRole(str, Enum):
 class RoomKind(str, Enum):
     OPS = "ops"
     TASK = "task"
+    ENGG = "engg"
     MEMORY = "memory"
     WAVE = "wave"
     GENERAL = "general"
