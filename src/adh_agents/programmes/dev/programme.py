@@ -23,6 +23,7 @@ from src.adh_agents.programmes.dev.board_seed import (
     board_seed_preconditions,
     mark_board_seeded,
 )
+from src.adh_agents.programmes.dev.debate import DebateResult, run_dev_debate
 from src.adh_agents.programmes.dev.deps import (
     deps_has_visible_dag,
     ensure_engg_deps_stub,
@@ -51,7 +52,7 @@ from src.adh_agents.programmes.dev.verification_plan import (
 )
 from src.adh_agents.programmes.pm.validation_report import impact_map_path
 from src.adh_agents.runtime.gate_opener import GateOpener
-from src.adh_agents.runtime.room_resolve import collaboration_room
+from src.adh_agents.runtime.room_resolve import engg_collaboration_room
 from src.adh_agents.runtime.work_models import (
     AWAITING_AUTHORIZATION,
     AWAITING_JUDGMENT,
@@ -64,6 +65,7 @@ from src.adh_agents.settings import DevAgentSettings
 from src.adh_agents.surface.buzz_poster import HermesBuzzPoster
 from src.business_services.base_business_service import BaseBusinessService
 from src.business_services.buzz_service import BuzzService
+from src.infra_services.litellm_service import LiteLLMService
 from src.infra_services.pm_workspace_service import PmWorkspaceService
 from src.infra_services.tenant_registry_service import TenantRegistryService
 from src.models.buzz_models import EventType, TaskEventCreate, TaskEventKind, TaskState
@@ -96,6 +98,7 @@ class DevEnggProgramme(BaseBusinessService):
         gates: GateOpener,
         buzz: BuzzService,
         tenants: TenantRegistryService,
+        litellm: LiteLLMService,
     ) -> None:
         super().__init__()
         self._store = store
@@ -107,6 +110,7 @@ class DevEnggProgramme(BaseBusinessService):
         self._gates = gates
         self._buzz = buzz
         self._tenants = tenants
+        self._litellm = litellm
         self._settings = DevAgentSettings.get_instance()
 
     async def start_programme(
@@ -191,12 +195,16 @@ class DevEnggProgramme(BaseBusinessService):
         init = (baton.initiative or "").strip().upper()
         payload = baton.payload or {}
         pr_url = str(payload.get("prd_pr_url") or payload.get("pr_url") or "").strip()
-        collab = await collaboration_room(
+        collab = (baton.ops_room or "").strip() or await engg_collaboration_room(
             self._buzz,
             tenant,
             initiative=init,
-            fallback=room or baton.ops_room or tenant.ops_room,
+            fallback=room or tenant.ops_room,
         )
+        if not collab.startswith("engg-"):
+            collab = await engg_collaboration_room(
+                self._buzz, tenant, initiative=init, fallback=collab
+            )
         session = AgentWorkSession(
             role_id=self.role_id,
             tenant_slug=tenant.slug,
@@ -260,9 +268,11 @@ class DevEnggProgramme(BaseBusinessService):
         prd_pr_url: str = "",
     ) -> None:
         init = initiative.strip().upper()
-        collab = await collaboration_room(
+        collab = await engg_collaboration_room(
             self._buzz, tenant, initiative=init, fallback=room or tenant.ops_room
         )
+        if (room or "").startswith("engg-"):
+            collab = room
         session = await self._store.load(tenant.slug, self.role_id, init)
         if session is None:
             session = AgentWorkSession(
@@ -480,12 +490,19 @@ class DevEnggProgramme(BaseBusinessService):
             )
         session.stage = _STAGE_DEPS
         session.slots["engg_deps_path"] = path
-        brief = deps_acceptance_brief(self._briefs, initiative=init, artefact=path)
+        debate = await self._debate_hop(
+            purpose="deps-acceptance",
+            initiative=init,
+            context=body or impact,
+            reply_tokens=[ACCEPT_DEPS, ANOTHER_ROUND, HOLD],
+            session=session,
+        )
+        brief = deps_acceptance_brief(self._briefs, initiative=init, artefact=path, debate=debate)
         god = await self._gates.open(
             session,
             brief=brief,
             awaiting=AWAITING_JUDGMENT,
-            coach=deps_acceptance_coach(initiative=init, artefact=path),
+            coach=deps_acceptance_coach(initiative=init, artefact=path, debate=debate),
         )
         if god:
             await self.after_judgment(tenant, room, session, god)
@@ -496,12 +513,20 @@ class DevEnggProgramme(BaseBusinessService):
         init = session.initiative or ""
         artefact = session.slots.get("technical_review_path") or technical_review_path(init)
         session.stage = _STAGE_TDD
-        brief = tdd_adr_brief(self._briefs, initiative=init, artefact=artefact)
+        ctx = self._workspace.read_local(tenant, artefact) or artefact
+        debate = await self._debate_hop(
+            purpose="tdd-adr-acceptance",
+            initiative=init,
+            context=ctx,
+            reply_tokens=[ACCEPT_TDD_ADR, ANOTHER_ROUND, HOLD],
+            session=session,
+        )
+        brief = tdd_adr_brief(self._briefs, initiative=init, artefact=artefact, debate=debate)
         god = await self._gates.open(
             session,
             brief=brief,
             awaiting=AWAITING_JUDGMENT,
-            coach=tdd_adr_coach(initiative=init, artefact=artefact),
+            coach=tdd_adr_coach(initiative=init, artefact=artefact, debate=debate),
         )
         if god:
             await self.after_judgment(tenant, room, session, god)
@@ -566,14 +591,31 @@ class DevEnggProgramme(BaseBusinessService):
             )
             return
         session.stage = _STAGE_CODING
+        plan_body = self._workspace.read_local(tenant, plan) or ""
+        debate = await self._debate_hop(
+            purpose="coding-readiness",
+            initiative=init,
+            context=f"{plan_body}\n\n{body}",
+            reply_tokens=[CODING_READY, ANOTHER_ROUND, HOLD],
+            session=session,
+        )
         brief = coding_ready_brief(
-            self._briefs, initiative=init, plan_path=plan, verification_path=vplan
+            self._briefs,
+            initiative=init,
+            plan_path=plan,
+            verification_path=vplan,
+            debate=debate,
         )
         god = await self._gates.open(
             session,
             brief=brief,
             awaiting=AWAITING_JUDGMENT,
-            coach=coding_ready_coach(initiative=init, plan_path=plan, verification_path=vplan),
+            coach=coding_ready_coach(
+                initiative=init,
+                plan_path=plan,
+                verification_path=vplan,
+                debate=debate,
+            ),
         )
         if god:
             await self.after_judgment(tenant, room, session, god)
@@ -592,12 +634,19 @@ class DevEnggProgramme(BaseBusinessService):
             )
             return
         session.stage = _STAGE_BOARD
-        brief = board_authorize_brief(self._briefs, initiative=init)
+        debate = await self._debate_hop(
+            purpose="board-tickets-action",
+            initiative=init,
+            context=f"coding_ready={session.slots.get('coding_ready_accepted')}",
+            reply_tokens=[AUTHORIZE_BOARD, HOLD],
+            session=session,
+        )
+        brief = board_authorize_brief(self._briefs, initiative=init, debate=debate)
         god = await self._gates.open(
             session,
             brief=brief,
             awaiting=AWAITING_AUTHORIZATION,
-            coach=board_authorize_coach(initiative=init),
+            coach=board_authorize_coach(initiative=init, debate=debate),
         )
         if god:
             await self.after_judgment(tenant, room, session, god)
@@ -765,6 +814,52 @@ class DevEnggProgramme(BaseBusinessService):
         )
 
     # ── helpers ────────────────────────────────────────────────────────
+
+    async def _debate_hop(
+        self,
+        *,
+        purpose: str,
+        initiative: str,
+        context: str,
+        reply_tokens: list[str],
+        session: AgentWorkSession,
+    ) -> DebateResult:
+        await self._poster.post_status(
+            session.room,
+            f"Dev debating `{purpose}` for **{initiative}** (cap {self._settings.max_think_runs})…",
+            EventType.PROGRESS,
+            identity_handle=self.role_id,
+        )
+        debate = await run_dev_debate(
+            self._litellm,
+            purpose=purpose,
+            initiative=initiative,
+            context=context,
+            reply_tokens=reply_tokens,
+            max_runs=int(self._settings.max_think_runs),
+        )
+        session.slots[f"debate:{purpose}:passes"] = str(debate.passes)
+        session.slots[f"debate:{purpose}:converged_at"] = str(debate.converged_at_pass)
+        session.slots[f"debate:{purpose}:hit_ceiling"] = "1" if debate.hit_ceiling else "0"
+        await self._store.save(session)
+        note = (
+            f"Debate `{purpose}` → recommend `{debate.recommend}` "
+            f"at pass {debate.converged_at_pass}/{self._settings.max_think_runs}"
+            + (" **(hit ceiling)**" if debate.hit_ceiling else "")
+        )
+        await self._poster.post_status(
+            session.room,
+            note,
+            EventType.PROGRESS,
+            {
+                "status": "dev_debate",
+                "purpose": purpose,
+                "converged_at_pass": debate.converged_at_pass,
+                "hit_ceiling": debate.hit_ceiling,
+            },
+            identity_handle=self.role_id,
+        )
+        return debate
 
     def _progress_cb(self, room: str):
         async def _on_progress(msg: str) -> None:

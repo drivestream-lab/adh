@@ -26,7 +26,7 @@ def test_entry_requires_prd_pr_url() -> None:
     ws.read_local.return_value = "# map"
     entry, stall = resolve_dev_entry(ws, _tenant(), initiative="INIT-007")
     assert entry is None
-    assert stall and "draft PR" in stall
+    assert stall and ("PR URL" in stall or "PE → Dev" in stall)
 
 
 def test_entry_requires_impact_map() -> None:

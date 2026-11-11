@@ -31,6 +31,7 @@ class IdentityRole(str, Enum):
 class RoomKind(str, Enum):
     OPS = "ops"
     TASK = "task"
+    ENGG = "engg"
     MEMORY = "memory"
     WAVE = "wave"
     GENERAL = "general"

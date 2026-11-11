@@ -35,8 +35,8 @@ def resolve_dev_entry(
     pr_url = (prd_pr_url or slots.get("prd_pr_url") or slots.get("pr_url") or "").strip()
     if not pr_url:
         return None, (
-            f"**{init}** has no product draft PR URL — Dev starts only after "
-            "`open_draft_pr` succeeds (overlap with PE/KB is OK)."
+            f"**{init}** has no product PR URL — Dev starts after **PE → Dev** "
+            "handoff (`engg go` / post–Gate‑1). Merged product PR is OK."
         )
 
     impact = impact_map_path(init)

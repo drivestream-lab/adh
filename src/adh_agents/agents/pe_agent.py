@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import re
+
 from injector import inject
 
 from src.adh_agents.base import BaseHermesAgent
 from src.adh_agents.baton.redis_store import RedisBatonStore
+from src.adh_agents.programmes.pe.engg_handoff import PeEnggHandoff
 from src.adh_agents.programmes.pe.review import PeReviewProgramme
 from src.adh_agents.programmes.pm.lead_tokens import extract_initiative
 from src.adh_agents.runtime.orchestrator import Orchestrator
@@ -24,6 +27,7 @@ _GATE1_VERBS = frozenset({"gate1", "review"})
 _GATE1_FORK_TOKENS = frozenset(
     {"attest", "approve", "new_round", "round_again", "hold", "park", "await_pm"}
 )
+_ENGG_GO = re.compile(r"(?i)\bengg\s+go\b")
 
 
 class PEAgent(BaseHermesAgent):
@@ -37,6 +41,7 @@ class PEAgent(BaseHermesAgent):
         tenants: TenantRegistryService,
         orchestrator: Orchestrator,
         pe: PeReviewProgramme,
+        engg_handoff: PeEnggHandoff,
         presence: PresenceService,
     ) -> None:
         settings = PeAgentSettings.get_instance()
@@ -44,6 +49,7 @@ class PEAgent(BaseHermesAgent):
         self._tenants = tenants
         self._orchestrator = orchestrator
         self._pe = pe
+        self._engg_handoff = engg_handoff
         self._lead = HermesSettings.get_instance().lead_handle
 
     async def initialize(self) -> None:
@@ -100,6 +106,30 @@ class PEAgent(BaseHermesAgent):
                 return
         if message.kind == MessageKind.MESSAGE and (message.identity_handle or "") == self._lead:
             body = (message.body or "").strip()
+            if _ENGG_GO.search(body):
+                init = extract_initiative(body, tenant.init_prefix)
+                if not init:
+                    await self.broadcast_progress(
+                        room,
+                        "engg go needs an INIT id (e.g. `engg go INIT-REALWORLD-001 https://…/pull/5`).",
+                        payload={"status": "engg_go_need_init"},
+                    )
+                    return
+                await self.ack_received(
+                    room,
+                    lead_body=body,
+                    source_message_id=str(message.id) if message.id else None,
+                )
+                pr_url = _extract_github_pr_url(body) or await self._lookup_pr_url(
+                    tenant.slug, init
+                )
+                await self._engg_handoff.handoff_to_dev(
+                    tenant,
+                    initiative=init,
+                    prd_pr_url=pr_url,
+                    source_room=room,
+                )
+                return
             gate1 = _parse_gate1_command(body, tenant)
             if gate1 is not None:
                 await self.ack_received(

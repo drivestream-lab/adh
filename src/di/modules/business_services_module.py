@@ -13,6 +13,7 @@ from src.adh_agents.collaboration.brief_service import HermesBriefService
 from src.adh_agents.execution.dispatch_service import HermesDispatchService
 from src.adh_agents.programmes.dev.programme import DevEnggProgramme
 from src.adh_agents.programmes.kb.enrich import KbEnrichProgramme
+from src.adh_agents.programmes.pe.engg_handoff import PeEnggHandoff
 from src.adh_agents.programmes.pe.review import PeReviewProgramme
 from src.adh_agents.programmes.pm.authoring import AuthoringProgrammeService
 from src.adh_agents.programmes.pm.http_lanes import PmHttpLanesService
@@ -62,6 +63,7 @@ class BusinessServicesModule(Module):
         binder.bind(PmPeGlueProgramme, to=PmPeGlueProgramme, scope=singleton)
         binder.bind(MetaPmProgrammeService, to=MetaPmProgrammeService, scope=singleton)
         binder.bind(AuthoringProgrammeService, to=AuthoringProgrammeService, scope=singleton)
+        binder.bind(PeEnggHandoff, to=PeEnggHandoff, scope=singleton)
         binder.bind(PeReviewProgramme, to=PeReviewProgramme, scope=singleton)
         binder.bind(ReadWalkProgramme, to=ReadWalkProgramme, scope=singleton)
         binder.bind(KbEnrichProgramme, to=KbEnrichProgramme, scope=singleton)

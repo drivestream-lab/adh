@@ -22,6 +22,7 @@ from src.adh_agents.programmes.pe.questions import (
     format_questions_document,
     impact_map_path,
 )
+from src.adh_agents.programmes.pe.engg_handoff import PeEnggHandoff
 from src.adh_agents.programmes.pe.settle import decide_settle
 from src.adh_agents.collaboration.temp_papers import (
     PurgeContext,
@@ -64,6 +65,7 @@ class PeReviewProgramme(BaseBusinessService):
         workspace: PmWorkspaceService,
         tenants: TenantRegistryService,
         buzz: BuzzService,
+        engg_handoff: PeEnggHandoff,
     ) -> None:
         super().__init__()
         self._store = store
@@ -74,6 +76,7 @@ class PeReviewProgramme(BaseBusinessService):
         self._workspace = workspace
         self._tenants = tenants
         self._buzz = buzz
+        self._engg_handoff = engg_handoff
         self._settings = PeAgentSettings.get_instance()
 
     async def list_active(self, tenant_slug: str) -> list[AgentWorkSession]:
@@ -628,6 +631,13 @@ class PeReviewProgramme(BaseBusinessService):
         )
         await self._purge_temps(tenant, room, init, PurgeEvent.GATE1_ATTESTED)
         await self._emit_pm_merge_ready_baton(tenant, session)
+        # Greenfield: PE product fence → Dev engg-think (not PM draft-PR).
+        await self._engg_handoff.handoff_to_dev(
+            tenant,
+            initiative=init,
+            prd_pr_url=pr_url,
+            source_room=room,
+        )
 
     async def _purge_temps(
         self,

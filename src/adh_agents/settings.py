@@ -66,10 +66,6 @@ class PmAgentSettings(AgentSettings):
         default=True,
         description="After open_draft_pr success, emit pe.review baton",
     )
-    emit_dev_engg_baton: bool = Field(
-        default=True,
-        description="After open_draft_pr success, emit dev.engg_think baton (E1)",
-    )
 
 
 class PeAgentSettings(AgentSettings):
@@ -116,6 +112,12 @@ class DevAgentSettings(AgentSettings):
     PREFIX: ClassVar[str] = "ADH_DEV"
     role_id: str = Field(default="adh.dev")
     progress_seconds: float = Field(default=90.0, ge=0.05)
+    max_think_runs: int = Field(
+        default=4,
+        ge=2,
+        le=8,
+        description="Max self-debate passes per judgment hop (ADH_DEV_MAX_THINK_RUNS)",
+    )
 
 
 class AdhAutonomySettings(BaseSettings):
