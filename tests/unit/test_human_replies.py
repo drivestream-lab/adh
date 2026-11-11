@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from src.adh_agents.collaboration.human_replies import (
     ARCHIVE_TASK,
+    CANCEL_REWIND,
+    CONFIRM_REWIND,
     DELETE_TASK,
     KEEP_OPEN,
     MERGE_PRODUCT_PR,
     PARK,
+    REWIND,
+    TRAJ,
     merge_gate_tokens,
     normalize_reply,
     strip_legacy_ack,
@@ -40,3 +44,13 @@ def test_archive_task_aliases() -> None:
     assert normalize_reply("archive", allowed) == ARCHIVE_TASK
     assert normalize_reply("delete task", allowed) == DELETE_TASK
     assert normalize_reply("keep", allowed) == KEEP_OPEN
+
+
+def test_rewind_and_traj_aliases() -> None:
+    allowed = [REWIND, CONFIRM_REWIND, CANCEL_REWIND, TRAJ]
+    assert normalize_reply("rewind", allowed) == REWIND
+    assert normalize_reply("confirm rewind", allowed) == CONFIRM_REWIND
+    assert normalize_reply("confirm", allowed) == CONFIRM_REWIND
+    assert normalize_reply("cancel", allowed) == CANCEL_REWIND
+    assert normalize_reply("trajectory", allowed) == TRAJ
+    assert normalize_reply("show trajectory", allowed) == TRAJ

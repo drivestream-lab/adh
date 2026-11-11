@@ -25,7 +25,8 @@
 | U5 — Zombie draft hygiene + unit proof | ✅ refuse superseding draft after merge; unit tests green (RealWorld guinea pig after U6) |
 | U6 — Agent↔agent PE↔PM rally | ✅ PM auto-answers; PE settle≤2; agent attest; human merge coach only; `ack_pe` gone; OKF prompt context |
 | KB land approve-before-merge | ✅ PR #24 — reviewer APPROVE for branch protection; stall reopens Buzz gate |
-| F1–F9 Team floor (single PR) | 🟨 T1–T4 polish landed (traj hub mirror, roster API, desktop guarded switch + listening strip, F.15–F.18). **Next: god verify** (`ADH_AUTONOMY_MODE=god`) |
+| F1–F9 Team floor (single PR) | ✅ PR #25; god INIT-004 → archive; traj hub mirrors |
+| H1 Human rewind + traj-on-Buzz | ✅ INIT-006 promote rewind (Can/Cannot/Outside → confirm → purge+reopen) + Lead `traj` card; INIT-005 post-merge `rewind_denied`; hub traj mirrors; unit god-deny |
 
 ## Landed (0b)
 

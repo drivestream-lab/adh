@@ -19,7 +19,9 @@ from src.adh_agents.programmes.pm.lead_tokens import (
 from src.adh_agents.programmes.pm.meta_pm import MetaPmProgrammeService
 from src.adh_agents.programmes.pm.outline_lock import OutlineLockMixin
 from src.adh_agents.programmes.pm.pe_glue import PmPeGlueProgramme
+from src.adh_agents.programmes.pm.rewind_coach import RewindCoachProgramme
 from src.adh_agents.programmes.pm.task_lifecycle import TaskLifecycleProgramme
+from src.adh_agents.programmes.pm.traj_coach import TrajCoachProgramme
 from src.adh_agents.runtime.autonomy import AutonomyPolicy
 from src.adh_agents.runtime.catch_up import (
     latest_unacked_lead,
@@ -71,6 +73,8 @@ class PMAgent(OutlineLockMixin, BaseHermesAgent):
         pe_glue: PmPeGlueProgramme,
         presence: PresenceService,
         task_lifecycle: TaskLifecycleProgramme,
+        rewind_coach: RewindCoachProgramme,
+        traj_coach: TrajCoachProgramme,
         autonomy: AutonomyPolicy,
     ) -> None:
         settings = PmAgentSettings.get_instance()
@@ -83,6 +87,8 @@ class PMAgent(OutlineLockMixin, BaseHermesAgent):
         self._authoring = authoring
         self._pe_glue = pe_glue
         self._task_lifecycle = task_lifecycle
+        self._rewind_coach = rewind_coach
+        self._traj_coach = traj_coach
         self._autonomy = autonomy
         self._pm_settings = settings
         self._settings = HermesSettings.get_instance()
@@ -258,6 +264,22 @@ class PMAgent(OutlineLockMixin, BaseHermesAgent):
                 await self._pe_glue.handle_baton(baton, room=room)
                 return
         if self._is_lead_text(message):
+            task_hint = room[len("task-") :].upper() if room.startswith("task-") else None
+            if await self._rewind_coach.handle_lead(
+                tenant,
+                room,
+                body=message.body or "",
+                lead_handle=self._settings.lead_handle,
+                task_id=task_hint,
+            ):
+                return
+            if await self._traj_coach.handle_lead(
+                tenant,
+                room,
+                body=message.body or "",
+                task_id=task_hint,
+            ):
+                return
             if await self._task_lifecycle.handle_lead_token(
                 tenant,
                 room,

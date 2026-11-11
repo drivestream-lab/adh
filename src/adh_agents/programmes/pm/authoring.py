@@ -71,6 +71,7 @@ from src.models.buzz_models import (
 from src.adh_agents.runtime.work_models import (
     AWAITING_CLARIFY,
     AWAITING_JUDGMENT,
+    AWAITING_NONE,
     PROGRAMME_AUTHORING,
     PROGRAMME_META_PM,
     AgentWorkSession,
@@ -759,6 +760,270 @@ class AuthoringProgrammeService(BaseBusinessService):
         )
         meta.bind_initiative(initiative)
         await self._meta_pm.start_programme(tenant, room, meta)
+
+    async def reopen_after_rewind(
+        self,
+        tenant: TenantContext,
+        room: str,
+        *,
+        initiative: str,
+        target_id: str,
+        outline: str = "",
+    ) -> None:
+        """Resume authoring after a confirmed rewind target."""
+        init = (initiative or "").strip().upper()
+        target = (target_id or "").strip().lower()
+        if target in {"start", "outline"}:
+            session = AgentWorkSession(
+                tenant_slug=tenant.slug,
+                role_id=self.role_id,
+                room=room,
+                programme=_PROGRAMME,
+                stage="start",
+                awaiting=AWAITING_NONE,
+            )
+            session.bind_initiative(init)
+            await self._store.save(session)
+            await self._poster.post_status(
+                room,
+                (
+                    f"**Rewound to start** for `{init}` — same task room. "
+                    "Paste the outline again (or a revised outline) to re-run authoring."
+                ),
+                EventType.PROGRESS,
+                {"status": "rewind_await_outline", "initiative": init, "purpose": "start"},
+            )
+            return
+
+        listing = self._workspace.inventory(tenant)
+        think_paths = [
+            p
+            for p in listing.think_paths
+            if p.replace("\\", "/").startswith(f"prd/reports/{init}-prd-think")
+        ]
+        session = await self._store.load(tenant.slug, self.role_id, init)
+        if session is None:
+            session = AgentWorkSession(
+                tenant_slug=tenant.slug,
+                role_id=self.role_id,
+                room=room,
+                programme=_PROGRAMME,
+            )
+            session.bind_initiative(init)
+        session.room = room
+        session.programme = _PROGRAMME
+        if outline:
+            session.slots[_SLOT_OUTLINE] = outline
+        session.awaiting = AWAITING_NONE
+        session.open_brief = None
+
+        if target in {"authoring-promote", "gate-reopen"} and think_paths:
+            session.stage = "authoring-promote"
+            await self._store.save(session)
+            await self._reopen_promote_from_thinks(tenant, room, session, think_paths)
+            return
+
+        if target == "authoring-quality" and think_paths:
+            session.stage = "authoring-quality"
+            await self._store.save(session)
+            # Re-run quality+promote from existing thinks (keeps thinks).
+            await self._run_quality_and_promote(tenant, room, session, think_paths)
+            return
+
+        # authoring-think (or promote with no thinks): re-run authoring from outline.
+        session.stage = "prd-think"
+        await self._store.save(session)
+        if not (session.slots.get(_SLOT_OUTLINE) or "").strip():
+            await self._poster.post_status(
+                room,
+                (
+                    f"**Rewound to authoring-think** for `{init}` — no outline on session. "
+                    "Paste the outline again to continue."
+                ),
+                EventType.STALL,
+                {"status": "rewind_need_outline", "initiative": init},
+            )
+            return
+        await self._poster.post_status(
+            room,
+            f"**Rewound to authoring-think** for `{init}` — re-running think/quality.",
+            EventType.PROGRESS,
+            {"status": "rewind_reauthor", "initiative": init},
+        )
+        await self._run_authoring(tenant, room, session, source_message_id=None)
+
+    async def _reopen_promote_from_thinks(
+        self,
+        tenant: TenantContext,
+        room: str,
+        session: AgentWorkSession,
+        think_paths: list[str],
+    ) -> None:
+        """Rebuild promote gate from existing think files (rewind to promote / reopen)."""
+        initiative = session.initiative or ""
+        qpath = quality_path(initiative)
+        labels = [f"C{_run_from_path(p)}" for p in think_paths]
+        brief_path = hermes_promote_brief_path(initiative)
+        hermes_body = self._workspace.read_local(tenant, brief_path)
+        judgment = promote_brief_from_hermes(hermes_body, think_paths)
+        if judgment is None:
+            judgment = promote_brief_from_quality(
+                self._workspace.read_local(tenant, qpath),
+                think_paths,
+            )
+            brief_path = qpath
+        if judgment is None:
+            judgment = DecisionCard(
+                recommend=labels[0] if labels else "iterate",
+                bluf="Rewound — re-pick a C-label from existing thinks.",
+                locking=(),
+                not_locking=(),
+                revise_if=(),
+                example="Reply with a C-label to promote.",
+            )
+        reply_tokens = labels + ["skip", "none", "iterate"]
+        if judgment.recommend and judgment.recommend not in reply_tokens:
+            reply_tokens.insert(0, judgment.recommend)
+        session.slots[_SLOT_THINKS] = json.dumps(think_paths)
+        session.slots[_SLOT_QUALITY] = qpath
+        session.slots[_SLOT_PROMOTE_PATHS] = json.dumps(
+            {f"C{_run_from_path(p)}": p for p in think_paths}
+        )
+        session.stage = "authoring-promote"
+        from src.adh_agents.collaboration.gate_coach import TokenAction
+
+        promote_tokens = [
+            TokenAction(
+                lab,
+                f"promote `{think_paths[i]}` → `prd/{initiative}.md` and continue the lane",
+            )
+            for i, lab in enumerate(labels)
+        ]
+        promote_tokens.extend(
+            [
+                TokenAction("skip", "skip promote for now"),
+                TokenAction("none", "decline all C-labels"),
+                TokenAction("iterate", "run another think/quality pass"),
+            ]
+        )
+        brief = self._briefs.build_brief(
+            purpose="authoring-promote",
+            node_id="authoring-promote",
+            question=f"Which product bet should become the PRD for {initiative}?",
+            example=judgment.example,
+            options=[
+                f"{lab} — copy `{think_paths[i]}` → `prd/{initiative}.md`"
+                for i, lab in enumerate(labels)
+            ],
+            recommend=judgment.recommend,
+            bluf=judgment.bluf,
+            card_kind=CARD_PROMOTE,
+            locking=list(judgment.locking),
+            not_locking=list(judgment.not_locking),
+            revise_if=list(judgment.revise_if),
+            reply_tokens=reply_tokens,
+            artefact_path=brief_path,
+        )
+        god_token = await self._gates.open(
+            session,
+            brief=brief,
+            coach=CoachSpec(
+                i_did=f"Rewound — promote gate reopened for **{initiative}** (thinks kept).",
+                recommend=judgment.recommend or (labels[0] if labels else "iterate"),
+                recommend_why=judgment.bluf,
+                evidence=f"`{brief_path}`" if brief_path else "",
+                outside_adh=(
+                    f"Read the C-label think files for `{initiative}` in Cursor before picking."
+                ),
+                tokens=promote_tokens,
+                hop="authoring-promote",
+                example=judgment.example,
+                payload={
+                    "status": "need_promote",
+                    "initiative": initiative,
+                    "choices": labels,
+                    "purpose": "authoring-promote",
+                    "rewound": True,
+                },
+            ),
+        )
+        if god_token:
+            await self._on_promote_reply(tenant, room, session, god_token)
+
+    async def _run_quality_and_promote(
+        self,
+        tenant: TenantContext,
+        room: str,
+        session: AgentWorkSession,
+        think_paths: list[str],
+    ) -> None:
+        """Re-run quality + Hermes promote judge from existing thinks."""
+        initiative = session.initiative or ""
+        qpath = quality_path(initiative)
+        await self._poster.post_status(
+            room,
+            f"Rewound — re-running `/prd-quality` for {initiative}…",
+            EventType.PROGRESS,
+            {"status": "in_progress", "hop": "quality", "initiative": initiative},
+        )
+        try:
+            await self._dispatch.run_catalog_skill(
+                tenant,
+                "prd-quality",
+                initiative,
+                extra_prompt=(
+                    "Act as a human PM evaluating think candidates for Lead. "
+                    "Compare ALL candidates below, score them on the delivery bar, "
+                    "and recommend exactly one C-label to promote.\n"
+                    + "\n".join(f"- {p}" for p in think_paths)
+                    + f"\nWrite `{qpath}` with comparative rationale.\n"
+                    "Do not install, invoke, or wait for `/prd-critic`."
+                ),
+                on_progress=self._progress_callback(
+                    room, hop="quality", initiative=initiative, label="quality"
+                ),
+            )
+        except Exception as exc:
+            self.logger.exception("rewind quality failed", initiative=initiative)
+            await self._poster.post_status(
+                room,
+                f"Quality failed after rewind: {str(exc)[:200]}",
+                EventType.STALL,
+            )
+            return
+        labels = [f"C{_run_from_path(p)}" for p in think_paths]
+        brief_path = hermes_promote_brief_path(initiative)
+        try:
+            await self._dispatch.run_hermes_copy(
+                tenant,
+                "hermes.pm.promote.judge",
+                {
+                    "initiative": initiative,
+                    "think_list": "\n".join(
+                        f"- {lab}: `{path}`" for lab, path in zip(labels, think_paths)
+                    ),
+                    "labels": ", ".join(labels),
+                    "quality_path": qpath,
+                    "brief_path": brief_path,
+                    "extra": "(none)",
+                },
+                on_progress=self._progress_callback(
+                    room,
+                    hop="promote-judge",
+                    initiative=initiative,
+                    label="promote-judge",
+                ),
+                label="promote-judge",
+            )
+        except Exception as exc:
+            self.logger.exception("rewind promote judge failed", initiative=initiative)
+            await self._poster.post_status(
+                room,
+                f"Hermes promote judgment failed after rewind: {str(exc)[:200]}",
+                EventType.STALL,
+            )
+            return
+        await self._reopen_promote_from_thinks(tenant, room, session, think_paths)
 
     async def god_resume_awaiting_post_pm(
         self, tenant: TenantContext, room: str, initiative: str
