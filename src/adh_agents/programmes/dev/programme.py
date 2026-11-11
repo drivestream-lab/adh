@@ -268,13 +268,37 @@ class DevEnggProgramme(BaseBusinessService):
         )
         try:
             await self._run_spine(tenant, collab, session)
-            done = await self._batons.mark_done(baton, ttl=ttl)
+            current = await self._store.load(tenant.slug, self.role_id, init) or session
+            # Spine returns without raise on stall/gate. Only clean-done when gated
+            # (awaiting Lead) or E1 fence reached — mid-chain awaiting=none is a stall.
+            if current.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION):
+                done = await self._batons.mark_done(baton, ttl=ttl)
+                return Rollup(
+                    baton_id=done.id,
+                    role=self.role_id,
+                    status=BatonStatus.DONE,
+                    summary="dev yaml development gated",
+                    correlation_id=baton.correlation_id,
+                )
+            stage_now = (current.stage or "").strip()
+            if stage_now in {_STAGE_DONE, _E1_TERMINAL}:
+                done = await self._batons.mark_done(baton, ttl=ttl)
+                return Rollup(
+                    baton_id=done.id,
+                    role=self.role_id,
+                    status=BatonStatus.DONE,
+                    summary="dev yaml development bound",
+                    correlation_id=baton.correlation_id,
+                )
+            err = f"stalled_at_{stage_now or 'unknown'}"
+            done = await self._batons.mark_done(baton, ttl=ttl, error=err)
             return Rollup(
                 baton_id=done.id,
                 role=self.role_id,
-                status=BatonStatus.DONE,
-                summary="dev yaml development bound",
+                status=BatonStatus.FAILED,
+                summary="dev yaml development stalled",
                 correlation_id=baton.correlation_id,
+                error=err,
             )
         except Exception as exc:
             await self._batons.mark_done(baton, ttl=ttl, error=str(exc))
