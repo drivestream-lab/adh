@@ -154,6 +154,8 @@ async def test_land_calls_land_pull_request() -> None:
     workspace.purge_local_paths.return_value = []
 
     store = AsyncMock()
+    buzz = AsyncMock()
+    lifecycle = AsyncMock()
     prog = object.__new__(KbEnrichProgramme)
     prog.role_id = "adh.kb"
     prog._poster = poster  # type: ignore[attr-defined]
@@ -163,6 +165,8 @@ async def test_land_calls_land_pull_request() -> None:
     prog._forge = forge  # type: ignore[attr-defined]
     prog._workspace = workspace  # type: ignore[attr-defined]
     prog._settings = MagicMock(reviewer_app_slug="adh-reviewer")  # type: ignore[attr-defined]
+    prog._buzz = buzz  # type: ignore[attr-defined]
+    prog._lifecycle = lifecycle  # type: ignore[attr-defined]
 
     tenant = TenantContext(
         slug="demo",

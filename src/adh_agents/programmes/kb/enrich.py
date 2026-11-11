@@ -42,8 +42,11 @@ from src.infra_services.forge_action_service import ForgeActionService
 from src.infra_services.litellm_service import LiteLLMService
 from src.infra_services.pm_workspace_service import PmWorkspaceService
 from src.infra_services.tenant_registry_service import TenantRegistryService
+from src.logging import get_logger
 from src.models.buzz_models import EventType, TaskEventCreate, TaskEventKind, TaskState
 from src.models.tenant_models import TenantContext
+
+logger = get_logger()
 
 
 class KbEnrichProgramme(BaseBusinessService):
@@ -332,7 +335,7 @@ class KbEnrichProgramme(BaseBusinessService):
                     )
                 )
             except Exception:
-                self.logger.exception("KB LLM fill failed; keeping stub", path=stub.relative_path)
+                logger.exception("KB LLM fill failed; keeping stub", path=stub.relative_path)
                 out.append(stub)
         return out
 
@@ -683,7 +686,7 @@ class KbEnrichProgramme(BaseBusinessService):
             )
             await self._buzz.set_task_state(tenant.slug, init, TaskState.DONE, role_id=self.role_id)
         except Exception:
-            self.logger.exception("kb land trajectory/state failed", initiative=init)
+            logger.exception("kb land trajectory/state failed", initiative=init)
         # Purge only after successful land (U4).
         purged = execute_purge(
             self._workspace,
