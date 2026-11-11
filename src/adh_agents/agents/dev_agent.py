@@ -64,11 +64,32 @@ class DevAgent(BaseHermesAgent):
         task = asyncio.create_task(self._god_resume_open_gates())
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
+        # Engg rooms appear after PE handoff; refresh subscribe + reclaim pending
+        # batons (SSE only sees messages after subscribe — catch-up is required).
         self.start_listen_refresh_loop(
             lambda: listen_rooms_for_tenants(self._buzz, self._tenants),
             interval_seconds=15.0,
+            on_added=self._on_rooms_added,
         )
+        catch = asyncio.create_task(self._pending_baton_loop())
+        self._bg.add(catch)
+        catch.add_done_callback(self._bg.discard)
         self.logger.info("DevAgent listening", rooms=rooms)
+
+    async def _on_rooms_added(self, added: list[str]) -> None:
+        del added
+        await self._catch_up_pending_batons()
+
+    async def _pending_baton_loop(self) -> None:
+        """Reclaim ``dev.engg_think`` if emit raced ahead of engg-room subscribe."""
+        while True:
+            try:
+                await asyncio.sleep(12.0)
+                await self._catch_up_pending_batons()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.logger.exception("Dev pending baton loop failed")
 
     async def _god_resume_open_gates(self) -> None:
         if not self._autonomy.is_god:
@@ -125,18 +146,21 @@ class DevAgent(BaseHermesAgent):
         if tenant is None:
             return
         payload = message.payload or {}
-        if (
-            payload.get("status") == "baton_emitted"
-            and payload.get("baton_type") == _BATON_TYPE
-            and payload.get("idempotency_key")
-        ):
-            baton = await self._batons.get(
-                tenant=str(payload.get("tenant") or tenant.slug),
-                idempotency_key=str(payload["idempotency_key"]),
-            )
-            if baton is not None:
-                await self._programme.handle_baton(baton, room=room)
-                return
+        status = str(payload.get("status") or "")
+        if status == "baton_emitted" and payload.get("baton_type") == _BATON_TYPE:
+            key = payload.get("idempotency_key")
+            if key:
+                baton = await self._batons.get(
+                    tenant=str(payload.get("tenant") or tenant.slug),
+                    idempotency_key=str(key),
+                )
+                if baton is not None:
+                    await self._programme.handle_baton(baton, room=room)
+                    return
+        # Hub announce from PE — claim even if engg-room SSE was late.
+        if status == "engg_handoff":
+            await self._catch_up_pending_batons()
+            return
 
         if message.kind != MessageKind.MESSAGE or (message.identity_handle or "") != self._lead:
             return
