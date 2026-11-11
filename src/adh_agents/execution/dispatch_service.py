@@ -193,11 +193,18 @@ class HermesDispatchService(BaseBusinessService):
             repo=request.repo,
         )
         if action == "open_draft_pr":
+            refs = [filled.get("body_path") or "", filled.get("prd_path") or ""]
             await self._emit_pe_review_baton(
                 tenant,
                 initiative=initiative,
                 pr_url=result.url or "",
-                artefact_refs=[filled.get("body_path") or "", filled.get("prd_path") or ""],
+                artefact_refs=refs,
+            )
+            await self._emit_dev_engg_baton(
+                tenant,
+                initiative=initiative,
+                pr_url=result.url or "",
+                artefact_refs=refs,
             )
         return result
 
@@ -262,6 +269,69 @@ class HermesDispatchService(BaseBusinessService):
             )
         except Exception:
             self.logger.exception("pe.review baton notice failed", initiative=initiative)
+
+    async def _emit_dev_engg_baton(
+        self,
+        tenant: TenantContext,
+        *,
+        initiative: str,
+        pr_url: str,
+        artefact_refs: list[str],
+    ) -> None:
+        """E1 — park engg-think for Dev after product draft PR opens."""
+        if not self._pm_settings.emit_dev_engg_baton:
+            return
+        refs = [r for r in artefact_refs if r]
+        collab = await collaboration_room(
+            self._buzz, tenant, initiative=initiative, fallback=tenant.ops_room
+        )
+        baton = Baton(
+            type="dev.engg_think",
+            from_role="adh.pm",
+            to_role="adh.dev",
+            tenant=tenant.slug,
+            ops_room=collab,
+            initiative=initiative,
+            idempotency_key=f"dev.engg_think:{tenant.slug}:{initiative}:{pr_url or 'draft'}",
+            payload={
+                "prd_pr_url": pr_url,
+                "pr_url": pr_url,
+                "stage": "engg_think",
+                "note": "Dev worker claims dev.engg_think on Team OS",
+            },
+            artefact_refs=refs,
+        )
+        ttl = int(self._pm_settings.baton_ttl_seconds)
+        stored, created = await self._batons.create_pending(baton, ttl=ttl)
+        notice = (
+            f"@{baton.to_role} baton `dev.engg_think` "
+            f"(init={initiative}; waiting for Dev; correlation={stored.correlation_id})"
+        )
+        if not created:
+            notice = f"(idempotent) {notice}"
+        try:
+            await self._buzz.post_message(
+                collab,
+                MessageCreate(
+                    identity_handle="adh.pm",
+                    body=notice,
+                    kind=MessageKind.EVENT,
+                    event_type=EventType.PROGRESS,
+                    payload={
+                        "status": "baton_emitted",
+                        "collab": True,
+                        "baton_type": "dev.engg_think",
+                        "baton_id": stored.id,
+                        "created": created,
+                        "correlation_id": stored.correlation_id,
+                        "idempotency_key": stored.idempotency_key,
+                        "initiative": initiative,
+                        "tenant": tenant.slug,
+                    },
+                ),
+            )
+        except Exception:
+            self.logger.exception("dev.engg_think baton notice failed", initiative=initiative)
 
     async def _ensure_prd_draft_slots(
         self,

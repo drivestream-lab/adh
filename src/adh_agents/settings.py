@@ -66,6 +66,10 @@ class PmAgentSettings(AgentSettings):
         default=True,
         description="After open_draft_pr success, emit pe.review baton",
     )
+    emit_dev_engg_baton: bool = Field(
+        default=True,
+        description="After open_draft_pr success, emit dev.engg_think baton (E1)",
+    )
 
 
 class PeAgentSettings(AgentSettings):
@@ -104,6 +108,14 @@ class KbAgentSettings(AgentSettings):
             "(branch protection; no PE attest on knowledge lane)"
         ),
     )
+
+
+class DevAgentSettings(AgentSettings):
+    """Dev engg-think agent (E1) — design/deps/ADR/plan → board seed; not coder."""
+
+    PREFIX: ClassVar[str] = "ADH_DEV"
+    role_id: str = Field(default="adh.dev")
+    progress_seconds: float = Field(default=90.0, ge=0.05)
 
 
 class AdhAutonomySettings(BaseSettings):

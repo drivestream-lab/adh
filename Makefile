@@ -1,4 +1,4 @@
-.PHONY: setup check check-ci format format-check lint lint-check types layers test run adh-pm adh-pe adh-read adh-kb desktop-dev desktop-install
+.PHONY: setup check check-ci format format-check lint lint-check types layers test run adh-pm adh-pe adh-read adh-kb adh-dev desktop-dev desktop-install
 
 # Quality ingress is Makefile-only: `make check` then `make test`.
 
@@ -44,6 +44,9 @@ adh-read:
 
 adh-kb:
 	@bash scripts/run_adh_kb_worker.sh
+
+adh-dev:
+	@bash scripts/run_adh_dev_worker.sh
 
 desktop-dev:
 	cd apps/buzz-desktop && npm install && npm run dev

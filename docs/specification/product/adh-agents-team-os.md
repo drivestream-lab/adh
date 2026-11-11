@@ -106,10 +106,12 @@ become a second task SSOT.
 | Role | Buzz id | Owns | Hire / verify |
 |------|---------|------|----------------|
 | PM | `adh.pm` | Requirements → draft PRD PR; product answers; PRD merge | Verify first on new OS |
+| Dev | `adh.dev` | Engg **think** after PRD PR: deps DAG, ADR/TDD, API/tests/verification **plan**, WorkManifest → **board seed** | E1; **not** coder |
+| Coder | `adh.coder` (later) | Execute board/WorkManifest → code PRs | After Dev fence |
 | Read | `adh.read` | Walk one repo; Buzz rollup | Before / with PE fan-out |
 | PE | `adh.pe` | Product review: fan-out reads, ≤10 Q / ≤2 agent rounds, attest, ping PM | After PM verify; consume `pe.review` |
 | KB | `adh.kb` | Patch OKF `knowledge/` heads | After merge enrich |
-| Dev / QA / IaC / SRE / Obs | later | … | later |
+| QA / IaC / SRE / Obs | later | … | later |
 
 ## Workers
 
@@ -118,6 +120,7 @@ make adh-pm    → adh_pm_worker
 make adh-pe    → adh_pe_worker
 make adh-read  → adh_read_worker
 make adh-kb    → adh_kb_worker
+make adh-dev   → adh_dev_worker   # E1 engg think → board
 ```
 
 ## Collaboration loop
@@ -167,8 +170,13 @@ Human mode only. Lead posts `rewind` → coach always shows **Can / Cannot / Out
 | Graph | SSOT | Use |
 |-------|------|-----|
 | Delivery work graph | `prayog-skills/workflow.yaml` | Stage navigation (ADR 0001) |
-| Repo dependency DAG | Impact-Map (+ KB overlays) | Parallel mutate tiers; reads stay parallel |
+| Repo dependency DAG | Impact-Map (+ KB overlays); engg refines to **`Engg-Deps-{INIT}.md`** + `deps-acceptance` | Parallel mutate tiers; board wave order |
+| Task DAG | Plan §9 WorkManifest | Coder executes TASK* in order |
 | Code graph | Fleet / MCP tool | Inside reader only |
+
+### Dev engg-think (E1)
+
+After **PRD draft PR** exists, `adh.dev` runs the engg think lane (feasibility → technical review → **deps accept** → ADR/TDD accept → plan + verification **plan** → coding-readiness → **board tickets**). Hermes multi-thought briefs (ADR why / API why / deps / verification gaps); human iterates in human mode; god plays recommend only (no Lead queries). **Dev plans proofs; CI/human run them** (verify agent later). Post-board: `revise engg` reopens think—no silent rewrite of seeded tickets/WorkManifest. **Coder** is a separate later hire.
 
 ## KB heads (OKF in tenant meta)
 
@@ -202,4 +210,4 @@ See [`../references/adh-kb-heads.md`](../references/adh-kb-heads.md).
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md) · **As-built:** [`../as-built/implementation-status.md`](../as-built/implementation-status.md)
 
 Enabler = `BaseHermesAgent`; control plane = Orchestrator in `adh_agents/runtime`.  
-**Next:** Human INIT-005 verify rewind + traj; then Dev hire (C) — see plan.
+**Next:** E1 human guinea pig (Dev engg-think → board on RealWorld); coder hire later.

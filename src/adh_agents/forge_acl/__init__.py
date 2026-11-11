@@ -8,7 +8,16 @@ from typing import FrozenSet
 _DEFAULT_ACL: dict[str, FrozenSet[str]] = {
     "adh.pm": frozenset({"open_draft_pr", "prd_merge", "comment_pr", "close_pull_request"}),
     "adh.pe": frozenset({"ready_for_review", "approve_attestation", "apply_labels", "comment_pr"}),
-    "adh.dev": frozenset({"open_draft_pr", "push_branch", "comment_pr"}),
+    # Engg think: spec draft PRs + board seed; product merge stays PM.
+    "adh.dev": frozenset(
+        {
+            "open_draft_pr",
+            "push_branch",
+            "comment_pr",
+            "create_board_tickets",
+            "close_pull_request",
+        }
+    ),
     "adh.qa": frozenset({"comment_pr", "set_check"}),
     "adh.read": frozenset(),
     "adh.taskgraph": frozenset(),

@@ -24,11 +24,14 @@ KB land approve-before   ✅  PR #24; reopen Buzz gate on stall
 F1–F9 Team floor         ✅  PR #25; god INIT-004 → archive; traj hub mirrors
 
 ── done (PM lane A+B) ──
-H1 Human rewind + traj    ✅  006 promote rewind+traj; 005 post-merge `rewind_denied`; unit god-deny
+H1 Human rewind + traj    ✅  PR #27; 006 promote rewind+traj; 005 post-merge `rewind_denied`
 Human INIT-005 verify     ✅  full human forward → archive; hub traj mirrors
 
+── in progress (single PR) ──
+E1 Dev engg-think→board   🟨  adh.dev think lane; deps/ADR/plan/verify-plan; board seed; coder later
+
 ── later ──
-C Dev hire (+ qa / iac / sre / obs + codegraph MCP + TaskGraph)   ⬜
+Coder hire (`adh.coder`) + verify agent + qa / iac / sre / obs + codegraph MCP + TaskGraph   ⬜
 ```
 
 ---
@@ -150,7 +153,77 @@ C Dev hire (+ qa / iac / sre / obs + codegraph MCP + TaskGraph)   ⬜
 | `src/adh_agents/agents/pm_agent.py` | Route rewind / traj |
 | `src/adh_agents/forge_acl` | `close_pull_request` for PM/KB |
 
+**Shipped:** [PR #27](https://github.com/drivestream-lab/adh/pull/27).
+
 ---
+
+## E1 — Dev engg-think → board (single PR)
+
+**Intent:** Hire **`adh.dev`** as the engg **think** agent. Sort design, multi-repo **deps DAG**, ADR/TDD, API listing, test + **verification plan**, implementation plan / WorkManifest, then **seed GitHub board**. **Coder** (`adh.coder`) is a later hire. Downstream coder/verify **consume** Dev authority; they do not re-decide architecture.
+
+**Validation (same as H1):** unit tests in-PR + human guinea pig on RealWorld (Lead tokens as `nikd10x`); god smoke optional on Dev gates. **One PR** for all E1 phases.
+
+### Locks (L1–L9)
+
+| # | Lock |
+|---|------|
+| L1 | Buzz role `adh.dev` (product: Dev / engg think) |
+| L2 | Coder / `loop-spec` / verify-agent **out of E1** |
+| L3 | Start when **PRD draft PR** exists (overlap PE/KB OK) |
+| L4 | **Board tickets seeded** = Dev v1 done fence |
+| L5 | Durable `Engg-Deps-{INIT}.md` + gate `deps-acceptance` (visible DAG/tiers) |
+| L6 | Dev owns **verification plan** only; CI/human **run** proofs (no verify agent yet) |
+| L7 | Post-board: Lead `revise engg` reopens think gates; **no silent rewrite** of seeded WorkManifest/tickets (supersede + re-seed) |
+| L8 | Skills → Hermes multi-thought brief → GateOpener; human suggest/accept; **god = no Lead queries** (recommend only) |
+| L9 | Security/migrations/SLO = optional Hermes sections when PRD demands |
+
+### Gaps factored in
+
+| Gap | How E1 addresses it |
+|-----|---------------------|
+| Deps/DAG tribal in Impact-Map only | `Engg-Deps-*` + `deps-acceptance` before ADR/plan accept |
+| Verify plan vs run confused | Coach + docs: Dev plans layers; execution = CI/human / later verify agent |
+| Post-board revise | `revise engg` programme path + supersede policy |
+
+### Catalogue spine (v1 in)
+
+`initiative-feasibility` → `spec-technical-review` → **`deps-acceptance`** → `technical-review-approval` (`tdd-adr-acceptance`) → `spec-implementation-plan` → `coding-readiness` → `board-tickets-action`
+
+### File-level plan
+
+| Phase | File | Change |
+|-------|------|--------|
+| P0 | `docs/specification/plans/adh-agents-implementation-plan.md` | This E1 section + tracker |
+| P0 | `docs/specification/product/adh-agents-team-os.md` | Dev vs Coder; deps artefact; verify-plan vs run; revise engg |
+| P0 | `docs/specification/as-built/implementation-status.md` | E1 row |
+| P1 | `src/adh_agents/settings.py` | `DevAgentSettings` |
+| P1 | `src/adh_agents/agents/dev_agent.py` | **NEW** worker agent |
+| P1 | `src/adh_dev_worker.py` + `scripts/run_adh_dev_worker.sh` + `Makefile` | `make adh-dev` |
+| P1 | `src/adh_agents/forge_acl/__init__.py` | Dev: comment/open_draft_pr/create_board_tickets (no prd_merge) |
+| P1 | `src/di/modules/business_services_module.py` | Bind Dev |
+| P2 | `src/adh_agents/programmes/dev/` | **NEW** programme package |
+| P2 | `…/dev/entry.py` | Bind INIT + prd_pr_url + Impact-Map; fail closed if no PRD PR |
+| P2 | `…/dev/feasibility.py` / `technical_review.py` / `plan.py` | Skill dispatch |
+| P2 | `…/dev/programme.py` | Spine orchestration + resume |
+| P3 | `…/dev/deps.py` + `deps_coach.py` | Engg-Deps artefact + `deps-acceptance` gate |
+| P3 | path helper | `engg_deps_path(init)` |
+| P4 | Hermes copy / prompts | `hermes.dev.adr|api|deps|verification|coding_readiness.judge` |
+| P4 | `…/dev/cards.py` | Parse multi-thought briefs |
+| P5 | `human_replies.py` | accept deps / another round / accept tdd-adr / coding ready / authorize board / revise engg |
+| P5 | `…/dev/gates.py` | GateOpener wiring; god-safe recommends |
+| P6 | `…/dev/verification_plan.py` | Assert coverage table; Hermes verification judge; honest coach copy |
+| P7 | `…/dev/revise.py` | Post-board revise engg policy |
+| P8 | PM emit after draft PR / Lead hire | Baton `dev.engg_think` + payload |
+| P9 | `…/dev/board_seed.py` | Preconditions + `create_board_tickets` |
+| P10 | `tests/unit/test_dev_*.py` | entry, deps, cards, board preconditions, revise, tokens |
+| P11 | Ops | Human guinea pig; optional god Dev-gate smoke |
+
+### Out of scope
+
+`adh.coder`, verify agent, `loop-spec` as OS bar, codegraph MCP/TaskGraph, full engg rewind ladder (revise engg is enough for v1), prod/SRE.
+
+---
+
 
 ## Storage map (code-level)
 

@@ -2,6 +2,7 @@
 
 from injector import Binder, Module, singleton
 
+from src.adh_agents.agents.dev_agent import DevAgent
 from src.adh_agents.agents.kb_agent import KbAgent
 from src.adh_agents.agents.pe_agent import PEAgent
 from src.adh_agents.agents.pm_agent import PMAgent
@@ -10,6 +11,7 @@ from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.catalogue.navigator import HermesNavigatorService
 from src.adh_agents.collaboration.brief_service import HermesBriefService
 from src.adh_agents.execution.dispatch_service import HermesDispatchService
+from src.adh_agents.programmes.dev.programme import DevEnggProgramme
 from src.adh_agents.programmes.kb.enrich import KbEnrichProgramme
 from src.adh_agents.programmes.pe.review import PeReviewProgramme
 from src.adh_agents.programmes.pm.authoring import AuthoringProgrammeService
@@ -63,9 +65,11 @@ class BusinessServicesModule(Module):
         binder.bind(PeReviewProgramme, to=PeReviewProgramme, scope=singleton)
         binder.bind(ReadWalkProgramme, to=ReadWalkProgramme, scope=singleton)
         binder.bind(KbEnrichProgramme, to=KbEnrichProgramme, scope=singleton)
+        binder.bind(DevEnggProgramme, to=DevEnggProgramme, scope=singleton)
         binder.bind(PmHttpLanesService, to=PmHttpLanesService, scope=singleton)
         # Agents: bound for workers; only PM auto-inits with the API process.
         binder.bind(PMAgent, to=PMAgent, scope=singleton)
         binder.bind(PEAgent, to=PEAgent, scope=singleton)
         binder.bind(ReadAgent, to=ReadAgent, scope=singleton)
         binder.bind(KbAgent, to=KbAgent, scope=singleton)
+        binder.bind(DevAgent, to=DevAgent, scope=singleton)
