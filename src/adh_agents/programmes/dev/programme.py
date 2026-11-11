@@ -11,6 +11,7 @@ from src.adh_agents.baton.models import Baton, BatonStatus, Rollup
 from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.catalogue.navigator import HermesNavigatorService
 from src.adh_agents.collaboration.brief_service import HermesBriefService
+from src.adh_agents.collaboration.gate_coach import TokenAction
 from src.adh_agents.collaboration.human_replies import (
     ACCEPT_TDD_ADR,
     ANOTHER_ROUND,
@@ -18,7 +19,6 @@ from src.adh_agents.collaboration.human_replies import (
     CODING_READY,
     HOLD,
     MERGE_SPEC_PR,
-    NEED_ANOTHER_ROUND,
     REVISE_ENGG,
     normalize_reply,
 )
@@ -45,6 +45,7 @@ from src.adh_agents.programmes.dev.impact_repos import (
     parse_affected_repos,
     resolve_repo_root,
 )
+from src.adh_agents.programmes.dev.outcome_decide import decide_catalogue_outcome
 from src.adh_agents.programmes.dev.paths import (
     implementation_plan_path,
     spec_slice_path,
@@ -53,7 +54,7 @@ from src.adh_agents.programmes.dev.paths import (
 )
 from src.adh_agents.programmes.dev.revise import apply_revise_engg_slots, is_post_board
 from src.adh_agents.programmes.pm.validation_report import impact_map_path
-from src.adh_agents.runtime.gate_opener import GateOpener
+from src.adh_agents.runtime.gate_opener import CoachSpec, GateOpener
 from src.adh_agents.runtime.room_resolve import engg_collaboration_room
 from src.adh_agents.runtime.work_models import (
     AWAITING_AUTHORIZATION,
@@ -186,10 +187,10 @@ class DevEnggProgramme(BaseBusinessService):
             await self._on_board_token(tenant, room, session, matched)
             return
         if stage == "spec-human-decision":
-            if matched in {ANOTHER_ROUND, NEED_ANOTHER_ROUND} or "round" in matched:
-                self._navigator.advance(session, "pass")
-            else:
-                self._navigator.advance(session, "pass")
+            # Clarification checkpoint: any non-hold token continues (YAML pass).
+            if matched == HOLD:
+                return
+            self._navigator.advance(session, "pass")
             session.awaiting = AWAITING_NONE
             session.open_brief = None
             await self._store.save(session)
@@ -390,8 +391,7 @@ class DevEnggProgramme(BaseBusinessService):
         session.slots["prd_pr_url"] = entry.prd_pr_url
         session.programme = PROGRAMME_DEV
         session.room = room
-        legacy = (session.stage or "").strip()
-        if legacy in {"", "entry", "deps-acceptance"}:
+        if not (session.stage or "").strip():
             session.stage = _ENTRY
         if (session.slots.get("board_seeded") or "").lower() in {"1", "true", "yes"}:
             session.stage = _STAGE_DONE
@@ -450,19 +450,64 @@ class DevEnggProgramme(BaseBusinessService):
             return False
 
         if node.is_skill():
-            ok = await self._run_skill_stage(tenant, room, session, stage)
+            evidence, ok = await self._run_skill_stage(tenant, room, session, stage)
             if not ok:
                 return False
-            self._navigator.advance(session, "pass")
+            outcome = await decide_catalogue_outcome(
+                self._litellm,
+                node_id=stage,
+                initiative=session.initiative or "",
+                allowed_outcomes=list(node.outcomes.keys()),
+                evidence=evidence,
+            )
+            await self._poster.post_status(
+                room,
+                f"Dev decided YAML outcome `{outcome}` for `{stage}`.",
+                EventType.PROGRESS,
+                {"status": "dev_outcome", "node": stage, "outcome": outcome},
+                identity_handle=self.role_id,
+            )
+            nxt = node.outcomes.get(outcome)
+            if outcome == "failed" or nxt == "workflow-stop":
+                await self._poster.post_status(
+                    room,
+                    f"Dev stalled on `{stage}` outcome `{outcome}`.",
+                    EventType.STALL,
+                    identity_handle=self.role_id,
+                )
+                return False
+            self._navigator.advance(session, outcome)
             await self._store.save(session)
             return True
 
         if node.is_external_action():
             if stage == "spec-pr-action":
-                ok = await self._run_spec_pr_action(tenant, room, session)
+                evidence, ok = await self._run_spec_pr_action(tenant, room, session)
                 if not ok:
                     return False
-                self._navigator.advance(session, "pass")
+                outcome = await decide_catalogue_outcome(
+                    self._litellm,
+                    node_id=stage,
+                    initiative=session.initiative or "",
+                    allowed_outcomes=list(node.outcomes.keys()),
+                    evidence=evidence,
+                )
+                await self._poster.post_status(
+                    room,
+                    f"Dev decided YAML outcome `{outcome}` for `{stage}`.",
+                    EventType.PROGRESS,
+                    {"status": "dev_outcome", "node": stage, "outcome": outcome},
+                    identity_handle=self.role_id,
+                )
+                if outcome != "pass":
+                    await self._poster.post_status(
+                        room,
+                        f"Dev stalled on `{stage}` outcome `{outcome}`.",
+                        EventType.STALL,
+                        identity_handle=self.role_id,
+                    )
+                    return False
+                self._navigator.advance(session, outcome)
                 await self._store.save(session)
                 return True
             if stage == "spec-merge":
@@ -500,7 +545,8 @@ class DevEnggProgramme(BaseBusinessService):
 
     async def _run_skill_stage(
         self, tenant: TenantContext, room: str, session: AgentWorkSession, stage: str
-    ) -> bool:
+    ) -> tuple[str, bool]:
+        """Run skill(s); return (evidence for outcome decide, ok)."""
         init = session.initiative or ""
         repos = self._impacted(tenant, init)
         if not repos:
@@ -510,8 +556,9 @@ class DevEnggProgramme(BaseBusinessService):
                 EventType.STALL,
                 identity_handle=self.role_id,
             )
-            return False
+            return "", False
 
+        ws_root = self._tenants.workspace_root()
         prd_abs = str((Path(tenant.meta_root).expanduser() / prd_path(init)).resolve())
         impact_abs = str((Path(tenant.meta_root).expanduser() / impact_map_path(init)).resolve())
         await self._poster.post_status(
@@ -523,23 +570,28 @@ class DevEnggProgramme(BaseBusinessService):
 
         # spec-draft: every affected repo. Other skills: primary (first) + note others.
         targets = repos if stage == "spec-draft" else repos[:1]
+        evidence_chunks: list[str] = []
         for hit in targets:
-            root = resolve_repo_root(tenant.meta_root, hit.repo)
+            root = resolve_repo_root(ws_root, hit.repo)
             if root is None:
                 await self._poster.post_status(
                     room,
-                    f"Missing local checkout for `{hit.repo}` next to meta — stall `{stage}`.",
+                    (
+                        f"Missing local checkout for `{hit.repo}` under "
+                        f"`{ws_root}` — stall `{stage}`."
+                    ),
                     EventType.STALL,
                     identity_handle=self.role_id,
                 )
-                return False
+                return "", False
             extra = (
                 f"Repo under development: {hit.repo} ({hit.service}). "
                 f"Absolute PRD path (read-only): {prd_abs}. "
                 f"Absolute Impact-Map path: {impact_abs}. "
                 f"All impacted repos: {', '.join(r.repo for r in repos)}. "
                 "Write artefacts in THIS repo only (docs/specification/**). "
-                "Do not implement product code. Do not forge PRs."
+                "Do not implement product code. Do not forge PRs. "
+                "When finished, state clearly whether the skill pass is clean or blocked."
             )
             try:
                 result = await self._dispatch.run_skill_node(
@@ -560,7 +612,7 @@ class DevEnggProgramme(BaseBusinessService):
                     EventType.STALL,
                     identity_handle=self.role_id,
                 )
-                return False
+                return "", False
             if not result.ok:
                 await self._poster.post_status(
                     room,
@@ -568,37 +620,45 @@ class DevEnggProgramme(BaseBusinessService):
                     EventType.STALL,
                     identity_handle=self.role_id,
                 )
-                return False
+                return (result.output or "")[:8000], False
             session.slots[f"skill:{stage}:{hit.repo}"] = "ok"
+            evidence_chunks.append(f"## {hit.repo}\n{(result.output or '')[:4000]}")
 
         if stage == "spec-implementation-plan":
-            primary = resolve_repo_root(tenant.meta_root, targets[0].repo)
+            primary = resolve_repo_root(ws_root, targets[0].repo)
             plan = implementation_plan_path(init)
             wm = workmanifest_path(init)
             session.slots["implementation_plan_path"] = plan
             session.slots["workmanifest_path"] = wm
             session.slots["plan_repo"] = targets[0].repo
-            if primary is not None:
-                if (primary / plan).is_file():
-                    session.slots["implementation_plan_current"] = "true"
-                if (primary / wm).is_file() or any(
-                    primary.glob("docs/specification/plans/WorkManifest*")
-                ):
-                    session.slots["workmanifest_contract_pass"] = "true"
-                # Soft-pass WM when plan skill succeeded — contract script is later hardening.
-                if session.slots.get("implementation_plan_current") and not session.slots.get(
-                    "workmanifest_contract_pass"
-                ):
-                    session.slots["workmanifest_contract_pass"] = "true"
+            if primary is None or not (primary / plan).is_file():
+                await self._poster.post_status(
+                    room,
+                    f"Implementation plan missing at `{plan}` in `{targets[0].repo}` after skill.",
+                    EventType.STALL,
+                    identity_handle=self.role_id,
+                )
+                return "\n\n".join(evidence_chunks), False
+            session.slots["implementation_plan_current"] = "true"
+            if (primary / wm).is_file():
+                session.slots["workmanifest_contract_pass"] = "true"
+            else:
+                await self._poster.post_status(
+                    room,
+                    f"WorkManifest missing at `{wm}` — fail closed (no soft-pass).",
+                    EventType.STALL,
+                    identity_handle=self.role_id,
+                )
+                return "\n\n".join(evidence_chunks), False
         if stage == "spec-technical-review":
             session.slots["technical_review_path"] = technical_review_path(init)
             session.slots["tech_repo"] = targets[0].repo
         await self._store.save(session)
-        return True
+        return "\n\n".join(evidence_chunks), True
 
     async def _run_spec_pr_action(
         self, tenant: TenantContext, room: str, session: AgentWorkSession
-    ) -> bool:
+    ) -> tuple[str, bool]:
         if not forge_allowed(self.role_id, "open_draft_pr"):
             await self._poster.post_status(
                 room,
@@ -606,11 +666,12 @@ class DevEnggProgramme(BaseBusinessService):
                 EventType.STALL,
                 identity_handle=self.role_id,
             )
-            return False
+            return "", False
         init = session.initiative or ""
         repos = self._impacted(tenant, init)
         pr_urls: list[str] = []
         pr_meta: list[dict[str, str]] = []
+        ws_root = self._tenants.workspace_root()
         await self._poster.post_status(
             room,
             f"Dev YAML `spec-pr-action` — opening draft spec PRs for **{init}**…",
@@ -618,17 +679,17 @@ class DevEnggProgramme(BaseBusinessService):
             identity_handle=self.role_id,
         )
         for hit in repos:
-            root = resolve_repo_root(tenant.meta_root, hit.repo)
+            root = resolve_repo_root(ws_root, hit.repo)
             if root is None:
                 await self._poster.post_status(
                     room,
-                    f"Missing checkout `{hit.repo}` for spec-pr-action.",
+                    f"Missing checkout `{hit.repo}` under `{ws_root}` for spec-pr-action.",
                     EventType.STALL,
                     identity_handle=self.role_id,
                 )
-                return False
+                return "", False
             branch = f"docs/spec-{init.lower()}"
-            slice_rel = spec_slice_path(init, hit.repo)
+            slice_rel = spec_slice_path(init, hit.repo, map_spec=hit.spec_to_create)
             # Collect any new/changed spec docs under docs/specification/
             push_paths = []
             spec_root = root / "docs" / "specification"
@@ -663,7 +724,7 @@ class DevEnggProgramme(BaseBusinessService):
                     EventType.STALL,
                     identity_handle=self.role_id,
                 )
-                return False
+                return "", False
             url = result.url or ""
             pr_urls.append(url)
             pr_meta.append(
@@ -680,10 +741,13 @@ class DevEnggProgramme(BaseBusinessService):
                 EventType.PROGRESS,
                 identity_handle=self.role_id,
             )
+        evidence = "\n".join(
+            f"- {r}: {u}" for r, u in zip([m["repo"] for m in pr_meta], pr_urls, strict=False)
+        )
         session.slots["spec_pr_urls"] = " | ".join(u for u in pr_urls if u)
         session.slots["spec_pr_meta"] = json.dumps(pr_meta)
         await self._store.save(session)
-        return True
+        return evidence, True
 
     # ── gates ──────────────────────────────────────────────────────────
 
@@ -693,7 +757,7 @@ class DevEnggProgramme(BaseBusinessService):
         init = session.initiative or ""
         artefact = session.slots.get("technical_review_path") or technical_review_path(init)
         repo = session.slots.get("tech_repo") or ""
-        root = resolve_repo_root(tenant.meta_root, repo) if repo else None
+        root = resolve_repo_root(self._tenants.workspace_root(), repo) if repo else None
         ctx = ""
         if root is not None and (root / artefact).is_file():
             ctx = (root / artefact).read_text(encoding="utf-8")[:8000]
@@ -720,12 +784,19 @@ class DevEnggProgramme(BaseBusinessService):
         init = session.initiative or ""
         plan = session.slots.get("implementation_plan_path") or implementation_plan_path(init)
         repo = session.slots.get("plan_repo") or ""
-        root = resolve_repo_root(tenant.meta_root, repo) if repo else None
+        root = resolve_repo_root(self._tenants.workspace_root(), repo) if repo else None
         plan_body = ""
         if root is not None and (root / plan).is_file():
             plan_body = (root / plan).read_text(encoding="utf-8")[:8000]
             session.slots["implementation_plan_current"] = "true"
-            session.slots.setdefault("workmanifest_contract_pass", "true")
+        if not session.slots.get("workmanifest_contract_pass"):
+            await self._poster.post_status(
+                room,
+                "coding-readiness blocked — WorkManifest predicate not set (fail closed).",
+                EventType.STALL,
+                identity_handle=self.role_id,
+            )
+            return
         debate = await self._debate_hop(
             purpose="coding-readiness",
             initiative=init,
@@ -817,9 +888,6 @@ class DevEnggProgramme(BaseBusinessService):
             example=f"reply `{ANOTHER_ROUND}`",
             reply_tokens=[ANOTHER_ROUND, HOLD],
         )
-        from src.adh_agents.collaboration.gate_coach import TokenAction
-        from src.adh_agents.runtime.gate_opener import CoachSpec
-
         coach = CoachSpec(
             i_did=f"Reached YAML checkpoint `{stage}` for **{init}**.",
             recommend=recommend,
@@ -841,14 +909,16 @@ class DevEnggProgramme(BaseBusinessService):
     async def _on_tdd_token(
         self, tenant: TenantContext, room: str, session: AgentWorkSession, token: str
     ) -> None:
-        if token in {ANOTHER_ROUND, NEED_ANOTHER_ROUND} or "round" in token:
+        allowed = [ACCEPT_TDD_ADR, ANOTHER_ROUND, HOLD]
+        matched = normalize_reply(token, allowed) or token
+        if matched == ANOTHER_ROUND:
             session.awaiting = AWAITING_NONE
             session.open_brief = None
             self._navigator.advance(session, "findings")
             await self._store.save(session)
             await self._run_spine(tenant, room, session)
             return
-        if ACCEPT_TDD_ADR in token or "accept tdd" in token or "accept adr" in token:
+        if matched == ACCEPT_TDD_ADR:
             session.slots["tdd_adr_accepted"] = "true"
             session.awaiting = AWAITING_NONE
             session.open_brief = None
@@ -866,17 +936,25 @@ class DevEnggProgramme(BaseBusinessService):
     async def _on_coding_token(
         self, tenant: TenantContext, room: str, session: AgentWorkSession, token: str
     ) -> None:
-        if token in {ANOTHER_ROUND, NEED_ANOTHER_ROUND} or "round" in token:
+        allowed = [CODING_READY, ANOTHER_ROUND, HOLD]
+        matched = normalize_reply(token, allowed) or token
+        if matched == ANOTHER_ROUND:
             session.awaiting = AWAITING_NONE
             session.open_brief = None
             self._navigator.advance(session, "findings")
             await self._store.save(session)
             await self._run_spine(tenant, room, session)
             return
-        if CODING_READY in token or "coding ready" in token or "coding-ready" in token:
+        if matched == CODING_READY:
+            if not session.slots.get("workmanifest_contract_pass"):
+                await self._poster.post_status(
+                    room,
+                    "Cannot accept coding-ready — WorkManifest predicate missing.",
+                    EventType.STALL,
+                    identity_handle=self.role_id,
+                )
+                return
             session.slots["coding_ready_accepted"] = "true"
-            session.slots.setdefault("implementation_plan_current", "true")
-            session.slots.setdefault("workmanifest_contract_pass", "true")
             session.awaiting = AWAITING_NONE
             session.open_brief = None
             self._navigator.advance(session, "pass")
@@ -893,14 +971,11 @@ class DevEnggProgramme(BaseBusinessService):
     async def _on_spec_merge_token(
         self, tenant: TenantContext, room: str, session: AgentWorkSession, token: str
     ) -> None:
-        if HOLD in token or token == "park":
+        allowed = [MERGE_SPEC_PR, "go ahead", HOLD]
+        matched = normalize_reply(token, allowed) or token
+        if matched == HOLD:
             return
-        if (
-            MERGE_SPEC_PR not in token
-            and "merge" not in token
-            and "go ahead" not in token
-            and "authorize" not in token
-        ):
+        if matched not in {MERGE_SPEC_PR, "go ahead"}:
             await self._poster.post_status(
                 room,
                 f"Unrecognized spec-merge reply `{token}`.",
@@ -976,7 +1051,8 @@ class DevEnggProgramme(BaseBusinessService):
     async def _on_board_token(
         self, tenant: TenantContext, room: str, session: AgentWorkSession, token: str
     ) -> None:
-        if AUTHORIZE_BOARD not in token and "board" not in token and "seed" not in token:
+        matched = normalize_reply(token, [AUTHORIZE_BOARD, HOLD]) or token
+        if matched != AUTHORIZE_BOARD:
             await self._poster.post_status(
                 room,
                 f"Unrecognized board reply `{token}`.",
@@ -998,7 +1074,7 @@ class DevEnggProgramme(BaseBusinessService):
             identity_handle=self.role_id,
         )
         plan_repo = session.slots.get("plan_repo") or ""
-        root = resolve_repo_root(tenant.meta_root, plan_repo) if plan_repo else None
+        root = resolve_repo_root(self._tenants.workspace_root(), plan_repo) if plan_repo else None
         try:
             result = await self._dispatch.run_catalog_skill(
                 tenant,
@@ -1060,7 +1136,7 @@ class DevEnggProgramme(BaseBusinessService):
 
     def _impacted(self, tenant: TenantContext, initiative: str):
         body = self._workspace.read_local(tenant, impact_map_path(initiative)) or ""
-        return parse_affected_repos(body)
+        return parse_affected_repos(body, meta_repo=tenant.meta_repo)
 
     async def _debate_hop(
         self,

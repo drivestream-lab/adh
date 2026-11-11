@@ -1,85 +1,131 @@
-"""Parse Impact-Map affected repos and resolve local checkouts."""
+"""Impact-Map affected repos — pipe-table parse (no regex); tenant-scoped."""
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-_REPO_CELL = re.compile(
-    r"`?(?:[\w.-]+/)?(?P<name>[\w.-]+)`?",
-)
-_TABLE_ROW = re.compile(
-    r"^\|\s*(?P<service>[^|]+?)\s*\|\s*(?P<repo>[^|]+?)\s*\|",
-    re.MULTILINE,
-)
+from src.models.tenant_models import TenantContext
 
 
 @dataclass(frozen=True)
 class ImpactedRepo:
-    """One affected product repo from the Impact-Map table."""
+    """One affected product repo from the Impact-Map §2 table."""
 
     service: str
-    repo: str  # short name, e.g. realworld-api
+    repo: str  # short name (last path segment)
     full_name: str  # org/repo when present
+    spec_to_create: str = ""  # relative path or filename from map when present
 
 
-def parse_affected_repos(impact_map_body: str) -> list[ImpactedRepo]:
-    """Extract §2 Affected repositories rows (fail soft → empty)."""
-    text = impact_map_body or ""
-    # Prefer the section between "## 2." and the next "## ".
-    start = text.find("## 2.")
-    if start < 0:
-        start = text.find("## Affected")
-    chunk = text[start:] if start >= 0 else text
-    end = chunk.find("\n## ", 4)
-    if end > 0:
-        chunk = chunk[:end]
+def parse_affected_repos(
+    impact_map_body: str,
+    *,
+    meta_repo: str,
+) -> list[ImpactedRepo]:
+    """Extract affected-repo rows from markdown pipe tables.
 
+    Excludes the tenant control-plane ``meta_repo``. No tenant/INIT hardcoding.
+    """
+    meta_short = _short_repo(meta_repo)
+    rows = _pipe_rows(impact_map_body or "")
     out: list[ImpactedRepo] = []
     seen: set[str] = set()
-    for m in _TABLE_ROW.finditer(chunk):
-        service = (m.group("service") or "").strip()
-        raw_repo = (m.group("repo") or "").strip()
-        if not raw_repo or not service:
+    i = 0
+    while i < len(rows):
+        header = rows[i]
+        svc_i = _header_index(header, "service")
+        repo_i = _header_index(header, "repo")
+        spec_i = _header_index(header, "spec to create", "spec")
+        i += 1
+        if svc_i is None or repo_i is None:
             continue
-        if set(service) <= {"-", "—", " "} or set(raw_repo.strip("`")) <= {"-", "—", " "}:
-            continue
-        if service.lower() in {"service"} or raw_repo.lower().strip("`") in {"repo"}:
-            continue
-        if "realworld-meta" in raw_repo.lower() or service.lower().endswith("-meta"):
-            # Control-plane host — not a development mutate target.
-            continue
-        name = _short_repo(raw_repo)
-        if not name or name.lower() in seen:
-            continue
-        if set(name) <= {"-", "—"} or name.lower() in {"repo"}:
-            continue
-        seen.add(name.lower())
-        full = raw_repo.strip().strip("`")
-        if "/" not in full:
-            full = name
-        out.append(ImpactedRepo(service=service, repo=name, full_name=full))
+        while i < len(rows):
+            row = rows[i]
+            # Next table header (service+repo again, or contract table).
+            if _header_index(row, "service") is not None and _header_index(row, "repo") is not None:
+                break
+            if _header_index(row, "contract id", "contract") is not None:
+                break
+            i += 1
+            if len(row) <= max(svc_i, repo_i):
+                continue
+            service = row[svc_i].strip().strip("`")
+            raw_repo = row[repo_i].strip().strip("`")
+            if not service or not raw_repo:
+                continue
+            name = _short_repo(raw_repo)
+            if not name or name.lower() in seen:
+                continue
+            if name == meta_short or raw_repo == meta_repo:
+                continue
+            # Skip deferred / empty placeholders.
+            if name in {"—", "-"} or service in {"—", "-"}:
+                continue
+            seen.add(name.lower())
+            spec = ""
+            if spec_i is not None and spec_i < len(row):
+                spec = row[spec_i].strip().strip("`")
+            full = raw_repo if "/" in raw_repo else name
+            out.append(
+                ImpactedRepo(
+                    service=service,
+                    repo=name,
+                    full_name=full,
+                    spec_to_create=spec,
+                )
+            )
     return out
 
 
-def resolve_repo_root(meta_root: str | Path, repo: str) -> Optional[Path]:
-    """Sibling checkout next to the tenant meta root (or one level up)."""
-    meta = Path(meta_root).expanduser().resolve()
+def resolve_repo_root(workspace_root: Path, repo: str) -> Optional[Path]:
+    """Checkout under ORCH workspace root (scale: any tenant repo name)."""
     name = _short_repo(repo)
     if not name:
         return None
-    for base in (meta.parent, meta.parent.parent):
-        candidate = base / name
-        if candidate.is_dir() and (candidate / ".git").exists():
-            return candidate
+    candidate = Path(workspace_root).expanduser().resolve() / name
+    if candidate.is_dir() and (candidate / ".git").is_dir():
+        return candidate
     return None
+
+
+def resolve_repo_root_for_tenant(
+    tenant: TenantContext, workspace_root: Path, repo: str
+) -> Optional[Path]:
+    """Prefer workspace_root/<repo>; fail soft only when checkout absent."""
+    del tenant  # topology already validated at registry load; reserved for future pins
+    return resolve_repo_root(workspace_root, repo)
 
 
 def _short_repo(raw: str) -> str:
     text = (raw or "").strip().strip("`")
     if "/" in text:
         text = text.rsplit("/", 1)[-1]
-    m = _REPO_CELL.search(text)
-    return (m.group("name") if m else text).strip()
+    return text.strip()
+
+
+def _pipe_rows(text: str) -> list[list[str]]:
+    """Split markdown table lines on `|` — no regex (same approach as PE Gate‑1)."""
+    rows: list[list[str]] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if not cells:
+            continue
+        if all(not c or set(c) <= {"-", ":", " "} for c in cells):
+            continue
+        rows.append(cells)
+    return rows
+
+
+def _header_index(header: list[str], *names: str) -> int | None:
+    lowered = [h.lower() for h in header]
+    for name in names:
+        key = name.lower()
+        for i, cell in enumerate(lowered):
+            if key == cell or key in cell:
+                return i
+    return None

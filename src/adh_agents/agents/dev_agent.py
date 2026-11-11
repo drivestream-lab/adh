@@ -1,9 +1,8 @@
-"""DevAgent — engg think → board seed (not coder)."""
+"""DevAgent — YAML development lane host (prompt→extract→decide via programme)."""
 
 from __future__ import annotations
 
 import asyncio
-import re
 
 from injector import inject
 
@@ -24,8 +23,14 @@ from src.configs.hermes_settings import HermesSettings
 from src.infra_services.tenant_registry_service import TenantRegistryService
 from src.models.buzz_models import MessageKind, MessageRead
 
-_HIRE = re.compile(r"(?i)\b(?:hire\s+engg|hire\s+dev|@adh\.dev|engg\s+think)\b")
 _BATON_TYPE = "dev.engg_think"
+# Exact hire phrases (Lead body lowercased). No regex SSOT.
+_HIRE_PHRASES = (
+    "hire engg",
+    "hire dev",
+    "@adh.dev",
+    "engg think",
+)
 
 
 class DevAgent(BaseHermesAgent):
@@ -146,8 +151,7 @@ class DevAgent(BaseHermesAgent):
         if not body:
             return
 
-        # Post-board revise engg
-        if normalize_reply(body, [REVISE_ENGG]) == REVISE_ENGG or REVISE_ENGG in body.lower():
+        if normalize_reply(body, [REVISE_ENGG]) == REVISE_ENGG:
             init = extract_initiative(body, tenant.init_prefix) or ""
             active = await self._work_store.list_active(tenant.slug, self.role_id)
             session = None
@@ -167,8 +171,7 @@ class DevAgent(BaseHermesAgent):
                 await self._programme.handle_revise_engg(tenant, room, session)
                 return
 
-        # Lead hire / explicit engg think
-        if _HIRE.search(body):
+        if _is_hire(body):
             init = extract_initiative(body, tenant.init_prefix)
             if not init:
                 await self.broadcast_progress(
@@ -188,7 +191,8 @@ class DevAgent(BaseHermesAgent):
             )
             return
 
-        if "resume" in body.lower():
+        lowered = body.lower()
+        if lowered == "resume" or lowered.startswith("resume "):
             await self._orchestrator.handle_lead_message(tenant, room, message)
             return
 
@@ -203,6 +207,18 @@ class DevAgent(BaseHermesAgent):
             await self._orchestrator.handle_lead_message(tenant, room, message)
 
 
+def _is_hire(body: str) -> bool:
+    low = (body or "").lower()
+    return any(phrase in low for phrase in _HIRE_PHRASES)
+
+
 def _extract_pr_url(body: str) -> str:
-    m = re.search(r"https://github\.com/[^\s]+/pull/\d+", body or "")
-    return m.group(0) if m else ""
+    """First github.com …/pull/N token (string scan, no regex)."""
+    for part in (body or "").split():
+        token = part.strip().rstrip(").,]>\"'")
+        if not token.startswith("https://github.com/"):
+            continue
+        if "/pull/" not in token:
+            continue
+        return token
+    return ""

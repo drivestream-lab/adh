@@ -1,14 +1,16 @@
-"""Parse Hermes multi-thought Dev briefs (ADR / API / deps / verification)."""
+"""Parse Hermes multi-thought Dev briefs — ``##`` headings (no regex)."""
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-_SECTION = re.compile(
-    r"(?im)^##\s+(ADR(?:\s+why)?|API(?:\s+why)?|Deps|Dependencies|Verification(?:\s+gaps)?|Coding\s*readiness)\s*$"
-)
+# Exact heading titles Hermes is prompted to emit (lowercase).
+_ADR = frozenset({"adr", "adr why"})
+_API = frozenset({"api", "api why"})
+_DEPS = frozenset({"deps", "dependencies"})
+_VERIF = frozenset({"verification", "verification gaps"})
+_CODING = frozenset({"coding readiness", "coding-readiness"})
 
 
 @dataclass
@@ -34,29 +36,25 @@ class DevThoughtCard:
 
 
 def parse_dev_thought_card(body: str) -> Optional[DevThoughtCard]:
-    """Parse ## ADR / API / Deps / Verification sections. None if empty/malformed."""
+    """Split on ``##`` headings; map known titles. None if empty/malformed."""
     text = (body or "").strip()
     if not text:
         return None
-    matches = list(_SECTION.finditer(text))
-    if not matches:
+    sections = _heading_sections(text)
+    if not sections:
         return None
-    card = DevThoughtCard()
-    for i, match in enumerate(matches):
-        start = match.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        title = match.group(1).strip().lower()
-        content = text[start:end].strip()
-        card.raw_sections[title] = content
-        if title.startswith("adr"):
+    card = DevThoughtCard(raw_sections=dict(sections))
+    for title, content in sections.items():
+        key = title.lower().strip()
+        if key in _ADR:
             card.adr_why = content
-        elif title.startswith("api"):
+        elif key in _API:
             card.api_why = content
-        elif title.startswith("dep"):
+        elif key in _DEPS:
             card.deps = content
-        elif title.startswith("verif"):
+        elif key in _VERIF:
             card.verification_gaps = content
-        elif title.startswith("coding"):
+        elif key in _CODING:
             card.coding_readiness = content
     return card if card.has_any else None
 
@@ -74,3 +72,21 @@ def card_bluf(card: DevThoughtCard) -> str:
             first = value.splitlines()[0].strip()
             return f"{label}: {first[:160]}"
     return "Review engg think cards before accepting."
+
+
+def _heading_sections(text: str) -> dict[str, str]:
+    """Map ``## Title`` → body until next ``##`` (line-based, no regex)."""
+    lines = (text or "").splitlines()
+    titles: list[tuple[str, int]] = []
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("## ") and not stripped.startswith("###"):
+            titles.append((stripped[3:].strip(), idx))
+    if not titles:
+        return {}
+    out: dict[str, str] = {}
+    for i, (title, start) in enumerate(titles):
+        end = titles[i + 1][1] if i + 1 < len(titles) else len(lines)
+        body = "\n".join(lines[start + 1 : end]).strip()
+        out[title] = body
+    return out

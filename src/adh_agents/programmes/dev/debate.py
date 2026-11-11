@@ -1,22 +1,17 @@
-"""Multi-pass / multi-model self-debate for Dev judgment hops.
+"""Multi-pass / multi-model self-debate — prompt → extract → decide.
 
 Cap is configurable (default 4). Effectiveness = converge with a clear recommend
-**before** hitting the ceiling.
+**∈ reply_tokens** before the ceiling. No regex SSOT.
 """
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 
+from src.adh_agents.programmes.dev.labeled_extract import extract_allowed, extract_line
 from src.adh_agents.settings import DevAgentSettings
 from src.configs.hermes_settings import HermesSettings
 from src.infra_services.litellm_service import LiteLLMService
-
-_REC = re.compile(
-    r"(?im)^\s*(?:recommend|final\s*recommend|decision)\s*[:\-]\s*[`*]*(.+?)[`*]*\s*$"
-)
-_EXAMPLE = re.compile(r"(?im)^\s*example\s*[:\-]\s*(.+)$")
 
 
 @dataclass
@@ -34,16 +29,6 @@ class DebateResult:
     raw_passes: list[str] = field(default_factory=list)
 
 
-@dataclass
-class _ParsedPass:
-    recommend: str
-    bluf: str
-    example: str
-    locking: list[str]
-    not_locking: list[str]
-    revise_if: list[str]
-
-
 async def run_dev_debate(
     litellm: LiteLLMService,
     *,
@@ -53,19 +38,18 @@ async def run_dev_debate(
     reply_tokens: list[str],
     max_runs: int | None = None,
 ) -> DebateResult:
-    """Debate until a recommend ∈ reply_tokens or ceiling.
-
-    Alternates Hermes eng_model / pm_model across passes (multi-model).
-    """
+    """Debate until a recommend ∈ reply_tokens or ceiling (fail closed on empty tokens)."""
     settings = DevAgentSettings.get_instance()
     hermes = HermesSettings.get_instance()
     cap = int(max_runs if max_runs is not None else settings.max_think_runs)
     cap = max(2, min(8, cap))
     tokens = [t.strip() for t in reply_tokens if (t or "").strip()]
+    if not tokens:
+        raise ValueError("run_dev_debate requires non-empty reply_tokens")
     models = _model_rotation(hermes)
 
     prior = ""
-    result = DebateResult(recommend=tokens[0] if tokens else "", bluf="", example="")
+    result = DebateResult(recommend="", bluf="", example="")
     for i in range(1, cap + 1):
         model = models[(i - 1) % len(models)]
         result.models_used.append(model)
@@ -78,51 +62,68 @@ async def run_dev_debate(
             max_passes=cap,
             prior=prior,
         )
-        try:
-            text = await litellm.complete(
-                "You are adh.dev. Converge early with one clear recommend token.",
-                prompt,
-                model=model,
-                temperature=0.3,
-            )
-        except Exception:
-            text = (
-                f"recommend: {tokens[0] if tokens else 'hold'}\n"
-                f"example: reply `{tokens[0] if tokens else 'hold'}`\n"
-                "bluf: Debate pass failed — using first reply token.\n"
-            )
+        text = await litellm.complete(
+            "You are adh.dev. Decide one reply token. Emit labeled lines only.",
+            prompt,
+            model=model,
+            temperature=0.3,
+        )
         body = (text or "").strip()
         result.raw_passes.append(body)
         result.passes = i
         prior = body
-        parsed = _parse_pass(body, tokens)
-        if parsed is not None:
-            result.recommend = parsed.recommend
-            result.bluf = parsed.bluf
-            result.example = parsed.example
-            result.locking = parsed.locking
-            result.not_locking = parsed.not_locking
-            result.revise_if = parsed.revise_if
-            result.converged_at_pass = i
-            result.hit_ceiling = False
-            return result
+        parsed = _extract_decision(body, tokens)
+        if parsed is None:
+            continue
+        result.recommend = parsed["recommend"]
+        result.bluf = parsed["bluf"]
+        result.example = parsed["example"]
+        result.locking = parsed["locking"]
+        result.not_locking = parsed["not_locking"]
+        result.revise_if = parsed["revise_if"]
+        result.converged_at_pass = i
+        result.hit_ceiling = False
+        return result
 
-    # Ceiling: best-effort last parse or first token.
-    last = _parse_pass(result.raw_passes[-1] if result.raw_passes else "", tokens, loose=True)
+    # Ceiling: last extract if valid; else fail closed to hold when present else first token.
+    last = _extract_decision(result.raw_passes[-1] if result.raw_passes else "", tokens)
     if last:
-        result.recommend = last.recommend
-        result.bluf = last.bluf or "Hit debate ceiling — review carefully."
-        result.example = last.example
-        result.locking = last.locking
-        result.not_locking = last.not_locking
-        result.revise_if = last.revise_if
+        result.recommend = last["recommend"]
+        result.bluf = last["bluf"] or "Hit debate ceiling — review carefully."
+        result.example = last["example"]
+        result.locking = last["locking"]
+        result.not_locking = last["not_locking"]
+        result.revise_if = last["revise_if"]
     else:
-        result.recommend = tokens[0] if tokens else "hold"
-        result.bluf = "Hit debate ceiling without a clear recommend."
-        result.example = f"reply `{result.recommend}`"
+        hold = next((t for t in tokens if t.lower() == "hold"), tokens[0])
+        result.recommend = hold
+        result.bluf = "Hit debate ceiling without an extractable recommend ∈ reply_tokens."
+        result.example = f"reply `{hold}`"
     result.converged_at_pass = cap
     result.hit_ceiling = True
     return result
+
+
+def _extract_decision(body: str, tokens: list[str]) -> dict | None:
+    recommend = extract_allowed(body, field="recommend", allowed=tokens)
+    if recommend is None:
+        # Agents sometimes label as decision / final recommend.
+        recommend = extract_allowed(body, field="decision", allowed=tokens)
+    if recommend is None:
+        return None
+    bluf = extract_line(body, "bluf")
+    example = extract_line(body, "example") or f"reply `{recommend}`"
+    locking = extract_line(body, "locking")
+    not_locking = extract_line(body, "not_locking")
+    revise_if = extract_line(body, "revise_if")
+    return {
+        "recommend": recommend,
+        "bluf": bluf,
+        "example": example,
+        "locking": [locking] if locking else [],
+        "not_locking": [not_locking] if not_locking else [],
+        "revise_if": [revise_if] if revise_if else [],
+    }
 
 
 def _model_rotation(hermes: HermesSettings) -> list[str]:
@@ -150,9 +151,9 @@ def _pass_prompt(
     )
     return "\n".join(
         [
-            f"You are adh.dev engg-think debating `{purpose}` for `{initiative}`.",
+            f"You are adh.dev debating `{purpose}` for `{initiative}`.",
             f"Pass {pass_number}/{max_passes}. {challenge}",
-            "Reply tokens (recommend MUST be exactly one of these):",
+            "Allowed reply tokens (recommend MUST be exactly one):",
             ", ".join(f"`{t}`" for t in reply_tokens),
             "",
             "Context:",
@@ -161,66 +162,14 @@ def _pass_prompt(
             "Prior pass:" if prior else "Prior pass: (none)",
             prior[:8000] if prior else "",
             "",
-            "Output markdown with these lines (required):",
-            "recommend: <one reply token>",
-            "example: reply `<same token>` — <one line of what Lead does>",
+            "Emit ONLY these labeled lines (agentic extract contract):",
+            "recommend: <exactly one allowed reply token>",
+            "example: reply `<same token>` — <one line>",
             "bluf: <one sentence>",
-            "locking: <bullet or short phrase>",
-            "not_locking: <bullet or short phrase>",
-            "revise_if: <bullet or short phrase>",
+            "locking: <short phrase>",
+            "not_locking: <short phrase>",
+            "revise_if: <short phrase>",
             "",
-            "Converge early when the recommend is clear — do not pad to max passes.",
+            "Converge early when recommend is clear — do not pad to max passes.",
         ]
     )
-
-
-def _parse_pass(body: str, tokens: list[str], *, loose: bool = False) -> _ParsedPass | None:
-    text = body or ""
-    recommend = ""
-    m = _REC.search(text)
-    if m:
-        recommend = m.group(1).strip().strip("`").strip()
-    if not recommend:
-        lowered = text.lower()
-        for tok in tokens:
-            if tok.lower() in lowered:
-                recommend = tok
-                break
-    matched = _match_token(recommend, tokens)
-    if matched is None and not loose:
-        return None
-    if matched is None and tokens:
-        matched = tokens[0]
-    example_m = _EXAMPLE.search(text)
-    example = example_m.group(1).strip() if example_m else (f"reply `{matched}`" if matched else "")
-    return _ParsedPass(
-        recommend=matched or "",
-        bluf=_line_after(text, "bluf") or (text.splitlines()[0][:200] if text else ""),
-        example=example,
-        locking=_bullets_after(text, "locking"),
-        not_locking=_bullets_after(text, "not_locking"),
-        revise_if=_bullets_after(text, "revise_if"),
-    )
-
-
-def _match_token(candidate: str, tokens: list[str]) -> str | None:
-    c = (candidate or "").strip().lower()
-    if not c:
-        return None
-    for tok in tokens:
-        if c == tok.lower() or c.startswith(tok.lower()):
-            return tok
-    return None
-
-
-def _line_after(text: str, label: str) -> str:
-    pat = re.compile(rf"(?im)^\s*{re.escape(label)}\s*[:\-]\s*(.+)$")
-    m = pat.search(text or "")
-    return m.group(1).strip() if m else ""
-
-
-def _bullets_after(text: str, label: str) -> list[str]:
-    line = _line_after(text, label)
-    if line:
-        return [line]
-    return []

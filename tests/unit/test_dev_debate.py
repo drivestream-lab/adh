@@ -1,31 +1,31 @@
-"""Dev multi-pass debate — cap, early converge, ceiling flag."""
+"""Dev multi-pass debate — prompt → labeled extract → decide (no regex)."""
 
 from __future__ import annotations
 
 import pytest
 
-from src.adh_agents.programmes.dev.debate import _parse_pass, run_dev_debate
+from src.adh_agents.programmes.dev.debate import _extract_decision, run_dev_debate
 from src.adh_agents.runtime.room_resolve import engg_room_slug_for, task_id_from_engg_room
 
 
 def test_engg_room_slug() -> None:
-    assert engg_room_slug_for("INIT-REALWORLD-001") == "engg-init-realworld-001"
-    assert task_id_from_engg_room("engg-init-realworld-001") == "INIT-REALWORLD-001"
+    assert engg_room_slug_for("INIT-ACME-001") == "engg-init-acme-001"
+    assert task_id_from_engg_room("engg-init-acme-001") == "INIT-ACME-001"
 
 
-def test_parse_pass_matches_token() -> None:
+def test_extract_decision_matches_token() -> None:
     body = """
-recommend: accept deps
-example: reply `accept deps` — tiers look right
+recommend: accept tdd-adr
+example: reply `accept tdd-adr` — ADR looks right
 bluf: API before web
-locking: Tier 0 order
+locking: ADR boundaries
 not_locking: ticket titles
-revise_if: new repo
+revise_if: new CAP
 """
-    parsed = _parse_pass(body, ["accept deps", "another round", "hold"])
+    parsed = _extract_decision(body, ["accept tdd-adr", "another round", "hold"])
     assert parsed is not None
-    assert parsed.recommend == "accept deps"
-    assert "accept deps" in parsed.example
+    assert parsed["recommend"] == "accept tdd-adr"
+    assert "accept tdd-adr" in parsed["example"]
 
 
 @pytest.mark.asyncio
@@ -33,15 +33,14 @@ async def test_debate_early_converge(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeLiteLLM:
         async def complete(self, system: str, user: str, **kwargs: object) -> str:
             return (
-                "recommend: accept deps\n"
-                "example: reply `accept deps`\n"
+                "recommend: accept tdd-adr\n"
+                "example: reply `accept tdd-adr`\n"
                 "bluf: clear\n"
-                "locking: dag\n"
+                "locking: adr\n"
                 "not_locking: titles\n"
                 "revise_if: scope\n"
             )
 
-    from src.adh_agents import programmes as prog_pkg  # noqa: F401
     from src.adh_agents.programmes.dev import debate as debate_mod
     from src.adh_agents.settings import DevAgentSettings
 
@@ -64,15 +63,15 @@ async def test_debate_early_converge(monkeypatch: pytest.MonkeyPatch) -> None:
 
     result = await run_dev_debate(
         FakeLiteLLM(),  # type: ignore[arg-type]
-        purpose="deps-acceptance",
-        initiative="INIT-REALWORLD-001",
-        context="Tier 0: api",
-        reply_tokens=["accept deps", "hold"],
+        purpose="tdd-adr-acceptance",
+        initiative="INIT-ACME-001",
+        context="ADR draft",
+        reply_tokens=["accept tdd-adr", "hold"],
         max_runs=4,
     )
     assert result.converged_at_pass == 1
     assert result.hit_ceiling is False
-    assert result.recommend == "accept deps"
+    assert result.recommend == "accept tdd-adr"
     assert result.passes == 1
 
 
@@ -104,12 +103,12 @@ async def test_debate_hit_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
 
     result = await run_dev_debate(
         FakeLiteLLM(),  # type: ignore[arg-type]
-        purpose="deps-acceptance",
+        purpose="coding-readiness",
         initiative="INIT-X",
         context="x",
-        reply_tokens=["accept deps", "hold"],
+        reply_tokens=["coding ready", "hold"],
         max_runs=2,
     )
     assert result.hit_ceiling is True
     assert result.passes == 2
-    assert result.recommend in {"accept deps", "hold"}
+    assert result.recommend == "hold"

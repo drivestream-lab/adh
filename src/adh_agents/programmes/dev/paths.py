@@ -1,4 +1,4 @@
-"""Artefact path helpers for the Dev YAML development lane."""
+"""Artefact path helpers for the Dev YAML development lane (tenant-agnostic)."""
 
 from __future__ import annotations
 
@@ -23,9 +23,19 @@ def workmanifest_path(initiative: str) -> str:
     return f"docs/specification/plans/WorkManifest-{init}.yaml"
 
 
-def spec_slice_path(initiative: str, repo: str) -> str:
-    """Per-repo product spec slice (spec-draft output)."""
+def spec_slice_path(initiative: str, repo: str, *, map_spec: str = "") -> str:
+    """Per-repo product spec slice.
+
+    Prefer Impact-Map ``Spec to create`` when it is a relative path or filename;
+    otherwise ``docs/specification/product/{INIT}-{repo}.md``.
+    """
     init = (initiative or "").strip().upper()
     short = (repo or "").strip().rsplit("/", 1)[-1]
-    suffix = short.replace("realworld-", "") if short.startswith("realworld-") else short
-    return f"docs/specification/product/{init}-{suffix}.md"
+    hinted = (map_spec or "").strip().strip("`")
+    if hinted:
+        if "/" in hinted or hinted.endswith(".md"):
+            if hinted.startswith("docs/") or hinted.startswith("prd/"):
+                return hinted
+            return f"docs/specification/product/{hinted}"
+        return f"docs/specification/product/{hinted}"
+    return f"docs/specification/product/{init}-{short}.md"
