@@ -47,10 +47,12 @@ print(t.get("task_id"), t.get("state"), t.get("task_room_slug"))
     echo "-- log signals --"
     rg -n 'Handed|missing Impact|spec-draft|deps-acceptance|ERROR|Traceback|stall|god_halt|YAML|dev_outcome|board-tickets|Got it' \
       "$ROOT/logs/adh-pe-001-verify.log" "$ROOT/logs/adh-dev-001-verify.log" 2>/dev/null | tail -40 || true
-    # classify
-    if rg -q "$LEGACY_RE" "$ROOT/logs/adh-pe-001-verify.log" "$ROOT/logs/adh-dev-001-verify.log" 2>/dev/null; then
+    # classify — legacy only from engg room / current worker logs (ignore old ops traj)
+    if curl -sf "$BUZZ/api/v1/buzz/rooms/$ENGG/messages?limit=40" 2>/dev/null | rg -q "$LEGACY_RE"; then
       echo "STATUS: LEGACY_DETECTED"
-    elif curl -sf "$BUZZ/api/v1/buzz/rooms/$ENGG/messages?limit=30" 2>/dev/null | rg -q "$DESIRED_RE"; then
+    elif rg -q "$LEGACY_RE" "$ROOT/logs/adh-dev-001-verify.log" 2>/dev/null; then
+      echo "STATUS: LEGACY_DETECTED"
+    elif curl -sf "$BUZZ/api/v1/buzz/rooms/$ENGG/messages?limit=40" 2>/dev/null | rg -q "$DESIRED_RE"; then
       echo "STATUS: YAML_PROGRESS"
     elif curl -sf "$BUZZ/api/v1/buzz/rooms/realworld-ops/messages?limit=20" 2>/dev/null | rg -q 'Handed \*\*INIT-REALWORLD-001\*\*'; then
       echo "STATUS: HANDOFF_DONE_WAIT_DEV"
