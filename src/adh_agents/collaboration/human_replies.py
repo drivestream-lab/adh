@@ -11,6 +11,10 @@ NEED_ANOTHER_ROUND = "need another round"
 ARCHIVE_TASK = "archive task"
 DELETE_TASK = "delete task"
 KEEP_OPEN = "keep open"
+REWIND = "rewind"
+CONFIRM_REWIND = "confirm rewind"
+CANCEL_REWIND = "cancel"
+TRAJ = "traj"
 
 # Canonical → accepted aliases (case-insensitive match on full line / prefix).
 _ALIASES: dict[str, tuple[str, ...]] = {
@@ -26,6 +30,10 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     ARCHIVE_TASK: (ARCHIVE_TASK, "archive"),
     DELETE_TASK: (DELETE_TASK, "delete"),
     KEEP_OPEN: (KEEP_OPEN, "keep"),
+    REWIND: (REWIND,),
+    CONFIRM_REWIND: (CONFIRM_REWIND, "confirm"),
+    CANCEL_REWIND: (CANCEL_REWIND, "cancel rewind"),
+    TRAJ: (TRAJ, "trajectory", "show trajectory"),
 }
 
 

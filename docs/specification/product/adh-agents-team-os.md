@@ -156,7 +156,11 @@ PE↔PM agent rally (≤2 rounds); no mid-rally human ack. Human (or god mode) o
 | `god` (`ADH_AUTONOMY_MODE=god`) | Hermes `brief.recommend` ∈ reply_tokens via GateOpener; Lead ignored for open gates |
 
 Halt tokens / bad recommend → `god_mode_halt` (no human rescue wait). `delete task` / `discard local` never auto in god without an explicit allow flag.  
-**Trajectory:** append-only `buzz_task_events` in Postgres (gate_open / god_taken / god_halt / baton / land / archive). **No trajectory artefacts in meta git.**
+**Trajectory:** append-only `buzz_task_events` in Postgres (gate_open / god_taken / god_halt / baton / land / archive / rewind / rewind_denied). **No trajectory artefacts in meta git.** Lead may post `traj` on Buzz for a kind | purpose | token | who card.
+
+### Human rewind (H1)
+
+Human mode only. Lead posts `rewind` → coach always shows **Can / Cannot / Outside ADH** → `rewind N` + `reason:` → **`confirm rewind`**. God and post–product-merge → `rewind_denied` (git undo outside ADH). Open draft PRs we raised are closed when rewind crosses that fence. Purge follows the temp-paper matrix (`start` purges all thinks; promote re-pick keeps thinks; PRD kept until next promote overwrite). Same task room on `start` (paste outline again).
 
 ## Graphs (do not conflate)
 
@@ -198,4 +202,4 @@ See [`../references/adh-kb-heads.md`](../references/adh-kb-heads.md).
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md) · **As-built:** [`../as-built/implementation-status.md`](../as-built/implementation-status.md)
 
 Enabler = `BaseHermesAgent`; control plane = Orchestrator in `adh_agents/runtime`.  
-**Next single PR:** Floor wave F1–F9 (pagination, task rooms, CollabPost, GateOpener/god, GH bind stub, trajectory) — see plan.
+**Next:** Human INIT-005 verify rewind + traj; then Dev hire (C) — see plan.

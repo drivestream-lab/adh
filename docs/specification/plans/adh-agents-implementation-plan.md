@@ -23,10 +23,12 @@ U6 PE↔PM agent rally     ✅  PR #23; ack_pe gone; human merge after settle
 KB land approve-before   ✅  PR #24; reopen Buzz gate on stall
 F1–F9 Team floor         ✅  PR #25; god INIT-004 → archive; traj hub mirrors
 
+── done (PM lane A+B) ──
+H1 Human rewind + traj    ✅  006 promote rewind+traj; 005 post-merge `rewind_denied`; unit god-deny
+Human INIT-005 verify     ✅  full human forward → archive; hub traj mirrors
+
 ── later ──
-Human rewind + reason     ⬜  (deferred; god has no rewind)
-Human INIT verify redo    ⬜  optional (003 archived mid-path)
-dev / qa / iac / sre / obs + codegraph MCP + TaskGraph hire   ⬜
+C Dev hire (+ qa / iac / sre / obs + codegraph MCP + TaskGraph)   ⬜
 ```
 
 ---
@@ -128,10 +130,25 @@ dev / qa / iac / sre / obs + codegraph MCP + TaskGraph hire   ⬜
 
 ### Explicitly deferred (not in T1–T5)
 
-- Human rewind + reason gate (design discussed; build after god verify)
 - Dev/QA hire + catalogue-on-demand membership (north star; not blocking god)
 - Per-wave child rooms (rejected: one `#task-…` war room)
-- Trajectory UI timeline panel (hub one-liners + PG API enough for now)
+- Trajectory UI timeline panel — use Buzz `traj` card + hub mirrors instead
+- Git un-merge / revert after develop land — **outside ADH**
+
+---
+
+## H1 — Human rewind + traj-on-Buzz
+
+**Locks:** God = no rewind. Post–product-merge = deny (git undo outside ADH). Coach always shows **Can / Cannot / Outside ADH**. Always reason + `confirm rewind`. Close open draft PRs we raised when crossing that fence. Purge per matrix (`start` = all thinks; promote re-pick = keep thinks). Same task room on `start` (outline again). Traj query on Buzz: kind | purpose | token | who.
+
+| File | Change |
+|------|--------|
+| `src/adh_agents/runtime/rewind.py` | Ladder `can` / `cannot` / `outside` + purge/close flags |
+| `src/adh_agents/collaboration/temp_papers.py` | `PurgeEvent.REWIND_*` + promoted PRD family |
+| `src/adh_agents/programmes/pm/rewind_coach.py` | Menu → confirm → execute |
+| `src/adh_agents/programmes/pm/traj_coach.py` | Lead `traj` Buzz card |
+| `src/adh_agents/agents/pm_agent.py` | Route rewind / traj |
+| `src/adh_agents/forge_acl` | `close_pull_request` for PM/KB |
 
 ---
 

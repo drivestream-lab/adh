@@ -17,7 +17,10 @@ from src.adh_agents.programmes.pm.http_lanes import PmHttpLanesService
 from src.adh_agents.programmes.pm.meta_pm import MetaPmProgrammeService
 from src.adh_agents.programmes.pm.pe_answers import PmPeAnswersProgramme
 from src.adh_agents.programmes.pm.pe_glue import PmPeGlueProgramme
+from src.adh_agents.programmes.pm.rewind_coach import RewindCoachProgramme
+from src.adh_agents.programmes.pm.rewind_execute import RewindExecuteService
 from src.adh_agents.programmes.pm.task_lifecycle import TaskLifecycleProgramme
+from src.adh_agents.programmes.pm.traj_coach import TrajCoachProgramme
 from src.adh_agents.programmes.read.walk import ReadWalkProgramme
 from src.adh_agents.ingress.github_ingress import GitHubIngressService
 from src.adh_agents.runtime.autonomy import AutonomyPolicy
@@ -48,6 +51,9 @@ class BusinessServicesModule(Module):
         binder.bind(AutonomyPolicy, to=AutonomyPolicy, scope=singleton)
         binder.bind(GateOpener, to=GateOpener, scope=singleton)
         binder.bind(TaskLifecycleProgramme, to=TaskLifecycleProgramme, scope=singleton)
+        binder.bind(RewindExecuteService, to=RewindExecuteService, scope=singleton)
+        binder.bind(RewindCoachProgramme, to=RewindCoachProgramme, scope=singleton)
+        binder.bind(TrajCoachProgramme, to=TrajCoachProgramme, scope=singleton)
         binder.bind(GitHubIngressService, to=GitHubIngressService, scope=singleton)
         binder.bind(Orchestrator, to=Orchestrator, scope=singleton)
         binder.bind(PmPeAnswersProgramme, to=PmPeAnswersProgramme, scope=singleton)

@@ -23,6 +23,7 @@ from src.infra_services.pm_workspace_service import (
     hermes_gate1_brief_path,
     hermes_post_pm_brief_path,
     hermes_promote_brief_path,
+    prd_path,
 )
 
 # Authoring scratch suffixes — match path shape, not a hardcoded INIT- token.
@@ -37,12 +38,17 @@ class TempFamily(str, Enum):
     """Known temporary artefact families (local meta ``prd/reports/``)."""
 
     AUTHORING_SCRATCH = "authoring_scratch"  # think / quality / ask / recommend
+    AUTHORING_QUALITY = "authoring_quality"  # quality / ask / recommend only
     PROMOTE_BRIEF = "promote_brief"  # *-hermes-promote-brief.md
     POST_PM_BRIEF = "post_pm_brief"  # *-hermes-post-pm-brief.md
     GATE1_QUESTIONS = "gate1_questions"  # PE-Product-Questions-*.md
     GATE1_BRIEF = "gate1_brief"  # *-hermes-gate1-brief.md
     READ_ROLLUP = "read_rollup"  # *-read-walk-*.md
     KB_ENRICH_BODY = "kb_enrich_body"  # *-kb-enrich-pr-body.md
+    VALIDATION_REPORT = "validation_report"
+    RESOLUTION = "resolution"
+    IMPACT_MAP = "impact_map"
+    PROMOTED_PRD = "promoted_prd"  # durable prd/{INIT}.md — start / think rewind
 
 
 class PurgeEvent(str, Enum):
@@ -54,10 +60,42 @@ class PurgeEvent(str, Enum):
     PRD_MERGED = "prd_merged"
     KB_ENRICH_DONE = "kb_enrich_done"
     LANE_ABORT = "lane_abort"
+    # Human rewind (keep thinks unless START):
+    REWIND_GATE_REOPEN = "rewind_gate_reopen"  # no purge
+    REWIND_TO_PROMOTE = "rewind_to_promote"  # keep thinks+quality+PRD; purge forward
+    REWIND_TO_QUALITY = "rewind_to_quality"  # keep thinks; purge quality+forward
+    REWIND_TO_THINK = "rewind_to_think"  # keep thinks; purge quality+PRD+forward
+    REWIND_START = "rewind_start"  # purge all thinks + PRD + forward
+    REWIND_TO_ACCEPTANCE = "rewind_to_acceptance"  # purge post-pm brief + impact + PE/KB
+    REWIND_TO_IMPACT_MAP = "rewind_to_impact_map"  # purge impact + PE/KB
+    REWIND_TO_PR_ACTION = "rewind_to_pr_action"  # purge PE/KB only
 
 
 # Which families become eligible to delete at each event.
 # Read rollups stay until KB enrich consumes them (not purged at PRD_MERGED).
+_PE_KB = frozenset(
+    {
+        TempFamily.GATE1_QUESTIONS,
+        TempFamily.GATE1_BRIEF,
+        TempFamily.READ_ROLLUP,
+        TempFamily.KB_ENRICH_BODY,
+    }
+)
+_META_ALL = frozenset(
+    {
+        TempFamily.VALIDATION_REPORT,
+        TempFamily.RESOLUTION,
+        TempFamily.IMPACT_MAP,
+    }
+)
+_FORWARD = frozenset(
+    {
+        TempFamily.POST_PM_BRIEF,
+        TempFamily.PROMOTE_BRIEF,
+        *_PE_KB,
+        *_META_ALL,
+    }
+)
 PURGE_MATRIX: dict[PurgeEvent, frozenset[TempFamily]] = {
     PurgeEvent.PROMOTE_DONE: frozenset({TempFamily.AUTHORING_SCRATCH, TempFamily.PROMOTE_BRIEF}),
     PurgeEvent.POST_PM_DONE: frozenset({TempFamily.POST_PM_BRIEF}),
@@ -73,6 +111,19 @@ PURGE_MATRIX: dict[PurgeEvent, frozenset[TempFamily]] = {
     ),
     PurgeEvent.KB_ENRICH_DONE: frozenset({TempFamily.KB_ENRICH_BODY, TempFamily.READ_ROLLUP}),
     PurgeEvent.LANE_ABORT: frozenset(TempFamily),
+    PurgeEvent.REWIND_GATE_REOPEN: frozenset(),
+    # Q4: promote re-pick keeps PRD until next promote overwrites; keeps thinks+quality.
+    PurgeEvent.REWIND_TO_PROMOTE: _FORWARD,
+    PurgeEvent.REWIND_TO_QUALITY: _FORWARD | frozenset({TempFamily.AUTHORING_QUALITY}),
+    PurgeEvent.REWIND_TO_THINK: _FORWARD
+    | frozenset({TempFamily.AUTHORING_QUALITY, TempFamily.PROMOTED_PRD}),
+    PurgeEvent.REWIND_START: frozenset(TempFamily),
+    # Acceptance: purge brief + impact; keep Resolution until next validate overwrites.
+    PurgeEvent.REWIND_TO_ACCEPTANCE: frozenset(
+        {TempFamily.POST_PM_BRIEF, TempFamily.IMPACT_MAP, *_PE_KB}
+    ),
+    PurgeEvent.REWIND_TO_IMPACT_MAP: frozenset({TempFamily.IMPACT_MAP, *_PE_KB}),
+    PurgeEvent.REWIND_TO_PR_ACTION: _PE_KB,
 }
 
 
@@ -126,6 +177,12 @@ def paths_for_family(family: TempFamily, ctx: PurgeContext) -> list[str]:
             f"prd/reports/{init}-prd-recommend.md",
         ]
         return authoring_scratch_paths(init, list(ctx.candidates) + fixed)
+    if family is TempFamily.AUTHORING_QUALITY:
+        return [
+            f"prd/reports/{init}-prd-quality.md",
+            f"prd/reports/{init}-prd-ask.md",
+            f"prd/reports/{init}-prd-recommend.md",
+        ]
     if family is TempFamily.PROMOTE_BRIEF:
         return [hermes_promote_brief_path(init)]
     if family is TempFamily.POST_PM_BRIEF:
@@ -139,6 +196,14 @@ def paths_for_family(family: TempFamily, ctx: PurgeContext) -> list[str]:
         return [f"prd/reports/{init}-read-walk-{safe}.md"]
     if family is TempFamily.KB_ENRICH_BODY:
         return [f"prd/reports/{init}-kb-enrich-pr-body.md"]
+    if family is TempFamily.VALIDATION_REPORT:
+        return [f"prd/reports/Validation-Report-{init}.md"]
+    if family is TempFamily.RESOLUTION:
+        return [f"prd/reports/Resolution-{init}.md"]
+    if family is TempFamily.IMPACT_MAP:
+        return [f"prd/reports/Impact-Map-{init}.md"]
+    if family is TempFamily.PROMOTED_PRD:
+        return [prd_path(init)]
     return []
 
 
