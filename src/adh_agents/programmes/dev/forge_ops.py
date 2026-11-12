@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -250,7 +248,6 @@ async def seed_board_tickets(
     if not apps:
         # Fall back to every installed app — mint will filter by issues:write.
         apps = apps_with_installation(workspace)
-    project_token = await _gh_auth_token()
 
     waves = [
         {
@@ -271,7 +268,6 @@ async def seed_board_tickets(
         epic_body=manifest.epic_body,
         labels=list(manifest.labels),
         waves=waves,
-        project_token=project_token,
     )
 
 
@@ -301,30 +297,3 @@ def _issue_capable_apps(workspace: PmWorkspaceService, repo: str) -> list[AppRol
         seen.add(app.app_id)
         out.append(app)
     return out
-
-
-async def _gh_auth_token() -> Optional[str]:
-    """Host ``gh`` user token for Projects V2 when Apps lack Projects scope."""
-    gh = shutil.which("gh")
-    if not gh:
-        return None
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            gh,
-            "auth",
-            "token",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        out, err = await proc.communicate()
-        if proc.returncode != 0:
-            logger.warning(
-                "gh auth token failed; project attach may fail without Projects app scope",
-                stderr=(err or b"")[:200].decode("utf-8", errors="replace"),
-            )
-            return None
-        token = (out or b"").decode("utf-8", errors="replace").strip()
-        return token or None
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("gh auth token unavailable", error=str(exc))
-        return None
