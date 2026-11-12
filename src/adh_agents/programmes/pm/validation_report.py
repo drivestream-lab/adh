@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-import re
-from typing import Any
+from typing import Any, Optional
+
+from src.adh_agents.runtime.agentic_extract import first_vf_id, heading_sections
 
 # Live validate-requirements reports use titled sections, e.g.
 # "## Critical (MUST FIX — …)" / "## Should Fix (reframe, …)".
-_HEADING = re.compile(
-    r"^##\s+(Critical|Should Fix|Verify|Gaps)\b.*$",
-    re.I | re.M,
+_SEVERITY_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("critical", "Critical"),
+    ("should fix", "Should Fix"),
+    ("verify", "Verify"),
+    ("gaps", "Gaps"),
 )
-_VF = re.compile(r"\bVF-?(\d+)\b", re.I)
 
 
 def validation_report_path(initiative: str) -> str:
@@ -32,11 +34,9 @@ def parse_validation_findings(body: str) -> list[dict[str, Any]]:
     if not text.strip():
         return []
     findings: list[dict[str, Any]] = []
-    matches = list(_HEADING.finditer(text))
-    if not matches:
-        # fallback: any VF ids in body as verify
-        for match in _VF.finditer(text):
-            fid = f"VF-{int(match.group(1)):02d}"
+    sections = heading_sections(text)
+    if not sections:
+        for fid in _all_vf_ids(text):
             findings.append(
                 {
                     "id": fid,
@@ -48,24 +48,14 @@ def parse_validation_findings(body: str) -> list[dict[str, Any]]:
             )
         return _unique(findings)
 
-    for index, match in enumerate(matches):
-        severity = match.group(1)
-        if severity.lower() == "gaps":
-            severity = "Gaps"
-        elif severity.lower().startswith("should"):
-            severity = "Should Fix"
-        elif severity.lower() == "critical":
-            severity = "Critical"
-        else:
-            severity = "Verify"
-        start = match.end()
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        chunk = text[start:end]
+    for title, chunk in sections.items():
+        severity = _severity_from_heading(title)
+        if severity is None:
+            continue
         for line in chunk.splitlines():
-            vf = _VF.search(line)
-            if not vf:
+            fid = first_vf_id(line)
+            if not fid:
                 continue
-            fid = f"VF-{int(vf.group(1)):02d}"
             finding_text, location, recommendation = _row_fields(line)
             findings.append(
                 {
@@ -79,13 +69,51 @@ def parse_validation_findings(body: str) -> list[dict[str, Any]]:
     return _unique(findings)
 
 
+def _severity_from_heading(title: str) -> Optional[str]:
+    lowered = (title or "").strip().lower()
+    for prefix, label in _SEVERITY_PREFIXES:
+        if (
+            lowered == prefix
+            or lowered.startswith(prefix + " ")
+            or lowered.startswith(prefix + "(")
+        ):
+            return label
+    return None
+
+
+def _all_vf_ids(text: str) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+    for line in (text or "").splitlines():
+        # Scan repeatedly by chopping after each hit.
+        rest = line
+        while True:
+            fid = first_vf_id(rest)
+            if not fid:
+                break
+            if fid not in seen:
+                seen.add(fid)
+                found.append(fid)
+            # Advance past this occurrence (VF + optional - + digits).
+            lower = rest.lower()
+            idx = lower.find("vf")
+            if idx < 0:
+                break
+            rest = rest[idx + 2 :]
+            if rest[:1] in {"-", "–"}:
+                rest = rest[1:]
+            while rest and rest[0].isdigit():
+                rest = rest[1:]
+    return found
+
+
 def _row_fields(line: str) -> tuple[str, str, str]:
     """Pull finding / location / recommendation from a markdown table row when present."""
     stripped = line.strip()
     if "|" not in stripped:
         return stripped, "", ""
     cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-    if not cells or not _VF.search(cells[0]):
+    if not cells or not first_vf_id(cells[0]):
         return stripped, "", ""
     # Critical / Should Fix / Verify / Gaps share: VF | Type | Location | Target | Check | Finding | …
     location = cells[2] if len(cells) > 2 else ""

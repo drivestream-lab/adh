@@ -14,7 +14,6 @@ Do not add gate-private purge helpers. Extend ``TempFamily`` / ``PURGE_MATRIX`` 
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable, Sequence
@@ -25,13 +24,6 @@ from src.infra_services.pm_workspace_service import (
     hermes_promote_brief_path,
     prd_path,
 )
-
-# Authoring scratch suffixes — match path shape, not a hardcoded INIT- token.
-_THINK = re.compile(r"^prd/reports/(.+)-prd-think(?:-\d+)?\.md$", re.I)
-_QUALITY = re.compile(r"^prd/reports/(.+)-prd-quality\.md$", re.I)
-_ASK = re.compile(r"^prd/reports/(.+)-prd-ask\.md$", re.I)
-_RECOMMEND = re.compile(r"^prd/reports/(.+)-prd-recommend\.md$", re.I)
-_AUTHORING_SCRATCH = (_THINK, _QUALITY, _ASK, _RECOMMEND)
 
 
 class TempFamily(str, Enum):
@@ -138,13 +130,28 @@ class PurgeContext:
 
 
 def is_authoring_scratch(path: str, initiative: str) -> bool:
-    """True when path is allowlisted pre-promote scratch for this initiative."""
+    """True when path is allowlisted pre-promote scratch for this initiative.
+
+    Path shape only (no regex): ``prd/reports/{INIT}-prd-{think|quality|ask|recommend}…``.
+    """
     normalized = path.replace("\\", "/").lstrip("./")
     init = initiative.strip().upper()
-    for pattern in _AUTHORING_SCRATCH:
-        match = pattern.match(normalized)
-        if match and match.group(1).upper() == init:
-            return True
+    if not normalized.lower().startswith("prd/reports/"):
+        return False
+    name = normalized.rsplit("/", 1)[-1]
+    if not name.lower().endswith(".md"):
+        return False
+    stem = name[:-3].upper()
+    prefix = f"{init}-PRD-"
+    if not stem.startswith(prefix):
+        return False
+    rest = stem[len(prefix) :]
+    if rest == "QUALITY" or rest == "ASK" or rest == "RECOMMEND":
+        return True
+    if rest == "THINK":
+        return True
+    if rest.startswith("THINK-") and rest[len("THINK-") :].isdigit():
+        return True
     return False
 
 

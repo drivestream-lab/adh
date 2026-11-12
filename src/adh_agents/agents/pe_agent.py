@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 from injector import inject
 
 from src.adh_agents.base import BaseHermesAgent
@@ -11,6 +9,7 @@ from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.programmes.pe.engg_handoff import PeEnggHandoff
 from src.adh_agents.programmes.pe.review import PeReviewProgramme
 from src.adh_agents.programmes.pm.lead_tokens import extract_initiative
+from src.adh_agents.runtime.lead_commands import LeadCommand, match_lead_command
 from src.adh_agents.runtime.orchestrator import Orchestrator
 from src.adh_agents.runtime.presence import PresenceService
 from src.adh_agents.runtime.room_resolve import listen_rooms_for_tenants, resolve_tenant_for_room
@@ -27,7 +26,6 @@ _GATE1_VERBS = frozenset({"gate1", "review"})
 _GATE1_FORK_TOKENS = frozenset(
     {"attest", "approve", "new_round", "round_again", "hold", "park", "await_pm"}
 )
-_ENGG_GO = re.compile(r"(?i)\bengg\s+go\b")
 
 
 class PEAgent(BaseHermesAgent):
@@ -106,7 +104,7 @@ class PEAgent(BaseHermesAgent):
                 return
         if message.kind == MessageKind.MESSAGE and (message.identity_handle or "") == self._lead:
             body = (message.body or "").strip()
-            if _ENGG_GO.search(body):
+            if match_lead_command(body, allowed=[LeadCommand.ENGG_GO]) == LeadCommand.ENGG_GO:
                 init = extract_initiative(body, tenant.init_prefix)
                 if not init:
                     await self.broadcast_progress(

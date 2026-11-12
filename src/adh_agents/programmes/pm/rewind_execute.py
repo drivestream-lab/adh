@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import Optional
 
 from injector import inject
@@ -32,8 +31,6 @@ from src.models.buzz_models import EventType, TaskEventCreate, TaskEventKind, Ta
 from src.models.tenant_models import TenantContext
 
 logger = get_logger()
-
-_PR_NUM = re.compile(r"/pull/(\d+)(?:/|$)", re.I)
 
 
 class RewindExecuteService:
@@ -334,13 +331,9 @@ class RewindExecuteService:
 
 
 def _pr_number(pr_url: str) -> Optional[int]:
-    match = _PR_NUM.search(pr_url or "")
-    if match:
-        return int(match.group(1))
-    parts = (pr_url or "").rstrip("/").split("/")
-    if len(parts) >= 2 and parts[-2] == "pull" and parts[-1].isdigit():
-        return int(parts[-1])
-    return None
+    from src.adh_agents.runtime.agentic_extract import github_pull_number
+
+    return github_pull_number(pr_url or "")
 
 
 def _int(raw: str) -> Optional[int]:

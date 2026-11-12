@@ -56,17 +56,26 @@ def delivery_phrase(hop: str) -> str:
 
 def forbidden_buzz_hits(body: str) -> list[str]:
     """Return forbidden substrings found in a Buzz body (for tests / guards)."""
-    import re
-
-    # Drop backtick spans (evidence paths / tokens) before jargon scan.
-    scrubbed = re.sub(r"`[^`]*`", " ", body or "")
-    lowered = scrubbed.lower().replace("‑", "-").replace("–", "-")
+    # Drop backtick spans (evidence paths / tokens) before jargon scan — no regex.
+    scrubbed_parts: list[str] = []
+    in_tick = False
+    for ch in body or "":
+        if ch == "`":
+            in_tick = not in_tick
+            scrubbed_parts.append(" ")
+            continue
+        scrubbed_parts.append(" " if in_tick else ch)
+    lowered = "".join(scrubbed_parts).lower().replace("‑", "-").replace("–", "-")
     hits: list[str] = []
     for needle in _FORBIDDEN_BUZZ_SUBSTRINGS:
         n = needle.lower().replace("‑", "-")
         if n in lowered:
             hits.append(needle)
-    # Standalone "Gate1" / "gate1" as a word (not inside a path we already stripped).
-    if re.search(r"\bgate\s*1\b", lowered) or re.search(r"\bgate1\b", lowered):
-        hits.append("gate1")
+    # Standalone gate1 / "gate 1" as whitespace-bounded tokens.
+    tokens = lowered.replace(",", " ").replace(".", " ").split()
+    if "gate1" in tokens or ("gate" in tokens and "1" in tokens):
+        # "gate" then "1" as adjacent words
+        joined = " ".join(tokens)
+        if "gate1" in tokens or "gate 1" in joined:
+            hits.append("gate1")
     return hits

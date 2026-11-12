@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from typing import Optional
 
 from injector import inject
 
 from src.adh_agents.collaboration.human_replies import TRAJ, normalize_reply
+from src.adh_agents.runtime.agentic_extract import find_init_token
 from src.adh_agents.surface.buzz_poster import HermesBuzzPoster
 from src.business_services.buzz_service import BuzzService
 from src.logging import get_logger
@@ -127,9 +127,9 @@ class TrajCoachProgramme:
             return room[len("task-") :].upper()
         if room.startswith("engg-"):
             return room[len("engg-") :].upper()
-        match = re.search(r"\b(INIT-[A-Z0-9-]+)\b", body or "", re.I)
-        if match:
-            return match.group(1).upper()
+        token = find_init_token(body or "")
+        if token:
+            return token
         try:
             active = await self._buzz.list_tasks(tenant.slug, include_archived=False)
         except Exception:

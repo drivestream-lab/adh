@@ -90,6 +90,20 @@ function updateJumpBtn() {
 
 let cachedRooms: Room[] = [];
 
+/** E1: Dev posts on `#engg-<id>`; task home is often empty. Prefer engg when it exists. */
+function enggSlugFor(taskIdOrRoom: string): string | null {
+  let id = (taskIdOrRoom || "").trim();
+  if (!id) return null;
+  if (id.startsWith("task-")) id = id.slice("task-".length);
+  if (id.startsWith("engg-")) id = id.slice("engg-".length);
+  const slug = `engg-${id}`.toLowerCase();
+  return cachedRooms.some((r) => r.slug === slug && r.kind === "engg") ? slug : null;
+}
+
+function collaborationSlug(taskRoom: string): string {
+  return enggSlugFor(taskRoom) || taskRoom;
+}
+
 function renderRooms(rooms?: Room[]) {
   if (rooms) cachedRooms = rooms;
   const el = $("rooms");
@@ -116,10 +130,31 @@ function renderRooms(rooms?: Room[]) {
     blocks.push(
       liveTasks
         .map((t) => {
-          const n = unread.get(t.task_room_slug) || 0;
+          const openSlug = collaborationSlug(t.task_room_slug);
+          const n = unread.get(openSlug) || unread.get(t.task_room_slug) || 0;
           const badge = n ? `<span class="unread">${n}</span>` : "";
-          return `<div class="room ${t.task_room_slug === currentSlug ? "active" : ""}" data-slug="${esc(t.task_room_slug)}">
+          const active =
+            currentSlug === openSlug || currentSlug === t.task_room_slug ? "active" : "";
+          return `<div class="room ${active}" data-slug="${esc(openSlug)}">
         <span># ${esc(t.task_id)}</span>${badge}
+      </div>`;
+        })
+        .join(""),
+    );
+  }
+  // E1 Dev collaboration floors — not the empty task home.
+  const engg = cachedRooms.filter((r) => r.kind === "engg");
+  blocks.push(`<div class="side-label">Engg</div>`);
+  if (!engg.length) {
+    blocks.push(`<div class="empty-side">No engg floors</div>`);
+  } else {
+    blocks.push(
+      engg
+        .map((r) => {
+          const n = unread.get(r.slug) || 0;
+          const badge = n ? `<span class="unread">${n}</span>` : "";
+          return `<div class="room ${r.slug === currentSlug ? "active" : ""}" data-slug="${esc(r.slug)}">
+        <span># ${esc(r.slug)}</span>${badge}
       </div>`;
         })
         .join(""),
@@ -215,23 +250,33 @@ async function refreshRoster() {
 function maybeAutoSwitchToTask(payload: Message["payload"]) {
   const taskRoom = (payload?.task_room || "").trim();
   if (!taskRoom.startsWith("task-")) return;
-  // F.15: never steal focus from another active task room.
-  if (currentSlug.startsWith("task-") && currentSlug !== taskRoom) {
-    unread.set(taskRoom, (unread.get(taskRoom) || 0) + 1);
+  const openSlug = collaborationSlug(taskRoom);
+  // F.15: never steal focus from another active task/engg floor.
+  const onOtherTask =
+    (currentSlug.startsWith("task-") || currentSlug.startsWith("engg-")) &&
+    currentSlug !== taskRoom &&
+    currentSlug !== openSlug;
+  if (onOtherTask) {
+    unread.set(openSlug, (unread.get(openSlug) || 0) + 1);
     refreshSidebar().catch(() => undefined);
     return;
   }
-  // Auto-switch only when Lead is on a tenant hub (or already this task).
+  // Auto-switch only when Lead is on a tenant hub (or already this task/engg).
   const hub =
     payload?.hub_room_slug ||
     activeTasks.find((t) => t.task_room_slug === taskRoom)?.hub_room_slug;
-  if (currentSlug.endsWith("-ops") || (hub && currentSlug === hub) || currentSlug === taskRoom) {
-    if (currentSlug !== taskRoom) {
-      openRoom(taskRoom).catch((err) => console.error(err));
+  if (
+    currentSlug.endsWith("-ops") ||
+    (hub && currentSlug === hub) ||
+    currentSlug === taskRoom ||
+    currentSlug === openSlug
+  ) {
+    if (currentSlug !== openSlug) {
+      openRoom(openSlug).catch((err) => console.error(err));
     }
     return;
   }
-  unread.set(taskRoom, (unread.get(taskRoom) || 0) + 1);
+  unread.set(openSlug, (unread.get(openSlug) || 0) + 1);
   refreshSidebar().catch(() => undefined);
 }
 

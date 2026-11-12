@@ -1,13 +1,15 @@
-"""Quality and ask card merges for Hermes PM."""
+"""Quality and ask card merges for Hermes PM (no regex)."""
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from src.models.prompt_models import cap_lead_questions
 
-_THINK_LABEL = re.compile(r"\bC\d+\b")
+
+def _is_c_label(token: str) -> bool:
+    t = (token or "").strip().upper().strip("*").strip("`")
+    return len(t) >= 2 and t[0] == "C" and t[1:].isdigit()
 
 
 def _human_pm_text(text: str) -> str:
@@ -15,9 +17,22 @@ def _human_pm_text(text: str) -> str:
     raw = (text or "").strip()
     if not raw:
         return ""
-    cleaned = _THINK_LABEL.sub("this", raw)
-    cleaned = re.sub(r"\bthis proves\b", "This proves", cleaned, count=1)
-    return re.sub(r" {2,}", " ", cleaned).strip()
+    words: list[str] = []
+    for part in raw.split():
+        core = part.strip(".,;:()[]\"'")
+        if _is_c_label(core):
+            words.append("this")
+        else:
+            words.append(part)
+    cleaned = " ".join(words)
+    lower = cleaned.lower()
+    marker = "this proves"
+    idx = lower.find(marker)
+    if idx >= 0:
+        cleaned = cleaned[:idx] + "This proves" + cleaned[idx + len(marker) :]
+    while "  " in cleaned:
+        cleaned = cleaned.replace("  ", " ")
+    return cleaned.strip()
 
 
 def apply_ask_card(frozen: dict[str, Any], card: dict[str, Any]) -> dict[str, Any]:

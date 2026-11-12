@@ -129,14 +129,22 @@ class HermesBuzzPoster:
             identity_handle=handle,
         )
 
-    async def post_heartbeat(self, room: str, body: str, event_type: EventType) -> None:
+    async def post_heartbeat(
+        self,
+        room: str,
+        body: str,
+        event_type: EventType,
+        *,
+        identity_handle: str | None = None,
+    ) -> None:
+        handle = identity_handle or _HERMES_HANDLE
         await self._buzz.ingest_heartbeat(
             HeartbeatIngest(
-                identity_handle=_HERMES_HANDLE,
+                identity_handle=handle,
                 room_slug=room,
                 body=body,
                 event_type=event_type,
-                payload={"service": "hermes", "lane": "pm"},
+                payload={"service": "adh_agents", "role": handle},
             )
         )
 
@@ -178,10 +186,12 @@ class HermesBuzzPoster:
         hop: str,
         initiative: str,
         label: str = "",
+        identity_handle: str | None = None,
     ) -> ProgressCallback:
         """Buzz still-working posts every ``progress_seconds`` while Cursor runs."""
         steps = int(self._settings.wait_steps)
         interval = float(self._settings.progress_seconds)
+        handle = identity_handle or _HERMES_HANDLE
         state = {"step": 0}
 
         async def _on_progress(_msg: str) -> None:
@@ -189,9 +199,10 @@ class HermesBuzzPoster:
             step = int(state["step"])
             if step > steps:
                 logger.warning(
-                    "PM hop exceeded wait_steps; Cursor still running",
+                    "hop exceeded wait_steps; Cursor still running",
                     hop=hop,
                     initiative=initiative,
+                    role=handle,
                     step=step,
                     steps=steps,
                 )
@@ -215,16 +226,24 @@ class HermesBuzzPoster:
                     "initiative": initiative,
                     "wait_step": step,
                     "wait_steps": steps,
+                    "role": handle,
                 },
+                identity_handle=handle,
             )
             try:
+                hb = (
+                    f"{handle} still working ({min(step, steps)}/{steps}, {elapsed}s)"
+                    if handle != _HERMES_HANDLE
+                    else self.copy("hermes.pm.heartbeat.still-working", wait_vars)
+                )
                 await self.post_heartbeat(
                     room,
-                    self.copy("hermes.pm.heartbeat.still-working", wait_vars),
+                    hb,
                     EventType.PROGRESS,
+                    identity_handle=handle,
                 )
             except Exception:
-                logger.exception("PM progress heartbeat failed", hop=hop)
+                logger.exception("progress heartbeat failed", hop=hop, role=handle)
 
         return _on_progress
 

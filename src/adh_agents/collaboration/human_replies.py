@@ -16,12 +16,13 @@ CONFIRM_REWIND = "confirm rewind"
 CANCEL_REWIND = "cancel"
 TRAJ = "traj"
 
-# Dev engg-think (E1)
-ACCEPT_DEPS = "accept deps"
+# Dev YAML development (E1)
 ANOTHER_ROUND = "another round"
 ACCEPT_TDD_ADR = "accept tdd-adr"
 CODING_READY = "coding ready"
+MERGE_SPEC_PR = "merge the spec PR"
 AUTHORIZE_BOARD = "authorize board"
+RESEED_BOARD = "reseed board"
 REVISE_ENGG = "revise engg"
 HOLD = "hold"
 
@@ -43,11 +44,17 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     CONFIRM_REWIND: (CONFIRM_REWIND, "confirm"),
     CANCEL_REWIND: (CANCEL_REWIND, "cancel rewind"),
     TRAJ: (TRAJ, "trajectory", "show trajectory"),
-    ACCEPT_DEPS: (ACCEPT_DEPS, "accept engg-deps", "deps ok"),
     ANOTHER_ROUND: (ANOTHER_ROUND, NEED_ANOTHER_ROUND, "new_round", "round_again"),
     ACCEPT_TDD_ADR: (ACCEPT_TDD_ADR, "accept adr", "accept tdd", "accept technical review"),
     CODING_READY: (CODING_READY, "coding-ready", "ready for board"),
+    MERGE_SPEC_PR: (MERGE_SPEC_PR, "merge spec", "merge the spec prs", "authorize spec_merge"),
     AUTHORIZE_BOARD: (AUTHORIZE_BOARD, "seed board", "create board tickets"),
+    RESEED_BOARD: (
+        RESEED_BOARD,
+        "re-seed board",
+        "seed board again",
+        "reseed tickets",
+    ),
     REVISE_ENGG: (REVISE_ENGG, "revise engineering", "reopen engg"),
     HOLD: (HOLD, PARK),
 }

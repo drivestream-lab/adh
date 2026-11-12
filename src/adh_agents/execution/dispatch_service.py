@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 from injector import inject
@@ -57,6 +58,11 @@ class HermesDispatchService(BaseBusinessService):
         initiative: str,
         *,
         on_progress: Optional[ProgressCallback] = None,
+        workspace: Optional["Path"] = None,
+        repo: str = "",
+        extra_prompt: str = "",
+        prd_path: str = "",
+        reports_dir: str = "",
     ) -> SkillRunResult:
         snap = self._catalogue.snapshot()
         try:
@@ -73,7 +79,12 @@ class HermesDispatchService(BaseBusinessService):
             tenant,
             skill.skill_id,
             initiative,
+            extra_prompt=extra_prompt,
             on_progress=on_progress,
+            workspace=workspace,
+            repo=repo,
+            prd_path=prd_path,
+            reports_dir=reports_dir,
         )
         return SkillRunResult.model_validate(raw)
 
@@ -85,6 +96,10 @@ class HermesDispatchService(BaseBusinessService):
         *,
         extra_prompt: str = "",
         on_progress: Optional[ProgressCallback] = None,
+        workspace: Optional["Path"] = None,
+        repo: str = "",
+        prd_path: str = "",
+        reports_dir: str = "",
     ) -> SkillRunResult:
         """Run a skill from the SKILL.md index (not every skill is a workflow node)."""
         key = skill_id.lstrip("/")
@@ -99,6 +114,10 @@ class HermesDispatchService(BaseBusinessService):
             initiative,
             extra_prompt=extra_prompt,
             on_progress=on_progress,
+            workspace=workspace,
+            repo=repo,
+            prd_path=prd_path,
+            reports_dir=reports_dir,
         )
         return SkillRunResult.model_validate(raw)
 

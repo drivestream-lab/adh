@@ -78,8 +78,13 @@ class GitHubAppService(BaseInfraService):
         *,
         write: bool,
         repositories: Optional[list[str]] = None,
+        permissions: Optional[dict[str, str]] = None,
     ) -> tuple[str, dict[str, Any]]:
-        """Return (token, permissions). Scoped to `repositories` when given."""
+        """Return (token, permissions). Scoped to `repositories` when given.
+
+        ``permissions`` overrides the default write/read set when the caller needs
+        a narrower or different grant (e.g. ``issues: write`` for board seed).
+        """
         if self._client is None:
             raise RuntimeError("GitHub App service has not been initialized")
         pem = Path(app.pem).expanduser()
@@ -98,17 +103,18 @@ class GitHubAppService(BaseInfraService):
         installation_id = app.installation_id
         if installation_id is None:
             installation_id = await self._installation_id(encoded, app.app_id)
-        permissions: dict[str, str]
-        if write:
-            permissions = {
+        if permissions is not None:
+            perms = dict(permissions)
+        elif write:
+            perms = {
                 "contents": "write",
                 "pull_requests": "write",
                 "checks": "write",
                 "metadata": "read",
             }
         else:
-            permissions = {"contents": "read", "metadata": "read"}
-        payload: dict[str, Any] = {"permissions": permissions}
+            perms = {"contents": "read", "metadata": "read"}
+        payload: dict[str, Any] = {"permissions": perms}
         repos = repositories if repositories is not None else list(app.repos)
         if repos:
             payload["repositories"] = repos
@@ -129,7 +135,7 @@ class GitHubAppService(BaseInfraService):
         response.raise_for_status()
         body = response.json()
         token = str(body["token"])
-        granted = body.get("permissions") or permissions
+        granted = body.get("permissions") or perms
         logger.info(
             "Minted GitHub App installation token",
             app_id=app.app_id,
@@ -899,6 +905,254 @@ class GitHubAppService(BaseInfraService):
             if int(row.get("app_id") or 0) == app_id:
                 return int(row["id"])
         raise ValidationError(f"no installation for GitHub App {app_id}")
+
+    async def repo_has_issues(self, token: str, repo: str) -> bool:
+        """True when GitHub Issues hosting is enabled for ``repo``."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        response = await self._request(
+            "GET",
+            f"{api}/repos/{org}/{repo}",
+            headers=_token_headers(token),
+        )
+        response.raise_for_status()
+        raw = response.json()
+        data = raw if isinstance(raw, dict) else {}
+        return bool(data.get("has_issues"))
+
+    async def ensure_label(
+        self,
+        token: str,
+        repo: str,
+        *,
+        name: str,
+        color: str = "0E8A16",
+        description: str = "initiative",
+    ) -> None:
+        """Create a repo label when missing (idempotent)."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        headers = _token_headers(token)
+        encoded = quote(name, safe="")
+        existing = await self._request(
+            "GET",
+            f"{api}/repos/{org}/{repo}/labels/{encoded}",
+            headers=headers,
+        )
+        if existing.status_code == 200:
+            return
+        created = await self._request(
+            "POST",
+            f"{api}/repos/{org}/{repo}/labels",
+            headers=headers,
+            json={"name": name, "color": color, "description": description},
+        )
+        if created.status_code in (201, 422):
+            return
+        created.raise_for_status()
+
+    async def list_issues_by_label(
+        self,
+        token: str,
+        repo: str,
+        *,
+        label: str,
+        state: str = "all",
+    ) -> list[dict[str, Any]]:
+        """List issues (not PRs) with ``label``."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        response = await self._request(
+            "GET",
+            f"{api}/repos/{org}/{repo}/issues",
+            headers=_token_headers(token),
+            params={"labels": label, "state": state, "per_page": 100},
+        )
+        response.raise_for_status()
+        rows = response.json()
+        if not isinstance(rows, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if row.get("pull_request"):
+                continue
+            out.append(row)
+        return out
+
+    async def create_issue(
+        self,
+        token: str,
+        repo: str,
+        *,
+        title: str,
+        body: str,
+        labels: list[str],
+    ) -> tuple[int, str, str, int]:
+        """Create an issue. Returns (number, html_url, node_id, numeric_id)."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        created = await self._request(
+            "POST",
+            f"{api}/repos/{org}/{repo}/issues",
+            headers=_token_headers(token),
+            json={"title": title, "body": body, "labels": labels},
+        )
+        if created.status_code >= 400:
+            logger.info(
+                "GitHub create_issue failed",
+                repo=repo,
+                status=created.status_code,
+                body=created.text[:300],
+            )
+            created.raise_for_status()
+        data = created.json()
+        number = int(data["number"])
+        url = str(data.get("html_url") or f"https://github.com/{org}/{repo}/issues/{number}")
+        node_id = str(data.get("node_id") or "")
+        numeric_id = int(data.get("id") or 0)
+        logger.info("Created GitHub issue", repo=repo, issue=number, url=url)
+        return number, url, node_id, numeric_id
+
+    async def add_sub_issue(
+        self,
+        token: str,
+        repo: str,
+        *,
+        parent_number: int,
+        child_numeric_id: int,
+    ) -> None:
+        """Link ``child`` as a sub-issue of ``parent`` (REST; idempotent-ish)."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        response = await self._request(
+            "POST",
+            f"{api}/repos/{org}/{repo}/issues/{parent_number}/sub_issues",
+            headers=_token_headers(token),
+            json={"sub_issue_id": child_numeric_id},
+        )
+        # 201 created; 422 when already linked / duplicate — treat as ok.
+        if response.status_code in (201, 204, 422):
+            logger.info(
+                "Linked sub-issue",
+                repo=repo,
+                parent=parent_number,
+                child_id=child_numeric_id,
+                status=response.status_code,
+            )
+            return
+        logger.info(
+            "GitHub add_sub_issue failed",
+            repo=repo,
+            parent=parent_number,
+            status=response.status_code,
+            body=response.text[:300],
+        )
+        response.raise_for_status()
+
+    async def resolve_org_project(
+        self,
+        token: str,
+        *,
+        org: str,
+        name: str,
+    ) -> tuple[str, int, str]:
+        """Resolve Projects V2 by title. Returns (node_id, number, url)."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        api = self._settings.github_api.rstrip("/")
+        query = (
+            "query($org: String!, $q: String!) {"
+            " organization(login: $org) {"
+            "  projectsV2(first: 20, query: $q) {"
+            "   nodes { id number title url }"
+            "  }"
+            " }"
+            "}"
+        )
+        response = await self._request(
+            "POST",
+            f"{api}/graphql",
+            headers={**_token_headers(token), "Content-Type": "application/json"},
+            json={"query": query, "variables": {"org": org, "q": name}},
+        )
+        response.raise_for_status()
+        raw = response.json()
+        payload = raw if isinstance(raw, dict) else {}
+        if payload.get("errors"):
+            msg = "; ".join(
+                str(e.get("message") or e) for e in payload["errors"] if isinstance(e, dict)
+            )
+            raise ValidationError(f"resolve org project GraphQL failed: {msg[:200]}")
+        nodes = (
+            ((payload.get("data") or {}).get("organization") or {}).get("projectsV2") or {}
+        ).get("nodes") or []
+        wanted = name.strip().lower()
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            title = str(node.get("title") or "").strip()
+            if title.lower() == wanted:
+                node_id = str(node.get("id") or "")
+                number = int(node.get("number") or 0)
+                url = str(node.get("url") or "")
+                if not node_id or not number:
+                    break
+                return node_id, number, url
+        raise ValidationError(f"org project {name!r} not found for {org}")
+
+    async def add_issue_to_project(
+        self,
+        token: str,
+        *,
+        project_id: str,
+        content_node_id: str,
+    ) -> None:
+        """Add an issue to a Projects V2 board (idempotent on duplicate)."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        api = self._settings.github_api.rstrip("/")
+        mutation = (
+            "mutation($project: ID!, $content: ID!) {"
+            " addProjectV2ItemById(input: {projectId: $project, contentId: $content}) {"
+            "  item { id }"
+            " }"
+            "}"
+        )
+        response = await self._request(
+            "POST",
+            f"{api}/graphql",
+            headers={**_token_headers(token), "Content-Type": "application/json"},
+            json={
+                "query": mutation,
+                "variables": {"project": project_id, "content": content_node_id},
+            },
+        )
+        response.raise_for_status()
+        raw = response.json()
+        payload = raw if isinstance(raw, dict) else {}
+        errors = payload.get("errors") or []
+        if errors:
+            msg = "; ".join(
+                str(e.get("message") or e) for e in errors if isinstance(e, dict)
+            ) or str(errors)
+            # Duplicate / already present — accept.
+            if "already" in msg.lower() or "duplicate" in msg.lower():
+                logger.info("Project item already present", project=project_id)
+                return
+            raise ValidationError(f"addProjectV2ItemById failed: {msg[:200]}")
+        logger.info("Added issue to project", project=project_id)
 
 
 def _token_headers(token: str) -> dict[str, str]:

@@ -80,3 +80,36 @@ def test_god_chain_cap(monkeypatch) -> None:
 
     asyncio.run(_run())
     _reset_autonomy_settings()
+
+
+def test_god_same_purpose_reentry_allowed(monkeypatch) -> None:
+    """another round / findings loops must not halt on duplicate purpose."""
+    monkeypatch.setenv("ADH_AUTONOMY_MODE", "god")
+    monkeypatch.setenv("ADH_GOD_CHAIN_CAP", "5")
+    _reset_autonomy_settings()
+    redis = MagicMock()
+    state = {"val": None}
+
+    async def _get(_key):
+        return state["val"]
+
+    async def _set(_key, value, ttl=None):
+        state["val"] = value
+        return True
+
+    redis.get = AsyncMock(side_effect=_get)
+    redis.set = AsyncMock(side_effect=_set)
+    policy = AutonomyPolicy(redis)
+
+    async def _run() -> None:
+        ok1, _ = await policy.record_take(
+            tenant="realworld", initiative="INIT-1", purpose="tdd-adr-acceptance"
+        )
+        ok2, reason = await policy.record_take(
+            tenant="realworld", initiative="INIT-1", purpose="tdd-adr-acceptance"
+        )
+        assert ok1 and ok2, reason
+        assert "duplicate" not in reason
+
+    asyncio.run(_run())
+    _reset_autonomy_settings()

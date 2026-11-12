@@ -61,7 +61,7 @@ Hermes/ledger Postgres DBs remain secondary (not Team OS task SSOT).
 ```text
 #{tenant}-ops          HUB — intake + announces + traj radar
 #task-{TASK_ID}        TASK HOME — product lane (PM / PE Gate‑1 / KB)
-#engg-{TASK_ID}        ENGG FLOOR — Dev engg-think → board (E1)
+#engg-{TASK_ID}        ENGG FLOOR — Dev YAML development lane (E1)
 ```
 
 ### Mental model (do not shuttle)
@@ -82,7 +82,7 @@ Hermes/ledger Postgres DBs remain secondary (not Team OS task SSOT).
 - Done coach for product phase
 
 **Engg floor holds (Dev programme):**
-- Engg-Deps / ADR-TDD / plan / verification plan / coding-ready / board seed
+- Spec draft → spec PR → feasibility / tech review → plan / WM → coding-ready → spec merge → board seed (YAML)
 - Opened when **PE emits** `dev.engg_think` (Lead hire = escape hatch only)
 
 **Code rule:** baton `ops_room` = **owning collaboration room** for that hop (task home for PE/KB; **engg floor for Dev**) — **not** the hub. Hub must not accumulate still-working / baton spam.
@@ -111,7 +111,7 @@ become a second task SSOT.
 | Role | Buzz id | Owns | Hire / verify |
 |------|---------|------|----------------|
 | PM | `adh.pm` | Requirements → draft PRD PR; product answers; PRD merge | Verify first on new OS |
-| Dev | `adh.dev` | Engg **think** after PRD PR: deps DAG, ADR/TDD, API/tests/verification **plan**, WorkManifest → **board seed** | E1; **not** coder |
+| Dev | `adh.dev` | YAML `development` lane after PRD merge: spec → spec PR → review/plan → merge → board | E1 greenfield; **not** coder |
 | Coder | `adh.coder` (later) | Execute board/WorkManifest → code PRs | After Dev fence |
 | Read | `adh.read` | Walk one repo; Buzz rollup | Before / with PE fan-out |
 | PE | `adh.pe` | Product review: fan-out reads, ≤10 Q / ≤2 agent rounds, attest, ping PM | After PM verify; consume `pe.review` |
@@ -174,18 +174,32 @@ Human mode only. Lead posts `rewind` → coach always shows **Can / Cannot / Out
 
 | Graph | SSOT | Use |
 |-------|------|-----|
-| Delivery work graph | `prayog-skills/workflow.yaml` | Stage navigation (ADR 0001) |
-| Repo dependency DAG | Impact-Map (+ KB overlays); engg refines to **`Engg-Deps-{INIT}.md`** + `deps-acceptance` | Parallel mutate tiers; board wave order |
-| Task DAG | Plan §9 WorkManifest | Coder executes TASK* in order |
-| Code graph | Fleet / MCP tool | Inside reader only |
+| Delivery work graph | `prayog-skills/workflow.yaml` | **SSOT** stage navigation (ADR 0001) — PM + Dev engg |
+| Repo dependency DAG | Impact-Map (+ KB overlays); skills refine during development hops | Scope repos for spec / plan / board waves |
+| Task DAG | Plan §9 WorkManifest | Board seed + coder executes TASK* |
+| Code graph | Fleet / MCP tool | Inside reader / skills only |
 
-### Dev engg-think (E1)
+### Dev engg lane (E1) — greenfield
 
-**PE → Dev** baton starts engg-think (product fence first; merged product PR OK). PM does **not** start Dev at `open_draft_pr`. Dev works on **`#engg-<id>`**. Spine: feasibility → technical review → **deps accept** → ADR/TDD accept → plan + verification **plan** → coding-readiness → **board tickets**.
+**SSOT:** `workflow.yaml` `development` entry — **same rule as PM lane**. No invented ADH-only hops (no `deps-acceptance` programme stage).
 
-**Self-debate:** before each major judgment, Dev runs **multi-pass / multi-model** internal debate (cap default **4**, `ADH_DEV_MAX_THINK_RUNS`) and should **converge early** with a clear recommend — hitting the ceiling is a quality smell. Open briefs carry **examples** + locking/not-locking for human flow. Effectiveness of Hermes Dev = how often it converges with a usable brief **before** the cap.
+**PE → Dev** baton after product fence (`prd-merge` / merged PRD OK). PM does **not** start Dev. Floor: **`#engg-<id>`**.
 
-Guinea pig: **god INIT-001** (PRD [#5](https://github.com/drivestream-lab/realworld-meta/pull/5)), **human INIT-002** (PRD [#8](https://github.com/drivestream-lab/realworld-meta/pull/8)). **Coder** is a later hire.
+**Spine (YAML `pass`):**  
+`spec-draft` → `spec-pr-action` → `initiative-feasibility` → `spec-technical-review` → `technical-review-approval` → `spec-implementation-plan` → `coding-readiness` → `spec-merge` → `board-tickets-action`.
+
+Skills + forge use **PRD + impacted codebases** (`commit_workspace` as declared). GateOpener on YAML human-checkpoints only. **God must auto-progress** (including same-purpose re-entry / `another round` within cap).
+
+**Verify slate (after rewrite):**
+
+| INIT | Lane | Mode | Notes |
+|------|------|------|-------|
+| INIT-REALWORLD-001 | Dev engg | **god** | PRD [#5](https://github.com/drivestream-lab/realworld-meta/pull/5) |
+| INIT-REALWORLD-002 | Dev engg | **human** | PRD [#8](https://github.com/drivestream-lab/realworld-meta/pull/8); Lead plays YAML checkpoints |
+| INIT-REALWORLD-007 | PM + PE | **god** | Product lane autopilot |
+| INIT-REALWORLD-008 | PM + PE | **human** | Lead manual from briefs |
+
+Prior `#engg-init-realworld-001` wiped. **Coder** later. Lead ops cmds = phrase lists + `normalize_reply` (agentic hole reserved — [ADR 0003](../adr/0003-platform-agentic-extract-decide.md)).
 
 ## KB heads (OKF in tenant meta)
 
@@ -219,4 +233,4 @@ See [`../references/adh-kb-heads.md`](../references/adh-kb-heads.md).
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md) · **As-built:** [`../as-built/implementation-status.md`](../as-built/implementation-status.md)
 
 Enabler = `BaseHermesAgent`; control plane = Orchestrator in `adh_agents/runtime`.  
-**Next:** E1 delta (PE→Dev, engg rooms, traj-on-ops) then god 001 + human 002; coder hire later.
+**Next:** E1 **greenfield** Dev rewrite + platform extract/decide; verify **001/002** (Dev) and **007/008** (PM+PE); coder hire later.

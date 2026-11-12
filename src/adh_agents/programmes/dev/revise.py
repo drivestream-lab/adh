@@ -1,15 +1,17 @@
-"""Post-board revise engg — reopen think; never silently rewrite seeded artefacts."""
+"""Post-board revise engg — reopen YAML development; never silently rewrite."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+_ENTRY = "spec-draft"
 
 
 @dataclass(frozen=True)
 class ReviseEnggPolicy:
     """What `revise engg` does after board seed."""
 
-    reopen_stage: str = "deps-acceptance"
+    reopen_stage: str = _ENTRY
     supersede_board: bool = True
     allow_silent_rewrite: bool = False
 
@@ -33,13 +35,14 @@ def apply_revise_engg_slots(
         out["board_seeded"] = "false"
         out.pop("board_seed_marker", None)
         out.pop("board_seeded_at", None)
-    # Clear acceptances so gates must re-fire.
     for key in (
-        "deps_accepted",
         "tdd_adr_accepted",
         "coding_ready_accepted",
         "board_authorized",
         "plan_accepted",
+        "spec_pr_merged",
+        "implementation_plan_current",
+        "workmanifest_contract_pass",
     ):
         out.pop(key, None)
     out["revise_engg"] = "1"

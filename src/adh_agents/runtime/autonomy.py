@@ -65,26 +65,32 @@ class AutonomyPolicy:
         await self._redis.set(key, "0", ttl=3600)
 
     async def record_take(self, *, tenant: str, initiative: str, purpose: str) -> tuple[bool, str]:
-        """Return (ok, reason). Caps chain length and blocks duplicate purpose."""
+        """Return (ok, reason). Caps chain length only.
+
+        Same-purpose re-entry is allowed (``another round`` / iterate / findings
+        loops). Halt only when the hard chain cap is hit — never on duplicate
+        purpose alone.
+        """
         init = initiative.strip().upper()
         key = f"{_CHAIN_PREFIX}:{tenant}:{init}"
         raw = await self._redis.get(key)
         count = 0
-        seen: set[str] = set()
+        seen: list[str] = []
         if raw:
             text = raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
             parts = [p for p in text.split("|") if p]
             if parts and parts[0].isdigit():
                 count = int(parts[0])
-                seen = set(parts[1:])
+                seen = parts[1:]
             elif text.isdigit():
                 count = int(text)
-        if purpose in seen:
-            return False, f"duplicate purpose `{purpose}` in god chain"
         cap = int(self._settings.god_chain_cap)
         if count >= cap:
             return False, f"god chain cap {cap} reached"
-        seen.add(purpose)
-        payload = f"{count + 1}|" + "|".join(sorted(seen))
+        purpose_key = (purpose or "").strip() or "gate"
+        seen.append(purpose_key)
+        # Keep a short observability trail; uniqueness is not enforced.
+        trail = seen[-cap:] if len(seen) > cap else seen
+        payload = f"{count + 1}|" + "|".join(trail)
         await self._redis.set(key, payload, ttl=3600)
         return True, "ok"

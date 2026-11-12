@@ -1,20 +1,21 @@
-"""Parse Hermes multi-thought Dev briefs (ADR / API / deps / verification)."""
+"""Parse Hermes multi-thought Dev briefs via platform heading_sections."""
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-_SECTION = re.compile(
-    r"(?im)^##\s+(ADR(?:\s+why)?|API(?:\s+why)?|Deps|Dependencies|Verification(?:\s+gaps)?|Coding\s*readiness)\s*$"
-)
+from src.adh_agents.runtime.agentic_extract import heading_sections
+
+_ADR = frozenset({"adr", "adr why"})
+_API = frozenset({"api", "api why"})
+_DEPS = frozenset({"deps", "dependencies"})
+_VERIF = frozenset({"verification", "verification gaps"})
+_CODING = frozenset({"coding readiness", "coding-readiness"})
 
 
 @dataclass
 class DevThoughtCard:
-    """Structured multi-thought card extracted from Hermes copy."""
-
     adr_why: str = ""
     api_why: str = ""
     deps: str = ""
@@ -34,35 +35,26 @@ class DevThoughtCard:
 
 
 def parse_dev_thought_card(body: str) -> Optional[DevThoughtCard]:
-    """Parse ## ADR / API / Deps / Verification sections. None if empty/malformed."""
-    text = (body or "").strip()
-    if not text:
+    sections = heading_sections(body or "")
+    if not sections:
         return None
-    matches = list(_SECTION.finditer(text))
-    if not matches:
-        return None
-    card = DevThoughtCard()
-    for i, match in enumerate(matches):
-        start = match.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        title = match.group(1).strip().lower()
-        content = text[start:end].strip()
-        card.raw_sections[title] = content
-        if title.startswith("adr"):
+    card = DevThoughtCard(raw_sections=dict(sections))
+    for title, content in sections.items():
+        key = title.lower().strip()
+        if key in _ADR:
             card.adr_why = content
-        elif title.startswith("api"):
+        elif key in _API:
             card.api_why = content
-        elif title.startswith("dep"):
+        elif key in _DEPS:
             card.deps = content
-        elif title.startswith("verif"):
+        elif key in _VERIF:
             card.verification_gaps = content
-        elif title.startswith("coding"):
+        elif key in _CODING:
             card.coding_readiness = content
     return card if card.has_any else None
 
 
 def card_bluf(card: DevThoughtCard) -> str:
-    """One-line BLUF for coach from the richest section."""
     for label, value in (
         ("ADR", card.adr_why),
         ("API", card.api_why),

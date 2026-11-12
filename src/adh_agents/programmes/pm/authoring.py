@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from typing import Optional
 from uuid import UUID
 
@@ -24,6 +23,7 @@ from src.adh_agents.programmes.pm.decision_card import (
     parse_promote_decision_card,
 )
 from src.adh_agents.execution.dispatch_service import HermesDispatchService
+from src.adh_agents.runtime.agentic_extract import extract_line
 from src.adh_agents.programmes.pm.lead_tokens import (
     coerce_init,
     extract_initiative,
@@ -1110,8 +1110,8 @@ class AuthoringProgrammeService(BaseBusinessService):
             return False
         paths = list(listing.think_paths)
         source = ""
-        if re.fullmatch(r"C\d+", pick, re.I):
-            index = int(pick[1:])
+        if _c_label_token(pick):
+            index = int(pick.strip()[1:])
             if 1 <= index <= len(paths):
                 source = paths[index - 1]
         elif "prd/reports/" in pick:
@@ -1165,66 +1165,158 @@ class AuthoringProgrammeService(BaseBusinessService):
 
 
 def _run_from_path(path: str) -> int:
-    match = re.search(r"-prd-think(?:-(\d+))?\.md$", path)
-    if match is None:
+    """Think path ``…-prd-think.md`` or ``…-prd-think-N.md`` → N (default 1)."""
+    name = (path or "").rsplit("/", 1)[-1]
+    if not name.lower().endswith(".md"):
         return 1
-    return int(match.group(1) or "1")
+    stem = name[:-3]
+    marker = "-prd-think"
+    lower = stem.lower()
+    idx = lower.rfind(marker)
+    if idx < 0:
+        return 1
+    rest = stem[idx + len(marker) :]
+    if not rest:
+        return 1
+    if rest.startswith("-") and rest[1:].isdigit():
+        return int(rest[1:])
+    return 1
 
 
 # Back-compat name used by tests / callers.
 PromoteBriefJudgment = DecisionCard
 
-_RECOMMEND_ASSIGN = re.compile(r"recommend(?:_promote|)\s*[:=]\s*(C\d+)", re.I)
-_RECOMMEND_ARROW = re.compile(r"\b(C\d+)\s*←")
-_RECOMMEND_NEXT = re.compile(
-    r"Recommended single pick[^\n]*?\*\*(C\d+)\*\*[^\n]*?(?:\(([^)]+)\))?",
-    re.I,
-)
-_PREFER_LINE = re.compile(
-    r"Prefer\s+(C\d+)\s+if[^.()]*\(([^)]+)\)",
-    re.I,
-)
-_JOB_IN_SECTION = re.compile(
-    r"###\s+(C\d+)\b[^\n]*\n.*?B1 Job\s*\|[^|\n]*\|[^|\n]*\|\s*" r"(?:Job:\s*)?[“\"]([^”\"]+)[”\"]",
-    re.I | re.S,
-)
+
+def _c_label_token(token: str) -> str | None:
+    t = (token or "").strip().upper().strip("*").strip("`")
+    if len(t) >= 2 and t[0] == "C" and t[1:].isdigit():
+        return t
+    return None
+
+
+def _first_c_label_in(text: str) -> str | None:
+    cleaned = (text or "").replace("*", " ").replace("`", " ").replace("(", " ").replace(")", " ")
+    for raw in cleaned.split():
+        hit = _c_label_token(raw)
+        if hit:
+            return hit
+    return None
+
+
+def _trailing_paren(line: str) -> str:
+    text = line or ""
+    start = text.rfind("(")
+    end = text.rfind(")")
+    if 0 <= start < end:
+        return text[start + 1 : end].strip()
+    return ""
 
 
 def _recommend_from_quality(body: str, think_paths: list[str]) -> str:
+    """Prefer labeled ``recommend: C#`` (platform extract); else line-scan C#."""
     text = body or ""
-    for pattern in (_RECOMMEND_NEXT, _RECOMMEND_ASSIGN, _RECOMMEND_ARROW):
-        match = pattern.search(text)
-        if match:
-            return match.group(1).upper()
-    prefer = _PREFER_LINE.search(text)
-    if prefer:
-        return prefer.group(1).upper()
+    labeled = extract_line(text, "recommend") or extract_line(text, "recommend_promote")
+    if labeled:
+        hit = _c_label_token(labeled.split()[0] if labeled.split() else labeled)
+        if hit:
+            return hit
+    for line in text.splitlines():
+        stripped = line.strip()
+        lower = stripped.lower()
+        if "recommended single pick" in lower:
+            hit = _first_c_label_in(stripped)
+            if hit:
+                return hit
+        if lower.startswith("recommend") and ":" in stripped:
+            right = stripped.split(":", 1)[1].strip()
+            hit = _c_label_token(right.split()[0] if right.split() else right)
+            if hit:
+                return hit
+        if lower.startswith("prefer "):
+            parts = stripped.split()
+            if len(parts) >= 2:
+                hit = _c_label_token(parts[1])
+                if hit:
+                    return hit
+        if "←" in stripped:
+            left = stripped.split("←", 1)[0].strip().split()
+            if left:
+                hit = _c_label_token(left[-1])
+                if hit:
+                    return hit
     if think_paths:
         return f"C{_run_from_path(think_paths[-1])}"
     return ""
 
 
 def _why_from_quality(body: str, recommend: str) -> str:
-    text = body or ""
-    next_pick = _RECOMMEND_NEXT.search(text)
-    if next_pick and next_pick.group(1).upper() == recommend:
-        detail = (next_pick.group(2) or "").strip()
-        if detail:
-            return detail.strip()
-    prefer = _PREFER_LINE.search(text)
-    if prefer and prefer.group(1).upper() == recommend:
-        detail = (prefer.group(2) or "").strip()
-        if detail:
-            return detail.strip()
+    why = extract_line(body or "", "bluf") or extract_line(body or "", "why")
+    if why:
+        return why
+    rec = (recommend or "").upper()
+    for line in (body or "").splitlines():
+        stripped = line.strip()
+        lower = stripped.lower()
+        if "recommended single pick" in lower:
+            if _first_c_label_in(stripped) == rec:
+                detail = _trailing_paren(stripped)
+                if detail:
+                    return detail
+        if lower.startswith("prefer "):
+            parts = stripped.split()
+            if len(parts) >= 2 and _c_label_token(parts[1]) == rec:
+                detail = _trailing_paren(stripped)
+                if detail:
+                    return detail
     if recommend:
         return f"Promote {recommend} — strongest scorecard pick among the think candidates."
     return "Quality did not name a winner — pick a C-label or skip."
 
 
+def _job_quote_from_row(line: str) -> str:
+    """Pull Job: “…” / Job: "…" from a scorecard evidence cell."""
+    lower = (line or "").lower()
+    marker = "job:"
+    idx = lower.find(marker)
+    if idx < 0:
+        return ""
+    rest = (line or "")[idx + len(marker) :].strip()
+    quote_pairs = (('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’"))
+    for open_q, close_q in quote_pairs:
+        if rest.startswith(open_q):
+            end = rest.find(close_q, len(open_q))
+            if end > 0:
+                return rest[len(open_q) : end].strip()
+    # Unquoted remainder until cell end / period.
+    cut = rest.split("|", 1)[0].strip().rstrip(".").strip()
+    return cut
+
+
+def _jobs_from_quality(body: str) -> dict[str, str]:
+    """Map C-label → B1 Job quote from scorecard sections (no regex)."""
+    jobs: dict[str, str] = {}
+    current: str | None = None
+    for line in (body or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("### "):
+            token = stripped[4:].split()[0] if stripped[4:].split() else ""
+            current = _c_label_token(token)
+            continue
+        if not current:
+            continue
+        lower = stripped.lower()
+        if "b1 job" in lower or lower.startswith("| b1"):
+            quote = _job_quote_from_row(stripped)
+            if quote:
+                jobs[current] = quote
+    return jobs
+
+
 def _example_from_quality(body: str, recommend: str) -> str:
-    text = body or ""
-    jobs = {m.group(1).upper(): m.group(2).strip() for m in _JOB_IN_SECTION.finditer(text)}
-    job = jobs.get(recommend.upper(), "")
+    example = extract_line(body or "", "example")
+    if example:
+        return example
+    job = _jobs_from_quality(body).get((recommend or "").upper(), "")
     if job:
         return f"If we promote {recommend}, the PRD locks this job: {job}"
     return (

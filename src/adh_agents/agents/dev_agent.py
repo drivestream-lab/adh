@@ -1,22 +1,30 @@
-"""DevAgent — engg think → board seed (not coder)."""
+"""DevAgent — YAML development lane host (prompt→extract→decide via programme)."""
 
 from __future__ import annotations
 
 import asyncio
-import re
 
 from injector import inject
 
 from src.adh_agents.base import BaseHermesAgent
 from src.adh_agents.baton.redis_store import RedisBatonStore
-from src.adh_agents.collaboration.human_replies import REVISE_ENGG, normalize_reply
+from src.adh_agents.collaboration.human_replies import (
+    RESEED_BOARD,
+    REVISE_ENGG,
+    normalize_reply,
+)
 from src.adh_agents.programmes.dev.programme import DevEnggProgramme
 from src.adh_agents.programmes.pm.lead_tokens import extract_initiative
 from src.adh_agents.runtime.autonomy import AutonomyPolicy
+from src.adh_agents.runtime.lead_commands import LeadCommand, match_lead_command
 from src.adh_agents.runtime.orchestrator import Orchestrator
 from src.adh_agents.runtime.presence import PresenceService
 from src.adh_agents.runtime.room_resolve import listen_rooms_for_tenants, resolve_tenant_for_room
-from src.adh_agents.runtime.work_models import AWAITING_AUTHORIZATION, AWAITING_JUDGMENT
+from src.adh_agents.runtime.work_models import (
+    AWAITING_AUTHORIZATION,
+    AWAITING_JUDGMENT,
+    AWAITING_NONE,
+)
 from src.adh_agents.runtime.work_store import AgentWorkStore
 from src.adh_agents.settings import DevAgentSettings
 from src.business_services.buzz_service import BuzzService
@@ -24,7 +32,6 @@ from src.configs.hermes_settings import HermesSettings
 from src.infra_services.tenant_registry_service import TenantRegistryService
 from src.models.buzz_models import MessageKind, MessageRead
 
-_HIRE = re.compile(r"(?i)\b(?:hire\s+engg|hire\s+dev|@adh\.dev|engg\s+think)\b")
 _BATON_TYPE = "dev.engg_think"
 
 
@@ -65,11 +72,32 @@ class DevAgent(BaseHermesAgent):
         task = asyncio.create_task(self._god_resume_open_gates())
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
+        # Engg rooms appear after PE handoff; refresh subscribe + reclaim pending
+        # batons (SSE only sees messages after subscribe — catch-up is required).
         self.start_listen_refresh_loop(
             lambda: listen_rooms_for_tenants(self._buzz, self._tenants),
             interval_seconds=15.0,
+            on_added=self._on_rooms_added,
         )
+        catch = asyncio.create_task(self._pending_baton_loop())
+        self._bg.add(catch)
+        catch.add_done_callback(self._bg.discard)
         self.logger.info("DevAgent listening", rooms=rooms)
+
+    async def _on_rooms_added(self, added: list[str]) -> None:
+        del added
+        await self._catch_up_pending_batons()
+
+    async def _pending_baton_loop(self) -> None:
+        """Reclaim ``dev.engg_think`` if emit raced ahead of engg-room subscribe."""
+        while True:
+            try:
+                await asyncio.sleep(12.0)
+                await self._catch_up_pending_batons()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.logger.exception("Dev pending baton loop failed")
 
     async def _god_resume_open_gates(self) -> None:
         if not self._autonomy.is_god:
@@ -81,6 +109,50 @@ class DevAgent(BaseHermesAgent):
                 self.logger.exception("god Dev resume list_active failed", tenant=tenant.slug)
                 continue
             for session in active:
+                room = session.room or tenant.ops_room
+                # Navigator may set awaiting before GateOpener posts a brief —
+                # re-enter the spine so the coach opens (then god auto-takes).
+                if (
+                    session.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION)
+                    and session.open_brief is None
+                ):
+                    try:
+                        await self._programme.continue_spine(tenant, room, session)
+                    except Exception:
+                        self.logger.exception(
+                            "god Dev spine re-open failed",
+                            tenant=tenant.slug,
+                            initiative=session.initiative,
+                        )
+                    continue
+                # Skill-stage stall (e.g. wrong artefact path) left awaiting=none —
+                # re-enter so a fixed verifier / re-run can progress.
+                stage = (session.stage or "").strip()
+                if (
+                    session.awaiting == AWAITING_NONE
+                    and session.open_brief is None
+                    and stage
+                    in {
+                        "spec-draft",
+                        "initiative-feasibility",
+                        "spec-technical-review",
+                        "spec-implementation-plan",
+                    }
+                    and not any(
+                        k.startswith(f"skill:{stage}:") and v == "ok"
+                        for k, v in (session.slots or {}).items()
+                    )
+                ):
+                    try:
+                        await self._programme.continue_spine(tenant, room, session)
+                    except Exception:
+                        self.logger.exception(
+                            "god Dev stalled-skill resume failed",
+                            tenant=tenant.slug,
+                            initiative=session.initiative,
+                            stage=stage,
+                        )
+                    continue
                 if session.awaiting not in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION):
                     continue
                 brief = session.open_brief
@@ -89,7 +161,6 @@ class DevAgent(BaseHermesAgent):
                 token = self._autonomy.resolve_token(brief)
                 if token is None:
                     continue
-                room = session.room or tenant.ops_room
                 try:
                     ok, reason = await self._autonomy.record_take(
                         tenant=tenant.slug,
@@ -126,18 +197,21 @@ class DevAgent(BaseHermesAgent):
         if tenant is None:
             return
         payload = message.payload or {}
-        if (
-            payload.get("status") == "baton_emitted"
-            and payload.get("baton_type") == _BATON_TYPE
-            and payload.get("idempotency_key")
-        ):
-            baton = await self._batons.get(
-                tenant=str(payload.get("tenant") or tenant.slug),
-                idempotency_key=str(payload["idempotency_key"]),
-            )
-            if baton is not None:
-                await self._programme.handle_baton(baton, room=room)
-                return
+        status = str(payload.get("status") or "")
+        if status == "baton_emitted" and payload.get("baton_type") == _BATON_TYPE:
+            key = payload.get("idempotency_key")
+            if key:
+                baton = await self._batons.get(
+                    tenant=str(payload.get("tenant") or tenant.slug),
+                    idempotency_key=str(key),
+                )
+                if baton is not None:
+                    await self._programme.handle_baton(baton, room=room)
+                    return
+        # Hub announce from PE — claim even if engg-room SSE was late.
+        if status == "engg_handoff":
+            await self._catch_up_pending_batons()
+            return
 
         if message.kind != MessageKind.MESSAGE or (message.identity_handle or "") != self._lead:
             return
@@ -146,8 +220,7 @@ class DevAgent(BaseHermesAgent):
         if not body:
             return
 
-        # Post-board revise engg
-        if normalize_reply(body, [REVISE_ENGG]) == REVISE_ENGG or REVISE_ENGG in body.lower():
+        if normalize_reply(body, [REVISE_ENGG]) == REVISE_ENGG:
             init = extract_initiative(body, tenant.init_prefix) or ""
             active = await self._work_store.list_active(tenant.slug, self.role_id)
             session = None
@@ -167,8 +240,28 @@ class DevAgent(BaseHermesAgent):
                 await self._programme.handle_revise_engg(tenant, room, session)
                 return
 
-        # Lead hire / explicit engg think
-        if _HIRE.search(body):
+        if normalize_reply(body, [RESEED_BOARD]) == RESEED_BOARD:
+            init = extract_initiative(body, tenant.init_prefix) or ""
+            active = await self._work_store.list_active(tenant.slug, self.role_id)
+            session = None
+            if init:
+                session = await self._work_store.load(tenant.slug, self.role_id, init.upper())
+            if session is None:
+                for s in active:
+                    if (s.slots.get("board_seeded") or "").lower() in {"1", "true", "yes"}:
+                        session = s
+                        break
+            if session is not None:
+                await self.ack_received(
+                    room,
+                    lead_body=body,
+                    source_message_id=str(message.id) if message.id else None,
+                )
+                await self._programme.handle_reseed_board(tenant, room, session)
+                return
+
+        cmd = match_lead_command(body, allowed=[LeadCommand.HIRE_ENGG, LeadCommand.RESUME])
+        if cmd == LeadCommand.HIRE_ENGG:
             init = extract_initiative(body, tenant.init_prefix)
             if not init:
                 await self.broadcast_progress(
@@ -188,7 +281,7 @@ class DevAgent(BaseHermesAgent):
             )
             return
 
-        if "resume" in body.lower():
+        if cmd == LeadCommand.RESUME:
             await self._orchestrator.handle_lead_message(tenant, room, message)
             return
 
@@ -204,5 +297,12 @@ class DevAgent(BaseHermesAgent):
 
 
 def _extract_pr_url(body: str) -> str:
-    m = re.search(r"https://github\.com/[^\s]+/pull/\d+", body or "")
-    return m.group(0) if m else ""
+    """First github.com …/pull/N token (string scan, no regex)."""
+    for part in (body or "").split():
+        token = part.strip().rstrip(").,]>\"'")
+        if not token.startswith("https://github.com/"):
+            continue
+        if "/pull/" not in token:
+            continue
+        return token
+    return ""

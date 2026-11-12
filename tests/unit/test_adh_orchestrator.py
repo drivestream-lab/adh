@@ -48,7 +48,10 @@ class _FakePoster:
         body: str,
         event_type: EventType = EventType.PROGRESS,
         payload: Optional[dict[str, Any]] = None,
+        *,
+        identity_handle: str | None = None,
     ) -> None:
+        del identity_handle
         self.posts.append(body)
 
     async def ack_received(

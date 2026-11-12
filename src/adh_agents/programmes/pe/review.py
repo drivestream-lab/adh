@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from injector import inject
@@ -11,6 +10,7 @@ from src.adh_agents.baton.models import Baton, BatonStatus, Rollup
 from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.collaboration.brief_service import HermesBriefService
 from src.adh_agents.forge_acl import forge_allowed
+from src.adh_agents.runtime.agentic_extract import github_pull_number
 from src.adh_agents.programmes.pe.gate1_brief import (
     build_gate1_decision_card,
     format_gate1_brief_markdown,
@@ -46,8 +46,6 @@ from src.infra_services.pm_workspace_service import PmWorkspaceService
 from src.infra_services.tenant_registry_service import TenantRegistryService
 from src.models.buzz_models import EventType
 from src.models.tenant_models import TenantContext
-
-_PR_NUM = re.compile(r"/pull/(\d+)")
 
 
 class PeReviewProgramme(BaseBusinessService):
@@ -770,7 +768,4 @@ class PeReviewProgramme(BaseBusinessService):
 
 
 def _pr_number(pr_url: str) -> int | None:
-    match = _PR_NUM.search(pr_url or "")
-    if not match:
-        return None
-    return int(match.group(1))
+    return github_pull_number(pr_url or "")

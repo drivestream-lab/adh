@@ -111,6 +111,7 @@ async def test_pe_claims_and_emits_read_walk(tmp_path: Path) -> None:
         workspace=workspace,
         tenants=tenants,
         buzz=buzz,  # type: ignore[arg-type]
+        engg_handoff=MagicMock(),
     )
     baton = Baton(
         type="pe.review",
