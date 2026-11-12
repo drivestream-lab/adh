@@ -123,11 +123,14 @@ class ForgeActionService(BaseInfraService):
         body: str,
         commit_id: str | None = None,
         gate_labels: bool = True,
+        label_add: list[str] | None = None,
+        label_remove: list[str] | None = None,
     ) -> ForgeActionResult:
-        """PE Gate‑1 attest: APPROVE review + impact-map label projection.
+        """APPROVE on exact head + optional gate label projection.
 
-        Delivery policy (prd-impact-map): on Approve exact head remove
-        pending/blocked/revised/stale and add ``impact-map-lgtm``.
+        Default labels = Gate 1 (impact-map). Gate 2 (spec) callers pass
+        ``label_add=["spec-lgtm"]`` / remove ``spec-pending`` family — same
+        delivery rule as PRD: labels move + attestation before merge.
         """
         token, _ = await self._github.installation_token(app, write=True, repositories=[repo])
         sha = commit_id or await self._github.pull_head_sha(token, repo, pr_number=pr_number)
@@ -140,17 +143,23 @@ class ForgeActionService(BaseInfraService):
             commit_id=sha,
         )
         if gate_labels:
-            await self._github.replace_issue_labels(
-                token,
-                repo,
-                issue_number=pr_number,
-                add=["impact-map-lgtm"],
-                remove=[
+            add = list(label_add) if label_add is not None else ["impact-map-lgtm"]
+            remove = (
+                list(label_remove)
+                if label_remove is not None
+                else [
                     "impact-map-pending",
                     "impact-map-blocked",
                     "impact-map-revised",
                     "impact-map-stale",
-                ],
+                ]
+            )
+            await self._github.replace_issue_labels(
+                token,
+                repo,
+                issue_number=pr_number,
+                add=add,
+                remove=remove,
             )
         return ForgeActionResult(
             action=_APPROVE_ATTESTATION, repo=repo, pr_number=pr_number, url=url
@@ -182,15 +191,20 @@ class ForgeActionService(BaseInfraService):
         action: str = _PRD_MERGE,
         pre_approve_app: AppRole | None = None,
         pre_approve_body: str = "",
+        gate_label_add: list[str] | None = None,
+        gate_label_remove: list[str] | None = None,
     ) -> ForgeActionResult:
-        """Undraft (fail-closed), optional APPROVE for branch protection, then merge.
+        """Undraft (fail-closed), optional APPROVE + gate labels, then merge.
 
-        Shared by product + knowledge lands. Knowledge PRs have no PE attest, so callers
-        pass ``pre_approve_app`` (typically adh-reviewer) after Lead authorize on Buzz.
+        Shared by product + knowledge + Spec lands. Knowledge PRs have no PE
+        attest, so callers pass ``pre_approve_app`` (typically adh-reviewer)
+        after Lead authorize on Buzz. Spec lands pass Gate 2 label sets so
+        ``spec-pending`` → ``spec-lgtm`` before merge (delivery workflow).
         """
         token, _ = await self._github.installation_token(app, write=True, repositories=[repo])
         # Draft PRs cannot merge (405). Undraft via GraphQL must succeed before merge.
         await self._github.mark_ready_for_review(token, repo, pr_number=pr_number)
+        want_labels = bool(gate_label_add or gate_label_remove)
         if pre_approve_app is not None:
             # Branch protection (required reviews) otherwise returns 405 on merge.
             await self.approve_attestation(
@@ -199,7 +213,18 @@ class ForgeActionService(BaseInfraService):
                 pr_number=pr_number,
                 body=pre_approve_body
                 or "Lead authorized land on Buzz — forge APPROVE for branch protection.",
-                gate_labels=False,
+                gate_labels=want_labels,
+                label_add=gate_label_add,
+                label_remove=gate_label_remove,
+            )
+        elif want_labels:
+            # Same-app / no reviewer: still project gate labels before merge.
+            await self._github.replace_issue_labels(
+                token,
+                repo,
+                issue_number=pr_number,
+                add=list(gate_label_add or []),
+                remove=list(gate_label_remove or []),
             )
         sha = await self._github.merge_pull_request(
             token,

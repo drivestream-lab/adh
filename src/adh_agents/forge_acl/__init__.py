@@ -8,7 +8,9 @@ from typing import FrozenSet
 _DEFAULT_ACL: dict[str, FrozenSet[str]] = {
     "adh.pm": frozenset({"open_draft_pr", "prd_merge", "comment_pr", "close_pull_request"}),
     "adh.pe": frozenset({"ready_for_review", "approve_attestation", "apply_labels", "comment_pr"}),
-    # Engg YAML lane: spec draft PRs + spec merge + board seed; product merge stays PM.
+    # Engg YAML lane: spec draft PRs + Gate 2 attest (spec-lgtm) + merge + board.
+    # Gate 2 mirrors PE Gate 1: ready_for_review + approve_attestation + labels
+    # before land — product merge stays PM.
     "adh.dev": frozenset(
         {
             "open_draft_pr",
@@ -18,6 +20,9 @@ _DEFAULT_ACL: dict[str, FrozenSet[str]] = {
             "close_pull_request",
             "land_pull_request",
             "prd_merge",
+            "ready_for_review",
+            "approve_attestation",
+            "apply_labels",
         }
     ),
     "adh.qa": frozenset({"comment_pr", "set_check"}),

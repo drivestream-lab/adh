@@ -124,12 +124,15 @@ def coding_ready_coach(
         i_did=(f"Implementation plan ready for **{initiative}** (`{plan_path}`)."),
         recommend=recommend,
         recommend_why=(debate.bluf if debate else "")
-        or "Unlocks YAML spec-merge → board authorize.",
+        or "Projects Gate 2 `spec-lgtm` + APPROVE on Spec PR heads, then YAML spec-merge.",
         evidence=f"`{plan_path}`",
         outside_adh="Confirm plan + WorkManifest; Dev does not run full verify yet.",
         example=(debate.example if debate else "") or f"reply `{CODING_READY}`",
         tokens=[
-            TokenAction(CODING_READY, "mark coding-ready — proceed to spec-merge"),
+            TokenAction(
+                CODING_READY,
+                "coding-ready → Gate 2 attest (spec-lgtm) → spec-merge",
+            ),
             TokenAction(ANOTHER_ROUND, "findings → re-run technical review / plan"),
             TokenAction(HOLD, "park"),
         ],
@@ -174,12 +177,12 @@ def spec_merge_coach(
         i_did=f"Spec draft PR(s) ready to land for **{initiative}**: {pr_urls or '(none)'}",
         recommend=recommend,
         recommend_why=(debate.bluf if debate else "")
-        or "YAML spec-merge is explicit — then board-tickets-action.",
+        or "Requires Gate 2 `spec-lgtm` + APPROVE already on head — then board-tickets-action.",
         evidence=pr_urls or "(no PR urls yet)",
-        outside_adh="Skim the draft spec PRs on GitHub before authorizing merge.",
+        outside_adh="Confirm Spec PRs show `spec-lgtm` (not `spec-pending`) before merge.",
         example=(debate.example if debate else "") or f"reply `{MERGE_SPEC_PR}`",
         tokens=[
-            TokenAction(MERGE_SPEC_PR, "undraft + merge spec PR(s)"),
+            TokenAction(MERGE_SPEC_PR, "merge Spec PR(s) after Gate 2 attest"),
             TokenAction("go ahead", "same as merge the spec PR"),
             TokenAction(HOLD, "park — no merge yet"),
         ],
