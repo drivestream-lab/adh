@@ -111,14 +111,39 @@ async def resolve_tenant_for_room(
 async def listen_rooms_for_tenants(
     buzz: BuzzService,
     tenants: TenantRegistryService,
+    *,
+    include_task: bool = True,
+    include_engg: bool = True,
 ) -> list[str]:
-    """Hub + non-archived task homes + engg floors for every active tenant."""
+    """Hub (+ optional task / engg) floors for every active tenant.
+
+    Role scoping (Team OS): ``#engg-*`` is the Dev YAML floor — PM/PE/KB must
+    not SSE-consume Lead there (otherwise product authoring steals Dev replies).
+    """
     rooms: list[str] = []
     seen: set[str] = set()
     for tenant in tenants.active():
-        engg = await buzz.list_active_engg_rooms(tenant.slug)
-        for slug in (tenant.ops_room, *await buzz.list_active_task_rooms(tenant.slug), *engg):
+        slugs: list[str] = [tenant.ops_room]
+        if include_task:
+            slugs.extend(await buzz.list_active_task_rooms(tenant.slug))
+        if include_engg:
+            slugs.extend(await buzz.list_active_engg_rooms(tenant.slug))
+        for slug in slugs:
             if slug and slug not in seen:
                 seen.add(slug)
                 rooms.append(slug)
     return rooms
+
+
+async def listen_rooms_for_role(
+    buzz: BuzzService,
+    tenants: TenantRegistryService,
+    role_id: str,
+) -> list[str]:
+    """Role-scoped Buzz listen set — engg floor is Dev-only."""
+    role = (role_id or "").strip()
+    if role == "adh.dev":
+        # Hub (hire / announce) + `#engg-*` Dev lane. Not product `#task-*`.
+        return await listen_rooms_for_tenants(buzz, tenants, include_task=False, include_engg=True)
+    # PM / PE / KB / Read: hub + task homes. Never engg Lead traffic.
+    return await listen_rooms_for_tenants(buzz, tenants, include_task=True, include_engg=False)

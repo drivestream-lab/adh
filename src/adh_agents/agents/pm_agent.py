@@ -30,7 +30,11 @@ from src.adh_agents.runtime.catch_up import (
 )
 from src.adh_agents.runtime.orchestrator import Orchestrator
 from src.adh_agents.runtime.presence import PresenceService
-from src.adh_agents.runtime.room_resolve import listen_rooms_for_tenants, resolve_tenant_for_room
+from src.adh_agents.runtime.room_resolve import (
+    is_engg_room,
+    listen_rooms_for_role,
+    resolve_tenant_for_room,
+)
 from src.adh_agents.runtime.work_store import AgentWorkStore
 from src.adh_agents.settings import PmAgentSettings
 from src.business_services.buzz_service import BuzzService
@@ -101,7 +105,7 @@ class PMAgent(OutlineLockMixin, BaseHermesAgent):
         self._orchestrator.set_programme_runner(self._meta_pm)
         for tenant in self._tenants.active():
             await self.ensure_hub_member(tenant.ops_room)
-        rooms = await listen_rooms_for_tenants(self._buzz, self._tenants)
+        rooms = await listen_rooms_for_role(self._buzz, self._tenants, self.role_id)
         await self.start_ops_listeners(rooms)
         for room in rooms:
             if room.endswith("-ops"):
@@ -114,7 +118,7 @@ class PMAgent(OutlineLockMixin, BaseHermesAgent):
         self._outline_tasks["__god_resume__"] = task
         task.add_done_callback(lambda t: self._outline_tasks.pop("__god_resume__", None))
         self.start_listen_refresh_loop(
-            lambda: listen_rooms_for_tenants(self._buzz, self._tenants),
+            lambda: listen_rooms_for_role(self._buzz, self._tenants, self.role_id),
             interval_seconds=15.0,
             on_added=self._on_new_listen_rooms,
         )
@@ -263,6 +267,9 @@ class PMAgent(OutlineLockMixin, BaseHermesAgent):
             if baton is not None:
                 await self._pe_glue.handle_baton(baton, room=room)
                 return
+        # `#engg-*` is Dev YAML floor — never steal Lead for product authoring.
+        if is_engg_room(room) and self._is_lead_text(message):
+            return
         if self._is_lead_text(message):
             task_hint = room[len("task-") :].upper() if room.startswith("task-") else None
             if await self._rewind_coach.handle_lead(

@@ -12,7 +12,11 @@ from src.adh_agents.programmes.kb.enrich import KbEnrichProgramme
 from src.adh_agents.runtime.autonomy import AutonomyPolicy
 from src.adh_agents.runtime.orchestrator import Orchestrator
 from src.adh_agents.runtime.presence import PresenceService
-from src.adh_agents.runtime.room_resolve import listen_rooms_for_tenants, resolve_tenant_for_room
+from src.adh_agents.runtime.room_resolve import (
+    is_engg_room,
+    listen_rooms_for_role,
+    resolve_tenant_for_room,
+)
 from src.adh_agents.runtime.work_models import AWAITING_AUTHORIZATION, AWAITING_JUDGMENT
 from src.adh_agents.runtime.work_store import AgentWorkStore
 from src.adh_agents.settings import KbAgentSettings
@@ -53,14 +57,14 @@ class KbAgent(BaseHermesAgent):
         self._orchestrator.set_programme_runner(self._enrich)
         for tenant in self._tenants.active():
             await self.ensure_hub_member(tenant.ops_room)
-        rooms = await listen_rooms_for_tenants(self._buzz, self._tenants)
+        rooms = await listen_rooms_for_role(self._buzz, self._tenants, self.role_id)
         await self.start_ops_listeners(rooms)
         await self._catch_up_pending_batons()
         task = asyncio.create_task(self._god_resume_open_gates())
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
         self.start_listen_refresh_loop(
-            lambda: listen_rooms_for_tenants(self._buzz, self._tenants),
+            lambda: listen_rooms_for_role(self._buzz, self._tenants, self.role_id),
             interval_seconds=15.0,
         )
         self.logger.info("KbAgent listening", rooms=rooms)
@@ -140,6 +144,9 @@ class KbAgent(BaseHermesAgent):
                 await self._enrich.handle_baton(baton, room=room)
                 return
         if message.kind == MessageKind.MESSAGE and (message.identity_handle or "") == self._lead:
+            # `#engg-*` is Dev floor — KB Lead cmds live on hub / `#task-*`.
+            if is_engg_room(room):
+                return
             body = (message.body or "").strip()
             # U2: KB silent unless open knowledge gate or explicit resume.
             if "resume" in body.lower():

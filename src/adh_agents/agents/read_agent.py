@@ -9,7 +9,7 @@ from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.programmes.read.walk import ReadWalkProgramme
 from src.adh_agents.runtime.orchestrator import Orchestrator
 from src.adh_agents.runtime.presence import PresenceService
-from src.adh_agents.runtime.room_resolve import listen_rooms_for_tenants, resolve_tenant_for_room
+from src.adh_agents.runtime.room_resolve import listen_rooms_for_role, resolve_tenant_for_room
 from src.adh_agents.settings import ReadAgentSettings
 from src.business_services.buzz_service import BuzzService
 from src.infra_services.tenant_registry_service import TenantRegistryService
@@ -41,11 +41,11 @@ class ReadAgent(BaseHermesAgent):
         self._orchestrator.set_programme_runner(self._walk)
         for tenant in self._tenants.active():
             await self.ensure_hub_member(tenant.ops_room)
-        rooms = await listen_rooms_for_tenants(self._buzz, self._tenants)
+        rooms = await listen_rooms_for_role(self._buzz, self._tenants, self.role_id)
         await self.start_ops_listeners(rooms)
         await self._catch_up_pending_batons()
         self.start_listen_refresh_loop(
-            lambda: listen_rooms_for_tenants(self._buzz, self._tenants),
+            lambda: listen_rooms_for_role(self._buzz, self._tenants, self.role_id),
             interval_seconds=15.0,
         )
         self.logger.info("ReadAgent listening", rooms=rooms)

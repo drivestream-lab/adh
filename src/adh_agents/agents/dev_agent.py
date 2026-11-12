@@ -19,7 +19,7 @@ from src.adh_agents.runtime.autonomy import AutonomyPolicy
 from src.adh_agents.runtime.lead_commands import LeadCommand, match_lead_command
 from src.adh_agents.runtime.orchestrator import Orchestrator
 from src.adh_agents.runtime.presence import PresenceService
-from src.adh_agents.runtime.room_resolve import listen_rooms_for_tenants, resolve_tenant_for_room
+from src.adh_agents.runtime.room_resolve import listen_rooms_for_role, resolve_tenant_for_room
 from src.adh_agents.runtime.work_models import (
     AWAITING_AUTHORIZATION,
     AWAITING_CLARIFY,
@@ -67,7 +67,7 @@ class DevAgent(BaseHermesAgent):
         self._orchestrator.set_programme_runner(self._programme)
         for tenant in self._tenants.active():
             await self.ensure_hub_member(tenant.ops_room)
-        rooms = await listen_rooms_for_tenants(self._buzz, self._tenants)
+        rooms = await listen_rooms_for_role(self._buzz, self._tenants, self.role_id)
         await self.start_ops_listeners(rooms)
         await self._catch_up_pending_batons()
         task = asyncio.create_task(self._god_resume_open_gates())
@@ -76,7 +76,7 @@ class DevAgent(BaseHermesAgent):
         # Engg rooms appear after PE handoff; refresh subscribe + reclaim pending
         # batons (SSE only sees messages after subscribe — catch-up is required).
         self.start_listen_refresh_loop(
-            lambda: listen_rooms_for_tenants(self._buzz, self._tenants),
+            lambda: listen_rooms_for_role(self._buzz, self._tenants, self.role_id),
             interval_seconds=15.0,
             on_added=self._on_rooms_added,
         )
