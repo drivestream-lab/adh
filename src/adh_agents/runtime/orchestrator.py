@@ -626,11 +626,10 @@ class Orchestrator(BaseBusinessService):
             return True
         node = self._navigator.current(session)
         runner = self._runner_for(session)
-        # Dev YAML authorize gates (spec-merge) are typed external-action but
-        # declare no forge.action — programme owns land via after_judgment.
-        # board-tickets-action keeps forge.action and stays on the dispatch path.
-        forge_action = (node.forge.action or "").strip() if node.forge is not None else ""
-        if runner is not None and session.programme and not forge_action:
+        # Dev YAML authorize gates (spec-merge, board-tickets-action) are owned by
+        # DevEnggProgramme.after_judgment — even when the catalogue node is typed
+        # external-action / has forge.action. Catalogue-only roles keep forge dispatch.
+        if runner is not None and session.programme and self.role_id == "adh.dev":
             session.handoff_outcome = token
             session.slots[f"reply:{brief.node_id}"] = token
             session.open_brief = None
