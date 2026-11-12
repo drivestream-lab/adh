@@ -24,7 +24,12 @@ def parse_affected_repos(
     *,
     meta_repo: str,
 ) -> list[ImpactedRepo]:
-    """Extract affected-repo rows from markdown pipe tables.
+    """Extract **Affected** product-repo rows from the Impact-Map.
+
+    Impact maps carry several ``Service | Repo`` tables (Affected, Deferred,
+    Dependent, Control-plane). Only the Affected table has ``Spec to create``
+    and/or ``Scope digest``. Parsing every service/repo table incorrectly
+    opened Spec PRs for deferred repos (thin stub bodies only).
 
     Excludes the tenant control-plane ``meta_repo``. No tenant/INIT hardcoding.
     """
@@ -38,8 +43,13 @@ def parse_affected_repos(
         svc_i = _header_index(header, "service")
         repo_i = _header_index(header, "repo")
         spec_i = _header_index(header, "spec to create", "spec")
+        digest_i = _header_index(header, "scope digest", "digest")
         i += 1
         if svc_i is None or repo_i is None:
+            continue
+        # Affected product table only — Deferred/Dependent/Control-plane share
+        # Service|Repo but lack Spec-to-create / Scope-digest columns.
+        if spec_i is None and digest_i is None:
             continue
         while i < len(rows):
             row = rows[i]
