@@ -40,3 +40,25 @@ def spec_slice_path(initiative: str, repo: str, *, map_spec: str = "") -> str:
             return f"docs/specification/product/{hinted}"
         return f"docs/specification/product/{hinted}"
     return f"docs/specification/product/{init}-{short}.md"
+
+
+def spec_pr_body_path(initiative: str, repo: str) -> str:
+    init = (initiative or "").strip().upper()
+    short = (repo or "").strip().rsplit("/", 1)[-1]
+    return f"docs/specification/reports/Spec-PR-Body-{init}-{short}.md"
+
+
+def spec_pr_push_paths(initiative: str, repo: str, *, map_spec: str = "") -> list[str]:
+    """INIT-scoped Spec PR paths only — never rglob the whole docs tree.
+
+    Prior INITs / chassis ADRs already on ``develop`` must not be re-pushed.
+    """
+    init = (initiative or "").strip().upper()
+    short = (repo or "").strip().rsplit("/", 1)[-1]
+    return [
+        spec_slice_path(init, short, map_spec=map_spec),
+        feasibility_report_path(init),
+        technical_review_path(init),
+        implementation_plan_path(init),
+        spec_pr_body_path(init, short),
+    ]

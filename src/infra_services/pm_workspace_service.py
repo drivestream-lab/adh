@@ -258,8 +258,8 @@ class PmWorkspaceService(BaseInfraService):
     ) -> list[str]:
         """Push existing local meta files to ``branch`` via GitHub Contents API.
 
-        Authorized forge prep only — never uses ``gh`` CLI. ``_ensure_branch``
-        creates the head from the default branch when missing.
+        Authorized forge prep only — never uses ``gh`` CLI. Heads are created
+        from ``tenant.integration_branch`` (develop), not GitHub ``default_branch``.
         """
         pushed: list[str] = []
         for relative in list(dict.fromkeys(p for p in relative_paths if p)):
@@ -578,6 +578,7 @@ class PmWorkspaceService(BaseInfraService):
                 slug=tenant.slug,
                 permissions=granted,
             )
+            base = (tenant.integration_branch or "develop").strip() or "develop"
             return await self._github.put_text_file(
                 token,
                 tenant.meta_repo,
@@ -585,6 +586,8 @@ class PmWorkspaceService(BaseInfraService):
                 contents=contents,
                 branch=target_branch,
                 message=commit_message,
+                from_branch=base,
+                reset_branch=False,
             )
         except ValidationError:
             raise

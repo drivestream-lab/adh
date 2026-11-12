@@ -404,15 +404,28 @@ class GitHubAppService(BaseInfraService):
         contents: str,
         branch: str,
         message: str,
+        from_branch: str | None = None,
+        reset_branch: bool = False,
     ) -> dict[str, Any]:
-        """Create or update a file on `branch`. Never merges."""
+        """Create or update a file on `branch`. Never merges.
+
+        ``from_branch`` (e.g. tenant ``integration_branch`` / ``develop``) is the
+        tip used when creating or force-resetting ``branch``. Defaults to the
+        repo default branch only when omitted — Spec/PRD lanes must pass develop.
+        """
         if self._client is None:
             raise RuntimeError("GitHub App service has not been initialized")
         org = self._settings.github_org
         api = self._settings.github_api.rstrip("/")
         headers = _token_headers(token)
         repo_url = f"{api}/repos/{org}/{repo}"
-        await self._ensure_branch(repo_url, headers, branch)
+        await self._ensure_branch(
+            repo_url,
+            headers,
+            branch,
+            from_branch=from_branch,
+            reset=reset_branch,
+        )
         encoded = base64.b64encode(contents.encode("utf-8")).decode("ascii")
         api_path = "/".join(quote(part, safe="") for part in path.split("/") if part)
         file_url = f"{repo_url}/contents/{api_path}"
@@ -508,18 +521,89 @@ class GitHubAppService(BaseInfraService):
             "branch": branch,
         }
 
-    async def _ensure_branch(self, repo_url: str, headers: dict[str, str], branch: str) -> None:
+    async def ensure_branch_from(
+        self,
+        token: str,
+        repo: str,
+        branch: str,
+        *,
+        from_branch: str,
+        reset: bool = True,
+    ) -> None:
+        """Public: create/reset ``branch`` to tip of ``from_branch`` (never merge)."""
         if self._client is None:
             raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        headers = _token_headers(token)
+        repo_url = f"{api}/repos/{org}/{repo}"
+        await self._ensure_branch(
+            repo_url,
+            headers,
+            branch,
+            from_branch=from_branch,
+            reset=reset,
+        )
+
+    async def _ensure_branch(
+        self,
+        repo_url: str,
+        headers: dict[str, str],
+        branch: str,
+        *,
+        from_branch: str | None = None,
+        reset: bool = False,
+    ) -> None:
+        """Ensure ``branch`` exists; optionally force it onto ``from_branch`` tip.
+
+        Delivery lanes must pass ``from_branch=tenant.integration_branch`` (develop).
+        Falling back to GitHub ``default_branch`` is only for callers that omit it —
+        many product repos still default to ``main``, which must not be Spec base.
+        """
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        base_name = (from_branch or "").strip()
+        if not base_name:
+            info = await self._request("GET", repo_url, headers=headers)
+            info.raise_for_status()
+            base_name = str(info.json()["default_branch"])
+        base = await self._request("GET", f"{repo_url}/git/ref/heads/{base_name}", headers=headers)
+        if base.status_code >= 400:
+            logger.info(
+                "GitHub base branch missing",
+                base=base_name,
+                status=base.status_code,
+                body=base.text[:300],
+            )
+            base.raise_for_status()
+        sha = str(base.json()["object"]["sha"])
         ref = await self._request("GET", f"{repo_url}/git/ref/heads/{branch}", headers=headers)
         if ref.status_code == 200:
+            current = str((ref.json().get("object") or {}).get("sha") or "")
+            if not reset or current == sha:
+                return
+            updated = await self._request(
+                "PATCH",
+                f"{repo_url}/git/refs/heads/{branch}",
+                headers=headers,
+                json={"sha": sha, "force": True},
+            )
+            if updated.status_code >= 400:
+                logger.info(
+                    "GitHub reset branch failed",
+                    branch=branch,
+                    from_branch=base_name,
+                    status=updated.status_code,
+                    body=updated.text[:300],
+                )
+                updated.raise_for_status()
+            logger.info(
+                "Reset GitHub branch to base tip",
+                branch=branch,
+                from_branch=base_name,
+                sha=sha[:8],
+            )
             return
-        info = await self._request("GET", repo_url, headers=headers)
-        info.raise_for_status()
-        default = str(info.json()["default_branch"])
-        base = await self._request("GET", f"{repo_url}/git/ref/heads/{default}", headers=headers)
-        base.raise_for_status()
-        sha = str(base.json()["object"]["sha"])
         created = await self._request(
             "POST",
             f"{repo_url}/git/refs",
@@ -530,11 +614,17 @@ class GitHubAppService(BaseInfraService):
             logger.info(
                 "GitHub ensure branch failed",
                 branch=branch,
+                from_branch=base_name,
                 status=created.status_code,
                 body=created.text[:300],
             )
             created.raise_for_status()
-        logger.info("Ensured GitHub branch", branch=branch, status=created.status_code)
+        logger.info(
+            "Ensured GitHub branch",
+            branch=branch,
+            from_branch=base_name,
+            status=created.status_code,
+        )
 
     async def create_issue_comment(
         self,
