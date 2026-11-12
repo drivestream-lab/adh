@@ -55,7 +55,8 @@ from src.adh_agents.programmes.dev.impact_repos import (
 )
 from src.adh_agents.programmes.dev.paths import (
     implementation_plan_path,
-    spec_slice_path,
+    spec_pr_body_path,
+    spec_pr_push_paths,
     technical_review_path,
     workmanifest_path,
 )
@@ -858,20 +859,10 @@ class DevEnggProgramme(BaseBusinessService):
                 )
                 return "", False
             branch = f"docs/spec-{init.lower()}"
-            slice_rel = spec_slice_path(init, hit.repo, map_spec=hit.spec_to_create)
-            # Collect any new/changed spec docs under docs/specification/
-            push_paths = []
-            spec_root = root / "docs" / "specification"
-            if spec_root.is_dir():
-                for path in spec_root.rglob("*"):
-                    if path.is_file() and path.suffix in {".md", ".yaml", ".yml"}:
-                        push_paths.append(str(path.relative_to(root)))
-            if slice_rel not in push_paths and (root / slice_rel).is_file():
-                push_paths.append(slice_rel)
-            if not push_paths:
-                # Still open a thin PR body so the chain can continue with evidence.
-                push_paths = []
-            body_rel = f"docs/specification/reports/Spec-PR-Body-{init}-{hit.repo}.md"
+            # INIT-scoped only — never rglob docs/specification (leaks prior INITs).
+            candidates = spec_pr_push_paths(init, hit.repo, map_spec=hit.spec_to_create)
+            push_paths = [p for p in candidates if (root / p).is_file()]
+            body_rel = spec_pr_body_path(init, hit.repo)
             try:
                 result = await open_spec_draft_pr(
                     forge=self._forge,

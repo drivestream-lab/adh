@@ -108,11 +108,19 @@ async def push_local_paths(
     branch: str,
     relative_paths: list[str],
     commit_message: str,
+    from_branch: str,
 ) -> list[str]:
-    """Push existing files from a code checkout via Contents API."""
+    """Push existing files from a code checkout via Contents API.
+
+    ``from_branch`` is the integration tip (``develop``) — never GitHub default
+    ``main`` for product Spec lanes.
+    """
     app = app_for_repo(workspace, repo)
     short = repo.rsplit("/", 1)[-1]
+    base = (from_branch or "develop").strip() or "develop"
     token, _ = await github.installation_token(app, write=True, repositories=[short])
+    # Force Spec head onto current develop tip before the first Contents put.
+    await github.ensure_branch_from(token, short, branch, from_branch=base, reset=True)
     pushed: list[str] = []
     for rel in list(dict.fromkeys(p for p in relative_paths if p)):
         local = repo_root / rel
@@ -127,6 +135,8 @@ async def push_local_paths(
             contents=body,
             branch=branch,
             message=f"{commit_message}: {rel}",
+            from_branch=base,
+            reset_branch=False,
         )
         pushed.append(rel)
     if not pushed:
@@ -148,10 +158,11 @@ async def open_spec_draft_pr(
     title: str,
     push_paths: list[str],
 ) -> ForgeActionResult:
-    """commit_workspace + open_draft_pr for one impacted repo."""
+    """Push INIT-scoped docs onto a head reset from ``integration_branch``, open draft."""
     short = repo.rsplit("/", 1)[-1]
     if not forge_allowed_open():
         raise ValidationError("forge ACL denies open_draft_pr for adh.dev")
+    base = (tenant.integration_branch or "develop").strip() or "develop"
     # Ensure PR body exists locally.
     body_path = repo_root / body_rel
     if not body_path.is_file():
@@ -169,6 +180,7 @@ async def open_spec_draft_pr(
         branch=branch,
         relative_paths=push_paths,
         commit_message=f"docs({initiative}): spec draft for {short}",
+        from_branch=base,
     )
     app = app_for_repo(workspace, short)
     # Absolute body path so ForgeActionService can read outside meta_root.
