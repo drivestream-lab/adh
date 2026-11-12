@@ -291,12 +291,41 @@ async def land_spec_pr(
     pr_number: int,
     initiative: str,
 ) -> ForgeActionResult:
-    """Merge Spec PR only after Gate 2 label move + attestation (fail-closed)."""
+    """Merge Spec PR only after Gate 2 label move + attestation (fail-closed).
+
+    Idempotent: already-merged PRs are skipped so a partial multi-repo land can
+    finish on retry. Fail closed when the opener is also the reviewer (no
+    distinct APPROVE identity) — labels-only cannot satisfy branch protection.
+    """
     short = repo.rsplit("/", 1)[-1]
     app = app_for_repo(workspace, short)
     reviewer = workspace.app_role(_REVIEWER)
+    token, _ = await forge._github.installation_token(app, write=True, repositories=[short])
+    if await forge._github.is_pull_merged(token, short, pr_number=pr_number):
+        from src.configs.orchestrator_settings import OrchestratorSettings
+
+        org = OrchestratorSettings.get_instance().github_org
+        logger.info(
+            "spec-merge skip — already merged",
+            repo=short,
+            pr=pr_number,
+            initiative=initiative,
+        )
+        return ForgeActionResult(
+            action="land_pull_request",
+            repo=short,
+            pr_number=pr_number,
+            url=f"https://github.com/{org}/{short}/pull/{pr_number}",
+            detail="already-merged",
+        )
     # GitHub rejects self-APPROVE (422) when the opener identity is also the reviewer.
-    pre_approve = None if (reviewer is not None and app.app_id == reviewer.app_id) else reviewer
+    if reviewer is not None and app.app_id == reviewer.app_id:
+        raise ValidationError(
+            f"Cannot land `{short}`#{pr_number}: Spec opener is adh-reviewer with no "
+            "distinct writer install for this repo — add a writer app "
+            "(roles.yaml repos + installation_id) so Gate 2 can APPROVE."
+        )
+    pre_approve = reviewer
     return await forge.land_pull_request(
         app=app,
         repo=short,

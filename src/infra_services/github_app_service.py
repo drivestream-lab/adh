@@ -919,7 +919,10 @@ class GitHubAppService(BaseInfraService):
             )
         logger.info("Marked pull request ready for review", repo=repo, pr=pr_number)
 
-    async def pull_head_sha(self, token: str, repo: str, *, pr_number: int) -> str | None:
+    async def get_pull_request(
+        self, token: str, repo: str, *, pr_number: int
+    ) -> dict[str, object] | None:
+        """Return the pull payload (or None on 4xx). Used for head SHA + merged skip."""
         if self._client is None:
             raise RuntimeError("GitHub App service has not been initialized")
         org = self._settings.github_org
@@ -932,11 +935,26 @@ class GitHubAppService(BaseInfraService):
         if response.status_code >= 400:
             return None
         data = response.json()
-        head = data.get("head") if isinstance(data, dict) else None
+        return data if isinstance(data, dict) else None
+
+    async def pull_head_sha(self, token: str, repo: str, *, pr_number: int) -> str | None:
+        data = await self.get_pull_request(token, repo, pr_number=pr_number)
+        if not data:
+            return None
+        head = data.get("head")
         if not isinstance(head, dict):
             return None
         sha = head.get("sha")
         return str(sha) if sha else None
+
+    async def is_pull_merged(self, token: str, repo: str, *, pr_number: int) -> bool:
+        """True when the PR is already merged (idempotent land / partial-retry)."""
+        data = await self.get_pull_request(token, repo, pr_number=pr_number)
+        if not data:
+            return False
+        if data.get("merged") is True:
+            return True
+        return str(data.get("state") or "").lower() == "closed" and bool(data.get("merged_at"))
 
     async def probe_merge(self, token: str, repo: str, pr_number: int) -> int:
         """Attempt merge. Must not succeed. 403/405/422 is the G0 pass."""
