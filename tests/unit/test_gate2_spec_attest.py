@@ -75,6 +75,7 @@ async def test_attest_spec_pr_ready_then_approve(monkeypatch: pytest.MonkeyPatch
     workspace = MagicMock()
     workspace.app_role = MagicMock(return_value=reviewer)
     monkeypatch.setattr(forge_ops, "app_for_repo", lambda _w, _r: writer)
+    monkeypatch.setattr(forge_ops, "apps_with_installation", lambda _w: [writer, reviewer])
 
     result = await forge_ops.attest_spec_pr(
         forge=forge,
@@ -89,6 +90,42 @@ async def test_attest_spec_pr_ready_then_approve(monkeypatch: pytest.MonkeyPatch
     assert kwargs["label_add"] == ["spec-lgtm"]
     assert "spec-pending" in kwargs["label_remove"]
     assert kwargs["gate_labels"] is True
+    assert kwargs["app"] is reviewer
+    assert kwargs["submit_review"] is True
+
+
+@pytest.mark.asyncio
+async def test_attest_spec_pr_labels_only_when_opener_is_reviewer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """realworld-web opened by adh-reviewer — self-APPROVE would 422."""
+    forge = MagicMock()
+    forge.ready_for_review = AsyncMock(
+        return_value=ForgeActionResult(
+            action="ready_for_review", repo="realworld-web", pr_number=3, url="u"
+        )
+    )
+    forge.approve_attestation = AsyncMock(
+        return_value=ForgeActionResult(
+            action="approve_attestation", repo="realworld-web", pr_number=3, url="u"
+        )
+    )
+    reviewer = _app(99)
+    workspace = MagicMock()
+    workspace.app_role = MagicMock(return_value=reviewer)
+    monkeypatch.setattr(forge_ops, "app_for_repo", lambda _w, _r: reviewer)
+    monkeypatch.setattr(forge_ops, "apps_with_installation", lambda _w: [reviewer])
+
+    await forge_ops.attest_spec_pr(
+        forge=forge,
+        workspace=workspace,
+        repo="realworld-web",
+        pr_number=3,
+        initiative="INIT-REALWORLD-002",
+    )
+    kwargs = forge.approve_attestation.await_args.kwargs
+    assert kwargs["submit_review"] is False
+    assert kwargs["label_add"] == ["spec-lgtm"]
     assert kwargs["app"] is reviewer
 
 

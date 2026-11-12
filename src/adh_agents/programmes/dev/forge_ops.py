@@ -185,6 +185,20 @@ async def open_spec_draft_pr(
     )
 
 
+def _distinct_approver(workspace: PmWorkspaceService, opener: AppRole) -> Optional[AppRole]:
+    """App that can APPROVE without GitHub 422 self-review.
+
+    Prefer ``adh-reviewer`` when it is not the opener; else any other installed app.
+    """
+    reviewer = workspace.app_role(_REVIEWER)
+    if reviewer is not None and reviewer.app_id != opener.app_id:
+        return reviewer
+    for cand in apps_with_installation(workspace):
+        if cand.app_id != opener.app_id:
+            return cand
+    return None
+
+
 async def attest_spec_pr(
     *,
     forge: ForgeActionService,
@@ -197,28 +211,48 @@ async def attest_spec_pr(
 
     Delivery: same shape as PE Gate 1 (impact-map-lgtm) — labels must move and
     attestation must land on the exact Spec PR head **before** ``spec-merge``.
+
+    When the Spec PR was opened by ``adh-reviewer`` (no separate writer install
+    for that repo), GitHub rejects self-APPROVE (422). We still project
+    ``spec-lgtm`` and skip the review submit in that case.
     """
     short = repo.rsplit("/", 1)[-1]
     app = app_for_repo(workspace, short)
-    reviewer = workspace.app_role(_REVIEWER)
-    attest_app = (
-        None if (reviewer is not None and app.app_id == reviewer.app_id) else reviewer
-    ) or app
+    approver = _distinct_approver(workspace, app)
     # Undraft first — Draft PRs cannot receive APPROVE.
     await forge.ready_for_review(app=app, repo=short, pr_number=pr_number)
+    body = (
+        f"Gate 2 / coding-readiness attestation for `{initiative}` "
+        f"on `{short}`#{pr_number}.\n"
+        "Projects `spec-lgtm` on the exact Spec PR head "
+        "(delivery: labels + attest before merge)."
+    )
+    if approver is not None:
+        return await forge.approve_attestation(
+            app=approver,
+            repo=short,
+            pr_number=pr_number,
+            body=body + "\nAPPROVE by distinct reviewer app.",
+            gate_labels=True,
+            label_add=list(_SPEC_LGTM_ADD),
+            label_remove=list(_SPEC_LGTM_REMOVE),
+            submit_review=True,
+        )
+    logger.warning(
+        "Gate 2 labels-only — no distinct approver (avoid self-APPROVE 422)",
+        repo=short,
+        pr=pr_number,
+        opener_app_id=app.app_id,
+    )
     return await forge.approve_attestation(
-        app=attest_app,
+        app=app,
         repo=short,
         pr_number=pr_number,
-        body=(
-            f"Gate 2 / coding-readiness attestation for `{initiative}` "
-            f"on `{short}`#{pr_number}.\n"
-            "Projects `spec-lgtm` and APPROVEs the exact Spec PR head "
-            "(delivery: labels + attest before merge)."
-        ),
+        body=body + "\nLabels only — opener has no distinct reviewer app.",
         gate_labels=True,
         label_add=list(_SPEC_LGTM_ADD),
         label_remove=list(_SPEC_LGTM_REMOVE),
+        submit_review=False,
     )
 
 
