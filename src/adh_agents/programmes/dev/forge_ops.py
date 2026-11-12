@@ -276,20 +276,23 @@ async def seed_board_tickets(
 
 
 def _issue_capable_apps(workspace: PmWorkspaceService, repo: str) -> list[AppRole]:
-    """Prefer reviewer (known issues:write) then other installed apps listing ``repo``."""
+    """Prefer installed writers listing ``repo`` (backend has issues+org projects).
+
+    Reviewer is kept as fallback for issues:write-only installs.
+    """
     short = repo.rsplit("/", 1)[-1]
     ordered: list[AppRole] = []
+    for app in apps_with_installation(workspace):
+        listed = [str(r).strip().rsplit("/", 1)[-1] for r in (app.repos or [])]
+        if listed and short not in listed:
+            continue
+        ordered.append(app)
     try:
         reviewer = workspace.app_role(_REVIEWER)
         if reviewer.installation_id is not None:
             ordered.append(reviewer)
     except Exception:  # noqa: BLE001 — optional
         pass
-    for app in apps_with_installation(workspace):
-        listed = [str(r).strip().rsplit("/", 1)[-1] for r in (app.repos or [])]
-        if listed and short not in listed:
-            continue
-        ordered.append(app)
     seen: set[int] = set()
     out: list[AppRole] = []
     for app in ordered:

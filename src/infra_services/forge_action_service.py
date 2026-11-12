@@ -29,6 +29,11 @@ _ISSUE_WRITE_PERMS = {
     "contents": "read",
     "pull_requests": "read",
 }
+# GitHub grants org Projects V2 as organization_projects (not ``projects``).
+_ORG_PROJECTS_WRITE_PERMS = {
+    "organization_projects": "write",
+    "metadata": "read",
+}
 
 
 class ForgeActionService(BaseInfraService):
@@ -257,8 +262,8 @@ class ForgeActionService(BaseInfraService):
         """Create EPIC + wave issues and attach them to the programme Project.
 
         Uses an installation with ``issues: write`` for create/link. Projects V2
-        attach uses ``project_token`` when the installation lacks Projects scope
-        (common until Apps are granted org Projects write).
+        attach prefers App ``organization_projects: write``, then optional
+        ``project_token`` (e.g. host ``gh``), then the issues token.
         """
         if not apps:
             raise ValidationError("create_board_tickets requires ≥1 AppRole candidate")
@@ -278,8 +283,9 @@ class ForgeActionService(BaseInfraService):
             for label in labels:
                 await self._github.ensure_label(issue_token, repo, name=label)
 
-        # Resolve project with project_token (user/gh) preferred; fall back to issue token.
-        proj_token = (project_token or "").strip() or issue_token
+        proj_token = await self._resolve_project_token(
+            apps, epic_repo, explicit=(project_token or "").strip() or None
+        )
         project_id, project_number, board_url = await self._github.resolve_org_project(
             proj_token, org=org, name=board_name
         )
@@ -386,6 +392,51 @@ class ForgeActionService(BaseInfraService):
         raise ValidationError(
             "no GitHub App installation grants issues:write for "
             f"{short} ({'; '.join(errors) or 'no candidates'})"
+        )
+
+    async def _mint_org_projects_token(self, apps: list[AppRole], repo: str) -> Optional[str]:
+        """Mint ``organization_projects: write`` when an install grants it."""
+        short = repo.rsplit("/", 1)[-1]
+        for app in apps:
+            listed = [str(r).strip().rsplit("/", 1)[-1] for r in (app.repos or [])]
+            if listed and short not in listed:
+                continue
+            try:
+                token, granted = await self._github.installation_token(
+                    app,
+                    write=True,
+                    repositories=[short],
+                    permissions=dict(_ORG_PROJECTS_WRITE_PERMS),
+                )
+            except Exception:  # noqa: BLE001 — try next app
+                continue
+            if str(granted.get("organization_projects") or "").lower() != "write":
+                continue
+            logger.info(
+                "Minted organization_projects token for board seed",
+                app_id=app.app_id,
+                repo=short,
+            )
+            return token
+        return None
+
+    async def _resolve_project_token(
+        self,
+        apps: list[AppRole],
+        repo: str,
+        *,
+        explicit: Optional[str],
+    ) -> str:
+        """Prefer App org-projects grant, then explicit (gh) token."""
+        app_tok = await self._mint_org_projects_token(apps, repo)
+        if app_tok:
+            return app_tok
+        if explicit:
+            logger.info("Using explicit project token for board seed (App lacks org projects)")
+            return explicit
+        raise ValidationError(
+            "no organization_projects:write on any App and no project_token fallback — "
+            "grant Organization → Projects write on the engg App install"
         )
 
     async def _ensure_issue(
