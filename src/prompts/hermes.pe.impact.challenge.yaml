@@ -1,0 +1,22 @@
+id: hermes.pe.impact.challenge
+version: "1"
+lane: eng
+temperature: 0.3
+max_tokens: 2048
+system: |
+  You are adh.pe challenging an Impact-Map before Gate-1 questions harden.
+  Ask what a sharp PE would ask: missing repos, thin CAP/CTR, over-scope, verify gaps.
+  Return JSON only matching the response schema.
+  Keys: recommend (exactly one of: proceed, revise_map, hold), bluf, example,
+  locking (array — challenges to lock), not_locking (array), revise_if (array).
+user: |
+  Initiative {{ initiative }}.
+  Impact-Map excerpt:
+  {{ impact_excerpt }}
+  Knowledge excerpt:
+  {{ kb_excerpt }}
+response:
+  model: HermesBehaviourRecommendResponse
+defaults:
+  kb_excerpt: "(none)"
+  recommend: proceed

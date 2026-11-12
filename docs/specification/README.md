@@ -9,4 +9,4 @@
 | Plans | [`plans/`](plans/) | Implementation plans under review |
 
 - PM collaborator: [`product/hermes-delivery-collaborator.md`](product/hermes-delivery-collaborator.md) · [ADR 0001](adr/0001-hermes-catalogue-driven-collaborator.md)
-- Agent team OS: [`product/adh-agents-team-os.md`](product/adh-agents-team-os.md) · [ADR 0002](adr/0002-adh-agents-team-os.md) · [ADR 0003](adr/0003-platform-agentic-extract-decide.md) · [`plans/adh-agents-implementation-plan.md`](plans/adh-agents-implementation-plan.md)
+- Agent team OS: [`product/adh-agents-team-os.md`](product/adh-agents-team-os.md) · [ADR 0002](adr/0002-adh-agents-team-os.md) · [ADR 0003](adr/0003-platform-agentic-extract-decide.md) · [ADR 0004](adr/0004-hermes-behaviour-harness.md) · [`plans/adh-agents-implementation-plan.md`](plans/adh-agents-implementation-plan.md) · [`plans/hermes-behaviour-harness-plan.md`](plans/hermes-behaviour-harness-plan.md)

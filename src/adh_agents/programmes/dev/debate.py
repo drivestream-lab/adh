@@ -1,13 +1,16 @@
-"""Multi-pass / multi-model self-debate — prompt → platform extract → decide."""
+"""Multi-pass self-debate — Hermes prompt pack → extract → allow-list decide."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
-from src.adh_agents.runtime.agentic_extract import extract_allowed, extract_line
+from src.adh_agents.runtime.agentic_extract import extract_allowed, extract_line, match_allowed
 from src.adh_agents.settings import DevAgentSettings
 from src.configs.hermes_settings import HermesSettings
-from src.infra_services.litellm_service import LiteLLMService
+from src.infra_services.prompt_service import PromptService
+
+_TEMPLATE = "hermes.dev.debate.pass"
 
 
 @dataclass
@@ -23,18 +26,20 @@ class DebateResult:
     hit_ceiling: bool = False
     models_used: list[str] = field(default_factory=list)
     raw_passes: list[str] = field(default_factory=list)
+    template_id: str = _TEMPLATE
 
 
 async def run_dev_debate(
-    litellm: LiteLLMService,
+    prompts: PromptService,
     *,
     purpose: str,
     initiative: str,
     context: str,
     reply_tokens: list[str],
     max_runs: int | None = None,
+    kb_excerpt: str = "",
 ) -> DebateResult:
-    """Debate until a recommend ∈ reply_tokens or ceiling."""
+    """Debate until a recommend ∈ reply_tokens or ceiling — PromptService only."""
     settings = DevAgentSettings.get_instance()
     hermes = HermesSettings.get_instance()
     cap = int(max_runs if max_runs is not None else settings.max_think_runs)
@@ -44,31 +49,36 @@ async def run_dev_debate(
         raise ValueError("run_dev_debate requires non-empty reply_tokens")
     models = _model_rotation(hermes)
 
-    prior = ""
+    prior = "(none)"
     result = DebateResult(recommend="", bluf="", example="")
     for i in range(1, cap + 1):
         model = models[(i - 1) % len(models)]
         result.models_used.append(model)
-        prompt = _pass_prompt(
-            purpose=purpose,
-            initiative=initiative,
-            context=context,
-            reply_tokens=tokens,
-            pass_number=i,
-            max_passes=cap,
-            prior=prior,
+        challenge = (
+            "Challenge the prior pass. Prefer a clearer, shorter recommend."
+            if prior != "(none)"
+            else "First pass: propose a clear recommend."
         )
-        text = await litellm.complete(
-            "You are adh.dev. Decide one reply token. Emit labeled lines only.",
-            prompt,
+        run = await prompts.complete(
+            _TEMPLATE,
+            {
+                "purpose": purpose,
+                "initiative": initiative,
+                "context": (context or "")[:12000] or "(none)",
+                "reply_tokens": ", ".join(f"`{t}`" for t in tokens),
+                "pass_number": str(i),
+                "max_passes": str(cap),
+                "prior": (prior or "(none)")[:8000],
+                "challenge": challenge,
+                "kb_excerpt": (kb_excerpt or "").strip()[:6000] or "(none)",
+            },
             model=model,
-            temperature=0.3,
         )
-        body = (text or "").strip()
+        body = (run.raw or "").strip()
         result.raw_passes.append(body)
         result.passes = i
-        prior = body
-        parsed = _extract_decision(body, tokens)
+        prior = body or "(none)"
+        parsed = _decision_from_parsed(run.parsed, tokens) or _extract_decision(body, tokens)
         if parsed is None:
             continue
         result.recommend = parsed["recommend"]
@@ -99,6 +109,33 @@ async def run_dev_debate(
     return result
 
 
+def _decision_from_parsed(parsed: dict[str, Any] | None, tokens: list[str]) -> dict | None:
+    if not isinstance(parsed, dict):
+        return None
+    raw_rec = str(parsed.get("recommend") or "").strip()
+    recommend = match_allowed(raw_rec, tokens)
+    if recommend is None:
+        return None
+    locking = parsed.get("locking") or []
+    not_locking = parsed.get("not_locking") or []
+    revise_if = parsed.get("revise_if") or []
+    if isinstance(locking, str):
+        locking = [locking] if locking else []
+    if isinstance(not_locking, str):
+        not_locking = [not_locking] if not_locking else []
+    if isinstance(revise_if, str):
+        revise_if = [revise_if] if revise_if else []
+    example = str(parsed.get("example") or "").strip() or f"reply `{recommend}`"
+    return {
+        "recommend": recommend,
+        "bluf": str(parsed.get("bluf") or "").strip(),
+        "example": example,
+        "locking": [str(x) for x in locking if str(x).strip()],
+        "not_locking": [str(x) for x in not_locking if str(x).strip()],
+        "revise_if": [str(x) for x in revise_if if str(x).strip()],
+    }
+
+
 def _extract_decision(body: str, tokens: list[str]) -> dict | None:
     recommend = extract_allowed(body, field="recommend", allowed=tokens)
     if recommend is None:
@@ -126,44 +163,3 @@ def _model_rotation(hermes: HermesSettings) -> list[str]:
     if eng == pm:
         return [eng]
     return [eng, pm]
-
-
-def _pass_prompt(
-    *,
-    purpose: str,
-    initiative: str,
-    context: str,
-    reply_tokens: list[str],
-    pass_number: int,
-    max_passes: int,
-    prior: str,
-) -> str:
-    challenge = (
-        "Challenge the prior pass. Prefer a clearer, shorter recommend."
-        if prior
-        else "First pass: propose a clear recommend."
-    )
-    return "\n".join(
-        [
-            f"You are adh.dev debating `{purpose}` for `{initiative}`.",
-            f"Pass {pass_number}/{max_passes}. {challenge}",
-            "Allowed reply tokens (recommend MUST be exactly one):",
-            ", ".join(f"`{t}`" for t in reply_tokens),
-            "",
-            "Context:",
-            context[:12000],
-            "",
-            "Prior pass:" if prior else "Prior pass: (none)",
-            prior[:8000] if prior else "",
-            "",
-            "Emit ONLY these labeled lines (platform extract contract):",
-            "recommend: <exactly one allowed reply token>",
-            "example: reply `<same token>` — <one line>",
-            "bluf: <one sentence>",
-            "locking: <short phrase>",
-            "not_locking: <short phrase>",
-            "revise_if: <short phrase>",
-            "",
-            "Converge early when recommend is clear — do not pad to max passes.",
-        ]
-    )

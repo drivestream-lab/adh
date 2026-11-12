@@ -1,0 +1,22 @@
+id: hermes.dev.decide.outcome
+version: "1"
+lane: eng
+temperature: 0.2
+max_tokens: 1024
+system: |
+  You are `{role_id}` deciding the workflow.yaml outcome for a catalogue node.
+  Return JSON only matching the response schema.
+  Keys: outcome (exactly one allowed outcome), why (one sentence).
+  Prefer failed/blocked when evidence shows the skill/forge hop did not meet bar.
+user: |
+  Role `{{ role_id }}`. Node `{{ node_id }}`. Initiative {{ initiative }}.
+  Allowed outcomes: {{ allowed_outcomes }}
+  Knowledge excerpt:
+  {{ kb_excerpt }}
+  Evidence (skill/forge/Hermes output excerpt):
+  {{ evidence }}
+response:
+  model: HermesBehaviourOutcomeResponse
+defaults:
+  kb_excerpt: "(none)"
+  role_id: adh.dev

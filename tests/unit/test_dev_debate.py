@@ -1,11 +1,14 @@
-"""Dev multi-pass debate — prompt → labeled extract → decide (no regex)."""
+"""Dev multi-pass debate — Hermes pack → extract → decide (no inline prompts)."""
 
 from __future__ import annotations
+
+from typing import Any
 
 import pytest
 
 from src.adh_agents.programmes.dev.debate import _extract_decision, run_dev_debate
 from src.adh_agents.runtime.room_resolve import engg_room_slug_for, task_id_from_engg_room
+from src.models.prompt_models import PromptRunResult
 
 
 def test_engg_room_slug() -> None:
@@ -28,19 +31,28 @@ revise_if: new CAP
     assert "accept tdd-adr" in parsed["example"]
 
 
+class _FakePrompts:
+    def __init__(self, parsed: dict[str, Any] | None = None, raw: str = "") -> None:
+        self.parsed = parsed
+        self.raw = raw
+        self.calls: list[str] = []
+
+    async def complete(
+        self, template_id: str, variables: dict[str, Any], **kwargs: object
+    ) -> PromptRunResult:
+        self.calls.append(template_id)
+        return PromptRunResult(
+            template_id=template_id,
+            version="1",
+            parsed=self.parsed or {},
+            raw=self.raw,
+            model=str(kwargs.get("model") or "qwen"),
+            stub=False,
+        )
+
+
 @pytest.mark.asyncio
 async def test_debate_early_converge(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakeLiteLLM:
-        async def complete(self, system: str, user: str, **kwargs: object) -> str:
-            return (
-                "recommend: accept tdd-adr\n"
-                "example: reply `accept tdd-adr`\n"
-                "bluf: clear\n"
-                "locking: adr\n"
-                "not_locking: titles\n"
-                "revise_if: scope\n"
-            )
-
     from src.adh_agents.programmes.dev import debate as debate_mod
     from src.adh_agents.settings import DevAgentSettings
 
@@ -60,27 +72,35 @@ async def test_debate_early_converge(monkeypatch: pytest.MonkeyPatch) -> None:
             )()
         ),
     )
-
+    fake = _FakePrompts(
+        parsed={
+            "recommend": "accept tdd-adr",
+            "bluf": "clear",
+            "example": "reply `accept tdd-adr`",
+            "locking": ["adr"],
+            "not_locking": ["titles"],
+            "revise_if": ["scope"],
+        },
+        raw="recommend: accept tdd-adr",
+    )
     result = await run_dev_debate(
-        FakeLiteLLM(),  # type: ignore[arg-type]
+        fake,  # type: ignore[arg-type]
         purpose="tdd-adr-acceptance",
         initiative="INIT-ACME-001",
         context="ADR draft",
         reply_tokens=["accept tdd-adr", "hold"],
         max_runs=4,
     )
+    assert fake.calls == ["hermes.dev.debate.pass"]
     assert result.converged_at_pass == 1
     assert result.hit_ceiling is False
     assert result.recommend == "accept tdd-adr"
     assert result.passes == 1
+    assert result.template_id == "hermes.dev.debate.pass"
 
 
 @pytest.mark.asyncio
 async def test_debate_hit_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakeLiteLLM:
-        async def complete(self, system: str, user: str, **kwargs: object) -> str:
-            return "no recommend token here, just mush"
-
     from src.adh_agents.programmes.dev import debate as debate_mod
     from src.adh_agents.settings import DevAgentSettings
 
@@ -100,9 +120,9 @@ async def test_debate_hit_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
             )()
         ),
     )
-
+    fake = _FakePrompts(parsed={"recommend": "mush"}, raw="no recommend token here")
     result = await run_dev_debate(
-        FakeLiteLLM(),  # type: ignore[arg-type]
+        fake,  # type: ignore[arg-type]
         purpose="coding-readiness",
         initiative="INIT-X",
         context="x",

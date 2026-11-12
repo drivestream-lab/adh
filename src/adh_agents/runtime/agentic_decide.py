@@ -1,6 +1,7 @@
-"""Platform agentic decide — prompt Hermes → extract → allow-list.
+"""Platform agentic decide — Hermes prompt pack → extract → allow-list.
 
 Used by every hired role programme for catalogue outcomes and brief recommends.
+Prompt bodies live only under ``src/prompts/hermes.*.yaml`` (PromptService).
 """
 
 from __future__ import annotations
@@ -9,66 +10,62 @@ from typing import Sequence
 
 from src.adh_agents.runtime.agentic_extract import extract_allowed, extract_line, match_allowed
 from src.configs.hermes_settings import HermesSettings
-from src.infra_services.litellm_service import LiteLLMService
+from src.infra_services.prompt_service import PromptService
+
+_OUTCOME = "hermes.dev.decide.outcome"
+_REPLY = "hermes.dev.decide.reply"
 
 
 async def decide_catalogue_outcome(
-    litellm: LiteLLMService,
+    prompts: PromptService,
     *,
     role_id: str,
     node_id: str,
     initiative: str,
     allowed_outcomes: Sequence[str],
     evidence: str,
+    kb_excerpt: str = "",
 ) -> str:
-    """Prompt → extract ``outcome:`` ∈ allowed. Fail closed to ``failed``/``blocked`` if listed."""
+    """Prompt pack → extract ``outcome`` ∈ allowed. Fail closed to failed/blocked if listed."""
     allowed = [o.strip() for o in allowed_outcomes if (o or "").strip()]
     if not allowed:
         raise ValueError(f"node {node_id!r} has no outcomes to decide")
 
     hermes = HermesSettings.get_instance()
     model = (hermes.eng_model or hermes.pm_model or hermes.model or "qwen").strip()
-    prompt = "\n".join(
-        [
-            f"You are `{role_id}` deciding the workflow.yaml outcome for node `{node_id}`",
-            f"on initiative `{initiative}`.",
-            "Allowed outcomes (pick exactly one):",
-            ", ".join(f"`{o}`" for o in allowed),
-            "",
-            "Evidence (skill/forge/Hermes output excerpt):",
-            (evidence or "")[:12000] or "(none)",
-            "",
-            "Emit ONLY labeled lines:",
-            "outcome: <exactly one allowed outcome>",
-            "why: <one sentence>",
-        ]
-    )
-    text = await litellm.complete(
-        "Decide one catalogue outcome. Emit labeled lines only.",
-        prompt,
+    run = await prompts.complete(
+        _OUTCOME,
+        {
+            "role_id": role_id,
+            "node_id": node_id,
+            "initiative": initiative,
+            "allowed_outcomes": ", ".join(f"`{o}`" for o in allowed),
+            "evidence": (evidence or "")[:12000] or "(none)",
+            "kb_excerpt": (kb_excerpt or "").strip()[:6000] or "(none)",
+        },
         model=model,
-        temperature=0.2,
     )
-    picked = extract_allowed(text or "", field="outcome", allowed=allowed)
+    picked = match_allowed(str((run.parsed or {}).get("outcome") or ""), allowed)
+    if picked is None:
+        picked = extract_allowed(run.raw or "", field="outcome", allowed=allowed)
     if picked:
         return picked
     if "failed" in allowed:
         return "failed"
     if "blocked" in allowed:
         return "blocked"
-    # Last resort: do not invent mid-hop pass — return first only when nothing else.
     return allowed[0]
 
 
 async def decide_reply_token(
-    litellm: LiteLLMService,
+    prompts: PromptService,
     *,
     role_id: str,
     purpose: str,
     initiative: str,
     reply_tokens: Sequence[str],
     context: str,
-    system: str = "",
+    kb_excerpt: str = "",
 ) -> dict[str, str | list[str]]:
     """Single-shot recommend decide (non-debate). Returns recommend/bluf/example/…"""
     tokens = [t.strip() for t in reply_tokens if (t or "").strip()]
@@ -76,52 +73,48 @@ async def decide_reply_token(
         raise ValueError("decide_reply_token requires reply_tokens")
     hermes = HermesSettings.get_instance()
     model = (hermes.eng_model or hermes.pm_model or hermes.model or "qwen").strip()
-    prompt = "\n".join(
-        [
-            f"You are `{role_id}` deciding `{purpose}` for `{initiative}`.",
-            "Allowed reply tokens (recommend MUST be exactly one):",
-            ", ".join(f"`{t}`" for t in tokens),
-            "",
-            "Context:",
-            (context or "")[:12000],
-            "",
-            "Emit ONLY labeled lines:",
-            "recommend: <exactly one allowed reply token>",
-            "example: reply `<same token>` — <one line>",
-            "bluf: <one sentence>",
-            "locking: <short phrase>",
-            "not_locking: <short phrase>",
-            "revise_if: <short phrase>",
-        ]
-    )
-    text = await litellm.complete(
-        system or "Decide one reply token. Emit labeled lines only.",
-        prompt,
+    run = await prompts.complete(
+        _REPLY,
+        {
+            "role_id": role_id,
+            "purpose": purpose,
+            "initiative": initiative,
+            "reply_tokens": ", ".join(f"`{t}`" for t in tokens),
+            "context": (context or "")[:12000] or "(none)",
+            "kb_excerpt": (kb_excerpt or "").strip()[:6000] or "(none)",
+        },
         model=model,
-        temperature=0.3,
     )
-    recommend = extract_allowed(text or "", field="recommend", allowed=tokens)
+    parsed = run.parsed or {}
+    recommend = match_allowed(str(parsed.get("recommend") or ""), tokens)
     if recommend is None:
-        recommend = extract_allowed(text or "", field="decision", allowed=tokens)
+        recommend = extract_allowed(run.raw or "", field="recommend", allowed=tokens)
+    if recommend is None:
+        recommend = extract_allowed(run.raw or "", field="decision", allowed=tokens)
     if recommend is None:
         hold = next((t for t in tokens if t.lower() == "hold"), tokens[0])
         recommend = hold
+
+    def _list(key: str) -> list[str]:
+        raw = parsed.get(key)
+        if isinstance(raw, list):
+            return [str(x) for x in raw if str(x).strip()]
+        line = extract_line(run.raw or "", key)
+        return [line] if line else []
+
     return {
         "recommend": recommend,
-        "bluf": extract_line(text or "", "bluf"),
-        "example": extract_line(text or "", "example") or f"reply `{recommend}`",
-        "locking": (
-            [extract_line(text or "", "locking")] if extract_line(text or "", "locking") else []
+        "bluf": str(parsed.get("bluf") or extract_line(run.raw or "", "bluf") or ""),
+        "example": str(
+            parsed.get("example")
+            or extract_line(run.raw or "", "example")
+            or f"reply `{recommend}`"
         ),
-        "not_locking": (
-            [extract_line(text or "", "not_locking")]
-            if extract_line(text or "", "not_locking")
-            else []
-        ),
-        "revise_if": (
-            [extract_line(text or "", "revise_if")] if extract_line(text or "", "revise_if") else []
-        ),
-        "raw": text or "",
+        "locking": _list("locking"),
+        "not_locking": _list("not_locking"),
+        "revise_if": _list("revise_if"),
+        "raw": run.raw or "",
+        "template_id": run.template_id,
     }
 
 

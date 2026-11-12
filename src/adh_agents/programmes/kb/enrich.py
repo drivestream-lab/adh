@@ -39,8 +39,8 @@ from src.business_services.base_business_service import BaseBusinessService
 from src.business_services.buzz_service import BuzzService
 from src.exceptions.app_exceptions import ValidationError
 from src.infra_services.forge_action_service import ForgeActionService
-from src.infra_services.litellm_service import LiteLLMService
 from src.infra_services.pm_workspace_service import PmWorkspaceService
+from src.infra_services.prompt_service import PromptService
 from src.infra_services.tenant_registry_service import TenantRegistryService
 from src.logging import get_logger
 from src.models.buzz_models import EventType, TaskEventCreate, TaskEventKind, TaskState
@@ -63,7 +63,7 @@ class KbEnrichProgramme(BaseBusinessService):
         briefs: HermesBriefService,
         workspace: PmWorkspaceService,
         forge: ForgeActionService,
-        litellm: LiteLLMService,
+        prompts: PromptService,
         gates: GateOpener,
         buzz: BuzzService,
         lifecycle: TaskLifecycleProgramme,
@@ -76,7 +76,7 @@ class KbEnrichProgramme(BaseBusinessService):
         self._briefs = briefs
         self._workspace = workspace
         self._forge = forge
-        self._litellm = litellm
+        self._prompts = prompts
         self._gates = gates
         self._buzz = buzz
         self._lifecycle = lifecycle
@@ -311,23 +311,15 @@ class KbEnrichProgramme(BaseBusinessService):
         out: list[HeadPatch] = []
         for stub in stubs:
             try:
-                await self._litellm.initialize()
-                text = await self._litellm.complete(
-                    system=(
-                        "You fill OKF knowledge head markdown. "
-                        "Keep the same # title and ## section headings. "
-                        "Replace (pending) with concise programme memory. "
-                        "Never create initiatives/ paths or dump full PRDs. "
-                        "Return markdown only."
-                    ),
-                    user=(
-                        f"Initiative footnote: {initiative}\n"
-                        f"Repo context: {repo_ref}\n\n"
-                        f"Stub:\n{stub.contents}"
-                    ),
-                    max_tokens=1200,
-                    temperature=0.2,
+                run = await self._prompts.complete(
+                    "hermes.kb.head.fill",
+                    {
+                        "initiative": initiative,
+                        "repo_ref": repo_ref,
+                        "stub": stub.contents,
+                    },
                 )
+                text = str((run.parsed or {}).get("body") or run.raw or "")
                 out.append(
                     HeadPatch(
                         relative_path=stub.relative_path,
