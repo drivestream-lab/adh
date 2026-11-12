@@ -300,11 +300,21 @@ class BaseHermesAgent(BaseBusinessService, abc.ABC):
             self.logger.info("Agent ops listeners scheduled", role=self.role_id, rooms=added)
 
     async def ensure_listening(self, rooms: list[str]) -> list[str]:
-        """Subscribe to any rooms not yet listened; return newly added slugs."""
+        """Subscribe to any rooms not yet listened; return newly added slugs.
+
+        Also joins the Buzz roster so desktop presence strips show the bot
+        (membership ≠ SSE — both are required).
+        """
         added: list[str] = []
         for room in rooms:
             if not room or room in self._listening_rooms:
                 continue
+            try:
+                await self._buzz.ensure_member(
+                    RoomMemberCreate(room_slug=room, identity_handle=self.role_id)
+                )
+            except Exception:
+                logger.exception("listen room member ensure failed", role=self.role_id, room=room)
             self._listening_rooms.add(room)
             task = asyncio.create_task(self._listen_ops(room))
             self._listen_tasks.append(task)
@@ -354,10 +364,30 @@ class BaseHermesAgent(BaseBusinessService, abc.ABC):
     async def _presence_heartbeat(self, room: str) -> None:
         if self._presence is None:
             return
-        tenant = room.split("-ops")[0] if room.endswith("-ops") else ""
-        if room.startswith("task-"):
+        tenant = ""
+        if room.endswith("-ops"):
+            tenant = room[: -len("-ops")]
+        elif room.startswith("task-"):
             task = await self._buzz.get_task_by_room_slug(room)
             tenant = task.tenant_slug if task is not None else ""
+        elif room.startswith("engg-"):
+            from src.adh_agents.runtime.room_resolve import task_id_from_engg_room
+
+            engg_id = task_id_from_engg_room(room)
+            if engg_id:
+                # Prefer task row; fall back to INIT prefix → tenant slug.
+                try:
+                    # Buzz get_task needs tenant — scan via task room naming:
+                    # engg-init-realworld-002 ↔ task-init-realworld-002.
+                    task = await self._buzz.get_task_by_room_slug(f"task-{engg_id.lower()}")
+                    tenant = task.tenant_slug if task is not None else ""
+                except Exception:
+                    tenant = ""
+                if not tenant and engg_id.lower().startswith("init-"):
+                    # INIT-REALWORLD-002 → realworld (strip INIT- prefix segment).
+                    parts = engg_id.split("-")
+                    if len(parts) >= 3:
+                        tenant = parts[1].lower()
         if not tenant:
             return
         try:
