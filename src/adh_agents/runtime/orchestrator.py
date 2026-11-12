@@ -616,7 +616,8 @@ class Orchestrator(BaseBusinessService):
         brief: JudgmentRequest,
         body: str,
     ) -> bool:
-        if match_reply_token(body, brief.reply_tokens) is None:
+        token = match_reply_token(body, brief.reply_tokens)
+        if token is None:
             await self._say(
                 room,
                 f"Not authorized yet. Reply {_fmt(brief.reply_tokens)} (or `stop`).",
@@ -624,6 +625,18 @@ class Orchestrator(BaseBusinessService):
             )
             return True
         node = self._navigator.current(session)
+        runner = self._runner_for(session)
+        # Dev YAML authorize gates (spec-merge / board) are programme-owned —
+        # not catalogue forge nodes. Mirror judgment → after_judgment.
+        if runner is not None and session.programme and not node.is_external_action():
+            session.handoff_outcome = token
+            session.slots[f"reply:{brief.node_id}"] = token
+            session.open_brief = None
+            session.awaiting = AWAITING_NONE
+            await self._store.save(session)
+            await self._say(room, f"Recorded `{token}` for {brief.node_id}.")
+            await runner.after_judgment(tenant, room, session, token)
+            return True
         # Forge only — GitHub App API (Contents + Pulls). Never gh CLI.
         try:
             result = await self._dispatch.run_external_action(
