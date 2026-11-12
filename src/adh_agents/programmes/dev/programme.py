@@ -1149,8 +1149,12 @@ class DevEnggProgramme(BaseBusinessService):
             # Delivery Gate 2: project spec-lgtm + APPROVE on Spec PR heads
             # before YAML advances to spec-merge (mirror PE impact-map-lgtm).
             if not await self._attest_spec_prs_gate2(tenant, room, session):
-                # Orchestrator already cleared awaiting; re-open so Lead can retry.
-                await self._open_coding_gate(tenant, room, session)
+                # Fail closed without re-opening the coach. Re-open + god auto-take
+                # burns ADH_GOD_CHAIN_CAP in a tight loop when Spec PRs are missing.
+                # Lead (or resume after fixing spec_pr_meta) retries `coding ready`.
+                session.awaiting = AWAITING_NONE
+                session.open_brief = None
+                await self._store.save(session)
                 return
             session.slots["coding_ready_accepted"] = "true"
             session.slots["spec_gate2_attested"] = "true"
