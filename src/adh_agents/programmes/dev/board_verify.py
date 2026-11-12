@@ -57,9 +57,9 @@ def verify_board_seed_output(
             issue_urls=urls,
             reason=(
                 f"Board seed proof failed for **{init}** — need ≥{min_issues} "
-                f"GitHub issue URL(s) in skill output (found {len(urls)}). "
-                "Likely ``has_issues=false`` on WorkManifest target repo, or "
-                "skill printed commands without creating. Fix hosting, then "
+                f"GitHub issue URL(s) from forge `create_board_tickets` "
+                f"(found {len(urls)}). Likely ``has_issues=false``, missing "
+                "issues:write on the App, or project attach failed. Fix, then "
                 "reply `reseed board` (or `revise engg` for full reopen)."
             ),
         )

@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import shutil
 from pathlib import Path
 from typing import Optional
 
 import yaml
 
+from src.adh_agents.programmes.dev.workmanifest_board import (
+    load_governance_board,
+    parse_board_manifest,
+)
 from src.exceptions.app_exceptions import ValidationError
 from src.infra_services.forge_action_service import ForgeActionService
 from src.infra_services.github_app_service import GitHubAppService
@@ -202,3 +208,120 @@ def forge_allowed_open() -> bool:
     from src.adh_agents.forge_acl import forge_allowed
 
     return forge_allowed("adh.dev", "open_draft_pr")
+
+
+def forge_allowed_board() -> bool:
+    from src.adh_agents.forge_acl import forge_allowed
+
+    return forge_allowed("adh.dev", "create_board_tickets")
+
+
+async def seed_board_tickets(
+    *,
+    forge: ForgeActionService,
+    workspace: PmWorkspaceService,
+    tenant: TenantContext,
+    plan_path: Path,
+    initiative: str,
+) -> ForgeActionResult:
+    """YAML ``board-tickets-action`` — forge ``create_board_tickets`` (not Cursor skill)."""
+    if not forge_allowed_board():
+        raise ValidationError("forge ACL denies create_board_tickets for adh.dev")
+    if not plan_path.is_file():
+        raise ValidationError(f"implementation plan missing: {plan_path}")
+
+    manifest = parse_board_manifest(plan_path.read_text(encoding="utf-8"))
+    if manifest.initiative and initiative and manifest.initiative != initiative:
+        raise ValidationError(f"plan initiative {manifest.initiative!r} != session {initiative!r}")
+    init = initiative or manifest.initiative
+
+    board_name, enabled = load_governance_board(tenant.meta_root, tenant.org)
+    if not enabled:
+        raise ValidationError(f"governance project_board.enabled=false for {tenant.slug}")
+    if manifest.project_name and manifest.project_name != board_name:
+        logger.warning(
+            "WorkManifest target.project mismatches governance; governance wins",
+            manifest_project=manifest.project_name,
+            governance_project=board_name,
+        )
+
+    org = (manifest.org or tenant.org or "").strip()
+    apps = _issue_capable_apps(workspace, manifest.epic_repo)
+    if not apps:
+        # Fall back to every installed app — mint will filter by issues:write.
+        apps = apps_with_installation(workspace)
+    project_token = await _gh_auth_token()
+
+    waves = [
+        {
+            "id": w.wave_id,
+            "repo": w.repo,
+            "title": w.title,
+            "body": w.body,
+        }
+        for w in manifest.waves
+    ]
+    return await forge.create_board_tickets(
+        apps=apps,
+        initiative=init,
+        board_name=board_name,
+        org=org,
+        epic_repo=manifest.epic_repo,
+        epic_title=manifest.epic_title,
+        epic_body=manifest.epic_body,
+        labels=list(manifest.labels),
+        waves=waves,
+        project_token=project_token,
+    )
+
+
+def _issue_capable_apps(workspace: PmWorkspaceService, repo: str) -> list[AppRole]:
+    """Prefer reviewer (known issues:write) then other installed apps listing ``repo``."""
+    short = repo.rsplit("/", 1)[-1]
+    ordered: list[AppRole] = []
+    try:
+        reviewer = workspace.app_role(_REVIEWER)
+        if reviewer.installation_id is not None:
+            ordered.append(reviewer)
+    except Exception:  # noqa: BLE001 — optional
+        pass
+    for app in apps_with_installation(workspace):
+        listed = [str(r).strip().rsplit("/", 1)[-1] for r in (app.repos or [])]
+        if listed and short not in listed:
+            continue
+        ordered.append(app)
+    seen: set[int] = set()
+    out: list[AppRole] = []
+    for app in ordered:
+        if app.app_id in seen:
+            continue
+        seen.add(app.app_id)
+        out.append(app)
+    return out
+
+
+async def _gh_auth_token() -> Optional[str]:
+    """Host ``gh`` user token for Projects V2 when Apps lack Projects scope."""
+    gh = shutil.which("gh")
+    if not gh:
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            gh,
+            "auth",
+            "token",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        out, err = await proc.communicate()
+        if proc.returncode != 0:
+            logger.warning(
+                "gh auth token failed; project attach may fail without Projects app scope",
+                stderr=(err or b"")[:200].decode("utf-8", errors="replace"),
+            )
+            return None
+        token = (out or b"").decode("utf-8", errors="replace").strip()
+        return token or None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("gh auth token unavailable", error=str(exc))
+        return None

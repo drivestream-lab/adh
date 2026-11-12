@@ -44,3 +44,6 @@ class ForgeActionResult(BaseModel):
     repo: str = Field(..., min_length=1)
     pr_number: Optional[int] = None
     url: Optional[str] = None
+    # Board seed (create_board_tickets) — every created/reused issue URL.
+    issue_urls: list[str] = Field(default_factory=list)
+    detail: str = Field(default="")

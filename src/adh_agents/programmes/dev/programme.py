@@ -33,7 +33,11 @@ from src.adh_agents.programmes.dev.board_seed import (
 from src.adh_agents.programmes.dev.board_verify import verify_board_seed_output
 from src.adh_agents.programmes.dev.debate import DebateResult, run_dev_debate
 from src.adh_agents.programmes.dev.entry import resolve_dev_entry
-from src.adh_agents.programmes.dev.forge_ops import land_spec_pr, open_spec_draft_pr
+from src.adh_agents.programmes.dev.forge_ops import (
+    land_spec_pr,
+    open_spec_draft_pr,
+    seed_board_tickets,
+)
 from src.adh_agents.programmes.dev.gates import (
     board_authorize_brief,
     board_authorize_coach,
@@ -1207,50 +1211,50 @@ class DevEnggProgramme(BaseBusinessService):
             )
             return
         init = session.initiative or ""
+        if not forge_allowed(self.role_id, "create_board_tickets"):
+            await self._poster.post_status(
+                room,
+                "Forge ACL denies `create_board_tickets` for Dev — cannot seed board.",
+                EventType.STALL,
+                identity_handle=self.role_id,
+            )
+            return
         await self._poster.post_status(
             room,
-            f"Dev seeding board tickets for **{init}** via `create-board-tickets`…",
+            f"Dev seeding board tickets for **{init}** via forge `create_board_tickets`…",
             EventType.PROGRESS,
             identity_handle=self.role_id,
         )
         plan_repo = session.slots.get("plan_repo") or ""
+        plan_rel = session.slots.get("implementation_plan_path") or implementation_plan_path(init)
         root = resolve_repo_root(self._tenants.workspace_root(), plan_repo) if plan_repo else None
-        skill_text = ""
+        plan_file = (root / plan_rel) if root is not None else Path(plan_rel)
+        seed_text = ""
+        issue_urls: list[str] = []
         try:
-            result = await self._dispatch.run_catalog_skill(
-                tenant,
-                "create-board-tickets",
-                init,
-                on_progress=self._poster.still_working_callback(
-                    room,
-                    hop="board-tickets-action",
-                    initiative=init,
-                    label="`create-board-tickets`",
-                    identity_handle=self.role_id,
-                ),
-                workspace=root,
-                repo=plan_repo,
-                extra_prompt=(
-                    f"Plan path: {session.slots.get('implementation_plan_path')}. "
-                    f"WorkManifest: {session.slots.get('workmanifest_path')}. "
-                    "Fail closed if target repo has issues disabled. "
-                    "When seeded, print every created GitHub issue URL "
-                    "(https://github.com/.../issues/N) in the summary."
-                ),
+            result = await seed_board_tickets(
+                forge=self._forge,
+                workspace=self._workspace,
+                tenant=tenant,
+                plan_path=plan_file,
+                initiative=init,
             )
-            ok = bool(result.ok)
-            summary = f"exit={result.exit_code}"
-            skill_text = (result.output or "").strip()
+            seed_text = (result.detail or result.url or "").strip()
+            issue_urls = list(result.issue_urls or [])
+            if not seed_text and issue_urls:
+                seed_text = "\n".join(issue_urls)
+            ok = True
+            summary = f"issues={len(issue_urls)}"
         except Exception as exc:
             ok = False
             summary = str(exc)
-            skill_text = summary
+            seed_text = summary
         if not ok:
             await self._poster.post_status(
                 room,
                 (
-                    f"Board seed skill did not complete for **{init}** ({summary}). "
-                    "Gate stays — fix artefacts and authorize again."
+                    f"Board seed forge action failed for **{init}** ({summary}). "
+                    "Gate stays — fix artefacts/app permissions and authorize again."
                 ),
                 EventType.STALL,
                 identity_handle=self.role_id,
@@ -1261,7 +1265,12 @@ class DevEnggProgramme(BaseBusinessService):
             await self._open_board_gate(tenant, room, session)
             return
 
-        proof = verify_board_seed_output(skill_text, initiative=init, min_issues=1)
+        proof = verify_board_seed_output(seed_text, initiative=init, min_issues=1)
+        if not proof.ok and issue_urls:
+            # Prefer structured forge URLs when detail text was truncated.
+            from src.adh_agents.programmes.dev.board_verify import BoardSeedProof
+
+            proof = BoardSeedProof(ok=True, issue_urls=tuple(issue_urls), reason="")
         if not proof.ok:
             await self._poster.post_status(
                 room,
@@ -1280,7 +1289,7 @@ class DevEnggProgramme(BaseBusinessService):
             await self._open_board_gate(tenant, room, session)
             return
 
-        session.slots = mark_board_seeded(session.slots, marker=f"create-board-tickets:{init}")
+        session.slots = mark_board_seeded(session.slots, marker=f"create_board_tickets:{init}")
         session.slots["board_issue_urls"] = " ".join(proof.issue_urls)
         session.stage = _STAGE_DONE
         session.awaiting = AWAITING_NONE
