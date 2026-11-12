@@ -24,6 +24,15 @@ logger = get_logger()
 
 _REVIEWER = "adh-reviewer"
 
+# Gate 2 delivery: coding-readiness / spec-merge project these (mirror Gate 1).
+_SPEC_LGTM_ADD = ["spec-lgtm"]
+_SPEC_LGTM_REMOVE = [
+    "spec-pending",
+    "spec-blocked",
+    "spec-revised",
+    "spec-stale",
+]
+
 
 def app_for_repo(workspace: PmWorkspaceService, repo: str) -> AppRole:
     """Pick a roles.yaml app for ``repo``.
@@ -176,6 +185,43 @@ async def open_spec_draft_pr(
     )
 
 
+async def attest_spec_pr(
+    *,
+    forge: ForgeActionService,
+    workspace: PmWorkspaceService,
+    repo: str,
+    pr_number: int,
+    initiative: str,
+) -> ForgeActionResult:
+    """Gate 2 attest before merge — ready_for_review + APPROVE + ``spec-lgtm``.
+
+    Delivery: same shape as PE Gate 1 (impact-map-lgtm) — labels must move and
+    attestation must land on the exact Spec PR head **before** ``spec-merge``.
+    """
+    short = repo.rsplit("/", 1)[-1]
+    app = app_for_repo(workspace, short)
+    reviewer = workspace.app_role(_REVIEWER)
+    attest_app = (
+        None if (reviewer is not None and app.app_id == reviewer.app_id) else reviewer
+    ) or app
+    # Undraft first — Draft PRs cannot receive APPROVE.
+    await forge.ready_for_review(app=app, repo=short, pr_number=pr_number)
+    return await forge.approve_attestation(
+        app=attest_app,
+        repo=short,
+        pr_number=pr_number,
+        body=(
+            f"Gate 2 / coding-readiness attestation for `{initiative}` "
+            f"on `{short}`#{pr_number}.\n"
+            "Projects `spec-lgtm` and APPROVEs the exact Spec PR head "
+            "(delivery: labels + attest before merge)."
+        ),
+        gate_labels=True,
+        label_add=list(_SPEC_LGTM_ADD),
+        label_remove=list(_SPEC_LGTM_REMOVE),
+    )
+
+
 async def land_spec_pr(
     *,
     forge: ForgeActionService,
@@ -184,6 +230,7 @@ async def land_spec_pr(
     pr_number: int,
     initiative: str,
 ) -> ForgeActionResult:
+    """Merge Spec PR only after Gate 2 label move + attestation (fail-closed)."""
     short = repo.rsplit("/", 1)[-1]
     app = app_for_repo(workspace, short)
     reviewer = workspace.app_role(_REVIEWER)
@@ -197,8 +244,11 @@ async def land_spec_pr(
         action="land_pull_request",
         pre_approve_app=pre_approve,
         pre_approve_body=(
-            "Lead authorized YAML spec-merge on Buzz — forge APPROVE for branch protection."
+            f"Gate 2 attestation + Lead-authorized YAML spec-merge for `{initiative}` "
+            f"on `{short}` — APPROVE + `spec-lgtm` before merge."
         ),
+        gate_label_add=list(_SPEC_LGTM_ADD),
+        gate_label_remove=list(_SPEC_LGTM_REMOVE),
     )
 
 

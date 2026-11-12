@@ -34,6 +34,7 @@ from src.adh_agents.programmes.dev.board_verify import verify_board_seed_output
 from src.adh_agents.programmes.dev.debate import DebateResult, run_dev_debate
 from src.adh_agents.programmes.dev.entry import resolve_dev_entry
 from src.adh_agents.programmes.dev.forge_ops import (
+    attest_spec_pr,
     land_spec_pr,
     open_spec_draft_pr,
     seed_board_tickets,
@@ -1098,7 +1099,12 @@ class DevEnggProgramme(BaseBusinessService):
                     identity_handle=self.role_id,
                 )
                 return
+            # Delivery Gate 2: project spec-lgtm + APPROVE on Spec PR heads
+            # before YAML advances to spec-merge (mirror PE impact-map-lgtm).
+            if not await self._attest_spec_prs_gate2(tenant, room, session):
+                return
             session.slots["coding_ready_accepted"] = "true"
+            session.slots["spec_gate2_attested"] = "true"
             session.awaiting = AWAITING_NONE
             session.open_brief = None
             self._navigator.advance(session, "pass")
@@ -1111,6 +1117,81 @@ class DevEnggProgramme(BaseBusinessService):
             EventType.STALL,
             identity_handle=self.role_id,
         )
+
+    async def _attest_spec_prs_gate2(
+        self, _tenant: TenantContext, room: str, session: AgentWorkSession
+    ) -> bool:
+        """Project ``spec-lgtm`` + APPROVE on every Spec PR before merge authorize."""
+        init = session.initiative or ""
+        try:
+            meta = json.loads(session.slots.get("spec_pr_meta") or "[]")
+        except json.JSONDecodeError:
+            meta = []
+        if not meta:
+            await self._poster.post_status(
+                room,
+                "Cannot Gate-2 attest — no `spec_pr_meta` (open Spec PRs first).",
+                EventType.STALL,
+                identity_handle=self.role_id,
+            )
+            return False
+        if not forge_allowed(self.role_id, "approve_attestation"):
+            await self._poster.post_status(
+                room,
+                "Forge ACL denies approve_attestation for adh.dev (Gate 2).",
+                EventType.STALL,
+                identity_handle=self.role_id,
+            )
+            return False
+        await self._poster.post_status(
+            room,
+            (
+                f"Dev Gate 2 attesting Spec PR(s) for **{init}** "
+                "(`spec-pending` → `spec-lgtm` + APPROVE)…"
+            ),
+            EventType.PROGRESS,
+            identity_handle=self.role_id,
+        )
+        urls: list[str] = []
+        for row in meta:
+            repo = str(row.get("repo") or "")
+            number = int(str(row.get("number") or "0") or 0)
+            if not repo or number <= 0:
+                continue
+            try:
+                result = await attest_spec_pr(
+                    forge=self._forge,
+                    workspace=self._workspace,
+                    repo=repo,
+                    pr_number=number,
+                    initiative=init,
+                )
+                if result.url:
+                    urls.append(result.url)
+            except Exception as exc:
+                await self._poster.post_status(
+                    room,
+                    (
+                        f"Gate 2 attest failed for `{repo}`#{number}: {exc}. "
+                        "Reply `coding ready` to retry or `hold`."
+                    ),
+                    EventType.STALL,
+                    identity_handle=self.role_id,
+                )
+                return False
+        if urls:
+            session.slots["spec_attestation_urls"] = " | ".join(urls)
+        await self._poster.post_status(
+            room,
+            (
+                f"**I did.** Gate 2 attested Spec PR(s) for **{init}** "
+                "(`spec-lgtm` + APPROVE on head). Next: authorize `spec-merge`."
+            ),
+            EventType.DONE,
+            {"status": "spec_gate2_attested", "initiative": init},
+            identity_handle=self.role_id,
+        )
+        return True
 
     async def _on_spec_merge_token(
         self, tenant: TenantContext, room: str, session: AgentWorkSession, token: str
@@ -1135,6 +1216,12 @@ class DevEnggProgramme(BaseBusinessService):
                 identity_handle=self.role_id,
             )
             return
+        # Fail closed: Gate 2 attest (spec-lgtm) must precede merge — like PRD.
+        if session.slots.get("spec_gate2_attested") != "true":
+            if not await self._attest_spec_prs_gate2(tenant, room, session):
+                return
+            session.slots["spec_gate2_attested"] = "true"
+            await self._store.save(session)
         init = session.initiative or ""
         try:
             meta = json.loads(session.slots.get("spec_pr_meta") or "[]")
@@ -1150,7 +1237,7 @@ class DevEnggProgramme(BaseBusinessService):
             return
         await self._poster.post_status(
             room,
-            f"Dev landing spec PR(s) for **{init}**…",
+            f"Dev landing spec PR(s) for **{init}** (Gate 2 labels already projected)…",
             EventType.PROGRESS,
             identity_handle=self.role_id,
         )
