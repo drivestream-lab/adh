@@ -22,6 +22,7 @@ from src.adh_agents.runtime.presence import PresenceService
 from src.adh_agents.runtime.room_resolve import listen_rooms_for_tenants, resolve_tenant_for_room
 from src.adh_agents.runtime.work_models import (
     AWAITING_AUTHORIZATION,
+    AWAITING_CLARIFY,
     AWAITING_JUDGMENT,
     AWAITING_NONE,
 )
@@ -282,6 +283,12 @@ class DevAgent(BaseHermesAgent):
             return
 
         if cmd == LeadCommand.RESUME:
+            await self._orchestrator.handle_lead_message(tenant, room, message)
+            return
+
+        # Resume-pick / clarify on unbound must reach the orchestrator (same as PM).
+        unbound = await self._work_store.load_unbound(tenant.slug, self.role_id)
+        if unbound is not None and unbound.awaiting == AWAITING_CLARIFY:
             await self._orchestrator.handle_lead_message(tenant, room, message)
             return
 
