@@ -185,17 +185,32 @@ async def open_spec_draft_pr(
     )
 
 
-def _distinct_approver(workspace: PmWorkspaceService, opener: AppRole) -> Optional[AppRole]:
+def _distinct_approver(
+    workspace: PmWorkspaceService,
+    opener: AppRole,
+    *,
+    repo: str = "",
+) -> Optional[AppRole]:
     """App that can APPROVE without GitHub 422 self-review.
 
-    Prefer ``adh-reviewer`` when it is not the opener; else any other installed app.
+    Prefer ``adh-reviewer`` when it is not the opener; else any other installed
+    app that **lists** ``repo`` in roles.yaml. Cross-repo installs (e.g. backend
+    for ``realworld-web``) are skipped — those PRs use labels-only.
     """
+    short = (repo or "").strip().rsplit("/", 1)[-1]
     reviewer = workspace.app_role(_REVIEWER)
-    if reviewer is not None and reviewer.app_id != opener.app_id:
+    if (
+        reviewer is not None
+        and reviewer.app_id != opener.app_id
+        and (not short or short in list(reviewer.repos or []))
+    ):
         return reviewer
     for cand in apps_with_installation(workspace):
-        if cand.app_id != opener.app_id:
-            return cand
+        if cand.app_id == opener.app_id:
+            continue
+        if short and short not in list(cand.repos or []):
+            continue
+        return cand
     return None
 
 
@@ -218,7 +233,7 @@ async def attest_spec_pr(
     """
     short = repo.rsplit("/", 1)[-1]
     app = app_for_repo(workspace, short)
-    approver = _distinct_approver(workspace, app)
+    approver = _distinct_approver(workspace, app, repo=short)
     # Undraft first — Draft PRs cannot receive APPROVE.
     await forge.ready_for_review(app=app, repo=short, pr_number=pr_number)
     body = (

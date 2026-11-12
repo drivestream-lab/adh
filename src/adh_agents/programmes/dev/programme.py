@@ -1102,6 +1102,8 @@ class DevEnggProgramme(BaseBusinessService):
             # Delivery Gate 2: project spec-lgtm + APPROVE on Spec PR heads
             # before YAML advances to spec-merge (mirror PE impact-map-lgtm).
             if not await self._attest_spec_prs_gate2(tenant, room, session):
+                # Orchestrator already cleared awaiting; re-open so Lead can retry.
+                await self._open_coding_gate(tenant, room, session)
                 return
             session.slots["coding_ready_accepted"] = "true"
             session.slots["spec_gate2_attested"] = "true"

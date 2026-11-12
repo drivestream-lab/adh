@@ -9,6 +9,9 @@ from injector import inject
 from src.adh_agents.base import BaseHermesAgent
 from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.collaboration.human_replies import (
+    ANOTHER_ROUND,
+    CODING_READY,
+    HOLD,
     RESEED_BOARD,
     REVISE_ENGG,
     normalize_reply,
@@ -301,6 +304,29 @@ class DevAgent(BaseHermesAgent):
         ]
         if open_gates:
             await self._orchestrator.handle_lead_message(tenant, room, message)
+            return
+
+        # Gate 2 attest failure clears awaiting before retry text is posted —
+        # still accept coding-readiness tokens so Lead is not stuck silent.
+        if normalize_reply(body, [CODING_READY, ANOTHER_ROUND, HOLD]) is None:
+            return
+        stuck = [
+            s
+            for s in active
+            if (s.stage or "").strip() == "coding-readiness"
+            and s.awaiting == AWAITING_NONE
+            and (s.slots.get("coding_ready_accepted") or "").lower() not in {"1", "true", "yes"}
+            and (not s.room or s.room == room)
+        ]
+        if not stuck:
+            return
+        session = stuck[0]
+        await self.ack_received(
+            room,
+            lead_body=body,
+            source_message_id=str(message.id) if message.id else None,
+        )
+        await self._programme.after_judgment(tenant, room, session, body)
 
 
 def _extract_pr_url(body: str) -> str:

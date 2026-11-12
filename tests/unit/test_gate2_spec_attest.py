@@ -110,11 +110,23 @@ async def test_attest_spec_pr_labels_only_when_opener_is_reviewer(
             action="approve_attestation", repo="realworld-web", pr_number=3, url="u"
         )
     )
-    reviewer = _app(99)
+    reviewer = AppRole(
+        app_id=99,
+        installation_id=10,
+        pem="/tmp/x.pem",
+        repos=["realworld-web"],
+    )
+    # Backend is installed but does not list web — must not be used to APPROVE.
+    backend = AppRole(
+        app_id=1,
+        installation_id=11,
+        pem="/tmp/y.pem",
+        repos=["realworld-api"],
+    )
     workspace = MagicMock()
     workspace.app_role = MagicMock(return_value=reviewer)
     monkeypatch.setattr(forge_ops, "app_for_repo", lambda _w, _r: reviewer)
-    monkeypatch.setattr(forge_ops, "apps_with_installation", lambda _w: [reviewer])
+    monkeypatch.setattr(forge_ops, "apps_with_installation", lambda _w: [backend, reviewer])
 
     await forge_ops.attest_spec_pr(
         forge=forge,
