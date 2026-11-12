@@ -8,7 +8,11 @@ from injector import inject
 
 from src.adh_agents.base import BaseHermesAgent
 from src.adh_agents.baton.redis_store import RedisBatonStore
-from src.adh_agents.collaboration.human_replies import REVISE_ENGG, normalize_reply
+from src.adh_agents.collaboration.human_replies import (
+    RESEED_BOARD,
+    REVISE_ENGG,
+    normalize_reply,
+)
 from src.adh_agents.programmes.dev.programme import DevEnggProgramme
 from src.adh_agents.programmes.pm.lead_tokens import extract_initiative
 from src.adh_agents.runtime.autonomy import AutonomyPolicy
@@ -16,7 +20,11 @@ from src.adh_agents.runtime.lead_commands import LeadCommand, match_lead_command
 from src.adh_agents.runtime.orchestrator import Orchestrator
 from src.adh_agents.runtime.presence import PresenceService
 from src.adh_agents.runtime.room_resolve import listen_rooms_for_tenants, resolve_tenant_for_room
-from src.adh_agents.runtime.work_models import AWAITING_AUTHORIZATION, AWAITING_JUDGMENT
+from src.adh_agents.runtime.work_models import (
+    AWAITING_AUTHORIZATION,
+    AWAITING_JUDGMENT,
+    AWAITING_NONE,
+)
 from src.adh_agents.runtime.work_store import AgentWorkStore
 from src.adh_agents.settings import DevAgentSettings
 from src.business_services.buzz_service import BuzzService
@@ -101,6 +109,50 @@ class DevAgent(BaseHermesAgent):
                 self.logger.exception("god Dev resume list_active failed", tenant=tenant.slug)
                 continue
             for session in active:
+                room = session.room or tenant.ops_room
+                # Navigator may set awaiting before GateOpener posts a brief —
+                # re-enter the spine so the coach opens (then god auto-takes).
+                if (
+                    session.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION)
+                    and session.open_brief is None
+                ):
+                    try:
+                        await self._programme.continue_spine(tenant, room, session)
+                    except Exception:
+                        self.logger.exception(
+                            "god Dev spine re-open failed",
+                            tenant=tenant.slug,
+                            initiative=session.initiative,
+                        )
+                    continue
+                # Skill-stage stall (e.g. wrong artefact path) left awaiting=none —
+                # re-enter so a fixed verifier / re-run can progress.
+                stage = (session.stage or "").strip()
+                if (
+                    session.awaiting == AWAITING_NONE
+                    and session.open_brief is None
+                    and stage
+                    in {
+                        "spec-draft",
+                        "initiative-feasibility",
+                        "spec-technical-review",
+                        "spec-implementation-plan",
+                    }
+                    and not any(
+                        k.startswith(f"skill:{stage}:") and v == "ok"
+                        for k, v in (session.slots or {}).items()
+                    )
+                ):
+                    try:
+                        await self._programme.continue_spine(tenant, room, session)
+                    except Exception:
+                        self.logger.exception(
+                            "god Dev stalled-skill resume failed",
+                            tenant=tenant.slug,
+                            initiative=session.initiative,
+                            stage=stage,
+                        )
+                    continue
                 if session.awaiting not in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION):
                     continue
                 brief = session.open_brief
@@ -109,7 +161,6 @@ class DevAgent(BaseHermesAgent):
                 token = self._autonomy.resolve_token(brief)
                 if token is None:
                     continue
-                room = session.room or tenant.ops_room
                 try:
                     ok, reason = await self._autonomy.record_take(
                         tenant=tenant.slug,
@@ -187,6 +238,26 @@ class DevAgent(BaseHermesAgent):
                     source_message_id=str(message.id) if message.id else None,
                 )
                 await self._programme.handle_revise_engg(tenant, room, session)
+                return
+
+        if normalize_reply(body, [RESEED_BOARD]) == RESEED_BOARD:
+            init = extract_initiative(body, tenant.init_prefix) or ""
+            active = await self._work_store.list_active(tenant.slug, self.role_id)
+            session = None
+            if init:
+                session = await self._work_store.load(tenant.slug, self.role_id, init.upper())
+            if session is None:
+                for s in active:
+                    if (s.slots.get("board_seeded") or "").lower() in {"1", "true", "yes"}:
+                        session = s
+                        break
+            if session is not None:
+                await self.ack_received(
+                    room,
+                    lead_body=body,
+                    source_message_id=str(message.id) if message.id else None,
+                )
+                await self._programme.handle_reseed_board(tenant, room, session)
                 return
 
         cmd = match_lead_command(body, allowed=[LeadCommand.HIRE_ENGG, LeadCommand.RESUME])

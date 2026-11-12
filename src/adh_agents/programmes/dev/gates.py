@@ -225,7 +225,11 @@ def board_authorize_coach(*, initiative: str, debate: Optional[DebateResult] = N
         recommend=recommend,
         recommend_why=(debate.bluf if debate else "")
         or "Seeds board from plan/WorkManifest; coder hire is later.",
-        outside_adh="Do not hand-create board tickets; authorize here so Dev seeds them.",
+        outside_adh=(
+            "Do not hand-create board tickets; authorize here so Dev seeds them. "
+            "After a false or superseded seed, reply `reseed board` (tickets only) "
+            "or `revise engg` (full spine from spec-draft)."
+        ),
         example=(debate.example if debate else "") or f"reply `{AUTHORIZE_BOARD}`",
         tokens=[
             TokenAction(AUTHORIZE_BOARD, "run create-board-tickets"),

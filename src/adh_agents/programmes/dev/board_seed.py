@@ -35,12 +35,15 @@ def board_seed_preconditions(slots: dict[str, str]) -> BoardSeedCheck:
             ok=False,
             reason=f"Board seed blocked — YAML predicates missing: {', '.join(missing)}.",
         )
-    if _truthy(slots.get("board_seeded")) and not _truthy(slots.get("revise_engg")):
+    if _truthy(slots.get("board_seeded")) and not (
+        _truthy(slots.get("revise_engg")) or _truthy(slots.get("reseed_board"))
+    ):
         return BoardSeedCheck(
             ok=False,
             reason=(
-                "Board already seeded for this INIT — use `revise engg` to supersede "
-                "and re-seed (no silent rewrite)."
+                "Board already seeded for this INIT — reply `reseed board` to "
+                "supersede tickets only, or `revise engg` to reopen from "
+                "spec-draft (no silent rewrite)."
             ),
         )
     return BoardSeedCheck(ok=True)
@@ -54,6 +57,22 @@ def mark_board_seeded(slots: dict[str, str], *, marker: Optional[str] = None) ->
     out["board_seed_marker"] = (marker or stamp).strip()
     out["board_authorized"] = "true"
     out.pop("revise_engg", None)
+    out.pop("reseed_board", None)
+    return out
+
+
+def apply_reseed_board_slots(slots: dict[str, str]) -> dict[str, str]:
+    """Supersede prior board seed; keep merge/plan/WM/accept predicates for re-authorize."""
+    out = dict(slots)
+    prior = (out.get("board_seed_marker") or out.get("board_seeded_at") or "").strip()
+    if prior:
+        out["board_superseded"] = prior
+    out["board_seeded"] = "false"
+    out.pop("board_seed_marker", None)
+    out.pop("board_seeded_at", None)
+    out.pop("board_authorized", None)
+    out.pop("board_issue_urls", None)
+    out["reseed_board"] = "1"
     return out
 
 

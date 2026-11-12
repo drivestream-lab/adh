@@ -14,13 +14,14 @@ def technical_review_path(initiative: str) -> str:
 
 
 def implementation_plan_path(initiative: str) -> str:
+    """Canonical path — SSOT ``artifact-write-contract`` ``{reports_dir}/Implementation-Plan-…``."""
     init = (initiative or "").strip().upper()
-    return f"docs/specification/plans/Implementation-Plan-{init}.md"
+    return f"docs/specification/reports/Implementation-Plan-{init}.md"
 
 
 def workmanifest_path(initiative: str) -> str:
-    init = (initiative or "").strip().upper()
-    return f"docs/specification/plans/WorkManifest-{init}.yaml"
+    """WorkManifest walk-time carrier is §9 YAML inside the Implementation-Plan (not a sibling file)."""
+    return implementation_plan_path(initiative)
 
 
 def spec_slice_path(initiative: str, repo: str, *, map_spec: str = "") -> str:

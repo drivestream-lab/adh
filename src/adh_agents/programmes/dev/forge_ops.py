@@ -183,13 +183,15 @@ async def land_spec_pr(
     short = repo.rsplit("/", 1)[-1]
     app = app_for_repo(workspace, short)
     reviewer = workspace.app_role(_REVIEWER)
+    # GitHub rejects self-APPROVE (422) when the opener identity is also the reviewer.
+    pre_approve = None if (reviewer is not None and app.app_id == reviewer.app_id) else reviewer
     return await forge.land_pull_request(
         app=app,
         repo=short,
         pr_number=pr_number,
         commit_title=f"docs({initiative}): merge spec for {short}",
         action="land_pull_request",
-        pre_approve_app=reviewer,
+        pre_approve_app=pre_approve,
         pre_approve_body=(
             "Lead authorized YAML spec-merge on Buzz — forge APPROVE for branch protection."
         ),

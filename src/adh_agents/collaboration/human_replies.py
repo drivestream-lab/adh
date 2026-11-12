@@ -22,6 +22,7 @@ ACCEPT_TDD_ADR = "accept tdd-adr"
 CODING_READY = "coding ready"
 MERGE_SPEC_PR = "merge the spec PR"
 AUTHORIZE_BOARD = "authorize board"
+RESEED_BOARD = "reseed board"
 REVISE_ENGG = "revise engg"
 HOLD = "hold"
 
@@ -48,6 +49,12 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     CODING_READY: (CODING_READY, "coding-ready", "ready for board"),
     MERGE_SPEC_PR: (MERGE_SPEC_PR, "merge spec", "merge the spec prs", "authorize spec_merge"),
     AUTHORIZE_BOARD: (AUTHORIZE_BOARD, "seed board", "create board tickets"),
+    RESEED_BOARD: (
+        RESEED_BOARD,
+        "re-seed board",
+        "seed board again",
+        "reseed tickets",
+    ),
     REVISE_ENGG: (REVISE_ENGG, "revise engineering", "reopen engg"),
     HOLD: (HOLD, PARK),
 }

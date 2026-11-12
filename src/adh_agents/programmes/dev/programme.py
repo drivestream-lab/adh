@@ -19,15 +19,18 @@ from src.adh_agents.collaboration.human_replies import (
     CODING_READY,
     HOLD,
     MERGE_SPEC_PR,
+    RESEED_BOARD,
     REVISE_ENGG,
     normalize_reply,
 )
 from src.adh_agents.execution.dispatch_service import HermesDispatchService
 from src.adh_agents.forge_acl import forge_allowed
 from src.adh_agents.programmes.dev.board_seed import (
+    apply_reseed_board_slots,
     board_seed_preconditions,
     mark_board_seeded,
 )
+from src.adh_agents.programmes.dev.board_verify import verify_board_seed_output
 from src.adh_agents.programmes.dev.debate import DebateResult, run_dev_debate
 from src.adh_agents.programmes.dev.entry import resolve_dev_entry
 from src.adh_agents.programmes.dev.forge_ops import land_spec_pr, open_spec_draft_pr
@@ -270,8 +273,13 @@ class DevEnggProgramme(BaseBusinessService):
             await self._run_spine(tenant, collab, session)
             current = await self._store.load(tenant.slug, self.role_id, init) or session
             # Spine returns without raise on stall/gate. Only clean-done when gated
-            # (awaiting Lead) or E1 fence reached — mid-chain awaiting=none is a stall.
-            if current.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION):
+            # (awaiting Lead *with* an open brief) or E1 fence reached —
+            # mid-chain awaiting=none is a stall. awaiting without brief is a bug
+            # (navigator set the gate flag before the coach opened).
+            if (
+                current.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION)
+                and current.open_brief is not None
+            ):
                 done = await self._batons.mark_done(baton, ttl=ttl)
                 return Rollup(
                     baton_id=done.id,
@@ -324,6 +332,7 @@ class DevEnggProgramme(BaseBusinessService):
         *,
         initiative: str,
         prd_pr_url: str = "",
+        reset: bool = False,
     ) -> None:
         init = initiative.strip().upper()
         collab = await engg_collaboration_room(
@@ -331,8 +340,11 @@ class DevEnggProgramme(BaseBusinessService):
         )
         if (room or "").startswith("engg-"):
             collab = room
-        session = await self._store.load(tenant.slug, self.role_id, init)
-        if session is None:
+        prior = await self._store.load(tenant.slug, self.role_id, init)
+        keep_prd = ""
+        if prior is not None:
+            keep_prd = prior.slots.get("prd_pr_url") or prior.slots.get("pr_url") or ""
+        if reset or prior is None:
             session = AgentWorkSession(
                 role_id=self.role_id,
                 tenant_slug=tenant.slug,
@@ -343,10 +355,21 @@ class DevEnggProgramme(BaseBusinessService):
                 stage=_ENTRY,
                 slots={},
             )
+            if keep_prd and not prd_pr_url:
+                prd_pr_url = keep_prd
+        else:
+            session = prior
         if prd_pr_url:
             session.slots["prd_pr_url"] = prd_pr_url
             session.slots.setdefault("pr_url", prd_pr_url)
         session.room = collab
+        if reset:
+            session.stage = _ENTRY
+            session.awaiting = AWAITING_NONE
+            session.open_brief = None
+            session.slots = {
+                k: v for k, v in session.slots.items() if k in {"prd_pr_url", "pr_url"}
+            }
         await self._store.save(session)
         await self._run_spine(tenant, collab, session)
 
@@ -387,10 +410,61 @@ class DevEnggProgramme(BaseBusinessService):
         )
         await self._run_spine(tenant, room, session)
 
+    async def handle_reseed_board(
+        self, tenant: TenantContext, room: str, session: AgentWorkSession
+    ) -> None:
+        """Supersede prior/false board seed; reopen board-tickets-action only."""
+        if not is_post_board(session.slots):
+            await self._poster.post_status(
+                room,
+                (
+                    f"**{session.initiative}** is not marked board-seeded — "
+                    f"continue YAML or reply `{AUTHORIZE_BOARD}` when the gate is open."
+                ),
+                EventType.PROGRESS,
+                identity_handle=self.role_id,
+            )
+            return
+        session.slots = apply_reseed_board_slots(session.slots)
+        session.stage = _E1_TERMINAL
+        session.awaiting = AWAITING_NONE
+        session.open_brief = None
+        await self._store.save(session)
+        await self._poster.post_status(
+            room,
+            (
+                f"**Reseed board** for **{session.initiative}** — prior seed "
+                f"superseded; keeping merge/plan/accept predicates. "
+                f"Reply `{AUTHORIZE_BOARD}` when the gate opens."
+            ),
+            EventType.PROGRESS,
+            {"status": "reseed_board", "initiative": session.initiative},
+            identity_handle=self.role_id,
+        )
+        await self._append_event(
+            session,
+            kind=TaskEventKind.STATE,
+            purpose="reseed-board",
+            payload={"stage": session.stage},
+        )
+        await self._open_board_gate(tenant, room, session)
+
     # ── YAML spine ─────────────────────────────────────────────────────
 
+    async def continue_spine(
+        self, tenant: TenantContext, room: str, session: AgentWorkSession
+    ) -> None:
+        """Re-enter the YAML walk (e.g. orphaned awaiting with no open brief)."""
+        await self._run_spine(tenant, room, session)
+
     async def _run_spine(self, tenant: TenantContext, room: str, session: AgentWorkSession) -> None:
-        if session.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION):
+        # Already gated with a posted brief — do not re-open. Navigator may set
+        # awaiting=judgment/authorization *before* the coach opens; those need
+        # one more dispatch to open the GateOpener brief.
+        if (
+            session.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION)
+            and session.open_brief is not None
+        ):
             return
         init = (session.initiative or session.work_id or "").strip().upper()
         entry, stall = resolve_dev_entry(
@@ -428,7 +502,8 @@ class DevEnggProgramme(BaseBusinessService):
                 room,
                 (
                     f"**{init}** board already seeded (YAML E1 fence). "
-                    f"Reply `{REVISE_ENGG}` to reopen from `{_ENTRY}`."
+                    f"Reply `{RESEED_BOARD}` to supersede tickets only, or "
+                    f"`{REVISE_ENGG}` to reopen from `{_ENTRY}`."
                 ),
                 EventType.DONE,
                 identity_handle=self.role_id,
@@ -437,7 +512,10 @@ class DevEnggProgramme(BaseBusinessService):
 
         # Walk until a gate or terminal.
         for _ in range(24):
-            if session.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION):
+            if (
+                session.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION)
+                and session.open_brief is not None
+            ):
                 return
             stage = (session.stage or "").strip()
             if stage == _STAGE_DONE:
@@ -587,15 +665,27 @@ class DevEnggProgramme(BaseBusinessService):
         ws_root = self._tenants.workspace_root()
         prd_abs = str((Path(tenant.meta_root).expanduser() / prd_path(init)).resolve())
         impact_abs = str((Path(tenant.meta_root).expanduser() / impact_map_path(init)).resolve())
-        await self._poster.post_status(
-            room,
-            f"Dev running YAML skill `{stage}` for **{init}** across {len(repos)} repo(s)…",
-            EventType.PROGRESS,
-            identity_handle=self.role_id,
-        )
 
         # spec-draft: every affected repo. Other skills: primary (first) + note others.
         targets = repos if stage == "spec-draft" else repos[:1]
+        scope = (
+            f"{len(targets)} repo(s)"
+            if stage == "spec-draft"
+            else f"`{targets[0].repo}` (primary of {len(repos)})"
+        )
+        await self._poster.post_status(
+            room,
+            f"Dev running YAML skill `{stage}` for **{init}** on {scope}…",
+            EventType.PROGRESS,
+            {
+                "status": "dev_skill_start",
+                "node": stage,
+                "initiative": init,
+                "repos": [t.repo for t in targets],
+            },
+            identity_handle=self.role_id,
+        )
+
         evidence_chunks: list[str] = []
         for hit in targets:
             root = resolve_repo_root(ws_root, hit.repo)
@@ -610,6 +700,18 @@ class DevEnggProgramme(BaseBusinessService):
                     identity_handle=self.role_id,
                 )
                 return "", False
+            await self._poster.post_status(
+                room,
+                f"Dev `{stage}` → `{hit.repo}`…",
+                EventType.PROGRESS,
+                {
+                    "status": "dev_skill_repo",
+                    "node": stage,
+                    "repo": hit.repo,
+                    "initiative": init,
+                },
+                identity_handle=self.role_id,
+            )
             extra = (
                 f"Repo under development: {hit.repo} ({hit.service}). "
                 f"Absolute PRD path (read-only): {prd_abs}. "
@@ -624,7 +726,13 @@ class DevEnggProgramme(BaseBusinessService):
                     tenant,
                     stage,
                     init,
-                    on_progress=self._progress_cb(room),
+                    on_progress=self._poster.still_working_callback(
+                        room,
+                        hop=stage,
+                        initiative=init,
+                        label=f"`{stage}`/`{hit.repo}`",
+                        identity_handle=self.role_id,
+                    ),
                     workspace=root,
                     repo=hit.repo,
                     extra_prompt=extra,
@@ -666,12 +774,17 @@ class DevEnggProgramme(BaseBusinessService):
                 )
                 return "\n\n".join(evidence_chunks), False
             session.slots["implementation_plan_current"] = "true"
-            if (primary / wm).is_file():
+            # SSOT: WorkManifest lives as §9 YAML inside the plan (kind: WorkManifest).
+            plan_body = (primary / plan).read_text(encoding="utf-8")
+            if "kind: WorkManifest" in plan_body:
                 session.slots["workmanifest_contract_pass"] = "true"
             else:
                 await self._poster.post_status(
                     room,
-                    f"WorkManifest missing at `{wm}` — fail closed (no soft-pass).",
+                    (
+                        f"WorkManifest §9 missing inside `{plan}` "
+                        f"(no `kind: WorkManifest`) — fail closed."
+                    ),
                     EventType.STALL,
                     identity_handle=self.role_id,
                 )
@@ -948,6 +1061,7 @@ class DevEnggProgramme(BaseBusinessService):
             session.slots["tdd_adr_accepted"] = "true"
             session.awaiting = AWAITING_NONE
             session.open_brief = None
+            self._mark_tdd_status_accepted(tenant, session)
             self._navigator.advance(session, "pass")
             await self._store.save(session)
             await self._run_spine(tenant, room, session)
@@ -1101,24 +1215,36 @@ class DevEnggProgramme(BaseBusinessService):
         )
         plan_repo = session.slots.get("plan_repo") or ""
         root = resolve_repo_root(self._tenants.workspace_root(), plan_repo) if plan_repo else None
+        skill_text = ""
         try:
             result = await self._dispatch.run_catalog_skill(
                 tenant,
                 "create-board-tickets",
                 init,
-                on_progress=self._progress_cb(room),
+                on_progress=self._poster.still_working_callback(
+                    room,
+                    hop="board-tickets-action",
+                    initiative=init,
+                    label="`create-board-tickets`",
+                    identity_handle=self.role_id,
+                ),
                 workspace=root,
                 repo=plan_repo,
                 extra_prompt=(
                     f"Plan path: {session.slots.get('implementation_plan_path')}. "
-                    f"WorkManifest: {session.slots.get('workmanifest_path')}."
+                    f"WorkManifest: {session.slots.get('workmanifest_path')}. "
+                    "Fail closed if target repo has issues disabled. "
+                    "When seeded, print every created GitHub issue URL "
+                    "(https://github.com/.../issues/N) in the summary."
                 ),
             )
             ok = bool(result.ok)
             summary = f"exit={result.exit_code}"
+            skill_text = (result.output or "").strip()
         except Exception as exc:
             ok = False
             summary = str(exc)
+            skill_text = summary
         if not ok:
             await self._poster.post_status(
                 room,
@@ -1135,7 +1261,27 @@ class DevEnggProgramme(BaseBusinessService):
             await self._open_board_gate(tenant, room, session)
             return
 
+        proof = verify_board_seed_output(skill_text, initiative=init, min_issues=1)
+        if not proof.ok:
+            await self._poster.post_status(
+                room,
+                proof.reason,
+                EventType.STALL,
+                {
+                    "status": "board_seed_proof_failed",
+                    "initiative": init,
+                    "issue_urls": list(proof.issue_urls),
+                },
+                identity_handle=self.role_id,
+            )
+            session.awaiting = AWAITING_NONE
+            session.open_brief = None
+            await self._store.save(session)
+            await self._open_board_gate(tenant, room, session)
+            return
+
         session.slots = mark_board_seeded(session.slots, marker=f"create-board-tickets:{init}")
+        session.slots["board_issue_urls"] = " ".join(proof.issue_urls)
         session.stage = _STAGE_DONE
         session.awaiting = AWAITING_NONE
         session.open_brief = None
@@ -1144,21 +1290,97 @@ class DevEnggProgramme(BaseBusinessService):
             session,
             kind=TaskEventKind.LAND,
             purpose="board-seed",
-            payload={"initiative": init, "yaml_terminal": _E1_TERMINAL},
+            payload={
+                "initiative": init,
+                "yaml_terminal": _E1_TERMINAL,
+                "issue_urls": list(proof.issue_urls),
+            },
         )
+        urls_line = " · ".join(proof.issue_urls[:12])
         await self._poster.post_status(
             room,
             (
                 f"**{init}** board tickets seeded — Dev YAML E1 fence complete "
-                f"(`{_E1_TERMINAL}`). Coder hire is later. "
-                f"Reply `{REVISE_ENGG}` to reopen think."
+                f"(`{_E1_TERMINAL}`). Issues: {urls_line}. "
+                f"Coder hire is later. Reply `{RESEED_BOARD}` to reseed tickets, "
+                f"or `{REVISE_ENGG}` to reopen think."
             ),
             EventType.DONE,
-            {"status": "board_seeded", "initiative": init},
+            {
+                "status": "board_seeded",
+                "initiative": init,
+                "issue_urls": list(proof.issue_urls),
+            },
             identity_handle=self.role_id,
         )
 
     # ── helpers ────────────────────────────────────────────────────────
+
+    def _mark_tdd_status_accepted(self, tenant: TenantContext, session: AgentWorkSession) -> None:
+        """Flip TDD + ADR Status Draft→Accepted so plan skill P12/P13 can pass."""
+        init = session.initiative or ""
+        artefact = session.slots.get("technical_review_path") or technical_review_path(init)
+        repo = session.slots.get("tech_repo") or ""
+        root = resolve_repo_root(self._tenants.workspace_root(), repo) if repo else None
+        if root is None:
+            return
+        path = root / artefact
+        if path.is_file():
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                text = ""
+            if text:
+                updated = text
+                for old, new in (
+                    ("| Status | Draft |", "| Status | Accepted |"),
+                    ("Status: Draft", "Status: Accepted"),
+                    ("status: Draft", "status: Accepted"),
+                ):
+                    if old in updated:
+                        updated = updated.replace(old, new, 1)
+                        break
+                # §4 ADR_REQUIRED rows keep a Status column that must flip too.
+                lines: list[str] = []
+                for line in updated.splitlines():
+                    if "ADR_REQUIRED" in line and "| Draft |" in line:
+                        line = line.replace("| Draft |", "| Accepted |", 1)
+                    lines.append(line)
+                updated = "\n".join(lines) + ("\n" if updated.endswith("\n") else "")
+                if updated != text:
+                    try:
+                        path.write_text(updated, encoding="utf-8")
+                    except OSError:
+                        self.logger.exception("failed to mark TDD Accepted", path=str(path))
+        adr_dir = root / "docs" / "specification" / "adr"
+        if not adr_dir.is_dir():
+            return
+        for adr in sorted(adr_dir.glob("adr-*.md")):
+            try:
+                body = adr.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            new_body = body
+            for old, new in (
+                ("| Status | Draft |", "| Status | Accepted |"),
+                ("Status: Draft", "Status: Accepted"),
+                ("status: Draft", "status: Accepted"),
+            ):
+                if old in new_body:
+                    new_body = new_body.replace(old, new, 1)
+                    break
+            if new_body == body:
+                continue
+            if "| Approval evidence | Pending |" in new_body:
+                new_body = new_body.replace(
+                    "| Approval evidence | Pending |",
+                    "| Approval evidence | Buzz `accept tdd-adr` |",
+                    1,
+                )
+            try:
+                adr.write_text(new_body, encoding="utf-8")
+            except OSError:
+                self.logger.exception("failed to mark ADR Accepted", path=str(adr))
 
     def _impacted(self, tenant: TenantContext, initiative: str):
         body = self._workspace.read_local(tenant, impact_map_path(initiative)) or ""
@@ -1209,20 +1431,6 @@ class DevEnggProgramme(BaseBusinessService):
             identity_handle=self.role_id,
         )
         return debate
-
-    def _progress_cb(self, room: str):
-        async def _on_progress(msg: str) -> None:
-            try:
-                await self._poster.post_status(
-                    room,
-                    msg,
-                    EventType.PROGRESS,
-                    identity_handle=self.role_id,
-                )
-            except Exception:
-                self.logger.exception("dev progress post failed")
-
-        return _on_progress
 
     async def _set_task_running(self, session: AgentWorkSession) -> None:
         task_id = (session.initiative or session.work_id or "").strip()
