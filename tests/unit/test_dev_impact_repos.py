@@ -16,6 +16,17 @@ _SAMPLE = """
 | meta | drivestream-lab/tenant-meta | @z | control plane | — |
 
 ## 3. Deferred repositories
+
+| Service | Repo | Reason | Revisit condition |
+|---------|------|--------|-------------------|
+| web-ui | drivestream-lab/tenant-web-ui | explicit non-goal | later INIT |
+| local | drivestream-lab/tenant-local | compose only | eng prove host |
+
+## 4. Dependent repositories
+
+| Service | Repo | Depends on | Potential impact | Disposition |
+|---------|------|------------|------------------|-------------|
+| mobile | drivestream-lab/tenant-mobile | tenant-api | future client | deferred |
 """
 
 
@@ -23,6 +34,15 @@ def test_parse_affected_repos_excludes_meta() -> None:
     rows = parse_affected_repos(_SAMPLE, meta_repo="tenant-meta")
     assert [r.repo for r in rows] == ["tenant-api", "tenant-web"]
     assert rows[0].spec_to_create == "INIT-X-api.md"
+
+
+def test_parse_affected_repos_skips_deferred_and_dependent_tables() -> None:
+    """Regression: INIT-004 opened thin Spec PRs for deferred web/local."""
+    rows = parse_affected_repos(_SAMPLE, meta_repo="tenant-meta")
+    names = {r.repo for r in rows}
+    assert "tenant-web-ui" not in names
+    assert "tenant-local" not in names
+    assert "tenant-mobile" not in names
 
 
 def test_pass_chain_has_no_deps_acceptance() -> None:
