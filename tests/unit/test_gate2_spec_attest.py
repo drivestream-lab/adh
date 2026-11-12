@@ -38,6 +38,9 @@ async def test_land_spec_pr_projects_spec_lgtm(monkeypatch: pytest.MonkeyPatch) 
             url="sha",
         )
     )
+    forge._github = MagicMock()
+    forge._github.installation_token = AsyncMock(return_value=("tok", {}))
+    forge._github.is_pull_merged = AsyncMock(return_value=False)
     writer = _app(1)
     reviewer = _app(2)
     workspace = MagicMock()
@@ -55,6 +58,62 @@ async def test_land_spec_pr_projects_spec_lgtm(monkeypatch: pytest.MonkeyPatch) 
     assert kwargs["gate_label_add"] == ["spec-lgtm"]
     assert "spec-pending" in kwargs["gate_label_remove"]
     assert kwargs["pre_approve_app"] is reviewer
+
+
+@pytest.mark.asyncio
+async def test_land_spec_pr_skips_already_merged(monkeypatch: pytest.MonkeyPatch) -> None:
+    forge = MagicMock()
+    forge.land_pull_request = AsyncMock()
+    forge._github = MagicMock()
+    forge._github.installation_token = AsyncMock(return_value=("tok", {}))
+    forge._github.is_pull_merged = AsyncMock(return_value=True)
+    writer = _app(1)
+    reviewer = _app(2)
+    workspace = MagicMock()
+    workspace.app_role = MagicMock(return_value=reviewer)
+    monkeypatch.setattr(forge_ops, "app_for_repo", lambda _w, _r: writer)
+
+    result = await forge_ops.land_spec_pr(
+        forge=forge,
+        workspace=workspace,
+        repo="realworld-api",
+        pr_number=16,
+        initiative="INIT-REALWORLD-003",
+    )
+    assert result.detail == "already-merged"
+    forge.land_pull_request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_land_spec_pr_fails_closed_when_opener_is_reviewer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.exceptions.app_exceptions import ValidationError
+
+    forge = MagicMock()
+    forge.land_pull_request = AsyncMock()
+    forge._github = MagicMock()
+    forge._github.installation_token = AsyncMock(return_value=("tok", {}))
+    forge._github.is_pull_merged = AsyncMock(return_value=False)
+    reviewer = AppRole(
+        app_id=99,
+        installation_id=10,
+        pem="/tmp/x.pem",
+        repos=["realworld-web"],
+    )
+    workspace = MagicMock()
+    workspace.app_role = MagicMock(return_value=reviewer)
+    monkeypatch.setattr(forge_ops, "app_for_repo", lambda _w, _r: reviewer)
+
+    with pytest.raises(ValidationError, match="no distinct writer"):
+        await forge_ops.land_spec_pr(
+            forge=forge,
+            workspace=workspace,
+            repo="realworld-web",
+            pr_number=5,
+            initiative="INIT-REALWORLD-003",
+        )
+    forge.land_pull_request.assert_not_awaited()
 
 
 @pytest.mark.asyncio

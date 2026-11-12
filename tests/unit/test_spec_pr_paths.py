@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from src.adh_agents.programmes.dev.paths import spec_pr_body_path, spec_pr_push_paths
+from src.adh_agents.programmes.dev.paths import (
+    spec_pr_body_path,
+    spec_pr_branch,
+    spec_pr_push_paths,
+)
 
 
 def test_spec_pr_push_paths_init_scoped() -> None:
@@ -23,3 +27,9 @@ def test_spec_pr_push_paths_respects_map_spec() -> None:
         map_spec="docs/specification/product/custom-slice.md",
     )
     assert "docs/specification/product/custom-slice.md" in paths
+
+
+def test_spec_pr_branch_uses_chore_prefix() -> None:
+    """policy-branch-name allows chore/; docs/ fails on realworld-web."""
+    assert spec_pr_branch("INIT-REALWORLD-004") == "chore/spec-init-realworld-004"
+    assert not spec_pr_branch("INIT-REALWORLD-004").startswith("docs/")

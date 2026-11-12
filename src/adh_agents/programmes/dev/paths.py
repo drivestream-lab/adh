@@ -42,6 +42,16 @@ def spec_slice_path(initiative: str, repo: str, *, map_spec: str = "") -> str:
     return f"docs/specification/product/{init}-{short}.md"
 
 
+def spec_pr_branch(initiative: str) -> str:
+    """Spec head branch — ``chore/`` prefix passes guinea-pig policy-branch-name.
+
+    Allowed prefixes on realworld-* policy checks: feature, fix, hotfix, release, chore.
+    ``docs/spec-…`` fails CI and can leave merge state UNSTABLE even after APPROVE.
+    """
+    init = (initiative or "").strip().lower()
+    return f"chore/spec-{init}"
+
+
 def spec_pr_body_path(initiative: str, repo: str) -> str:
     init = (initiative or "").strip().upper()
     short = (repo or "").strip().rsplit("/", 1)[-1]

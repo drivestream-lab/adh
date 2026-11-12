@@ -56,6 +56,7 @@ from src.adh_agents.programmes.dev.impact_repos import (
 from src.adh_agents.programmes.dev.paths import (
     implementation_plan_path,
     spec_pr_body_path,
+    spec_pr_branch,
     spec_pr_push_paths,
     technical_review_path,
     workmanifest_path,
@@ -858,7 +859,7 @@ class DevEnggProgramme(BaseBusinessService):
                     identity_handle=self.role_id,
                 )
                 return "", False
-            branch = f"docs/spec-{init.lower()}"
+            branch = spec_pr_branch(init)
             # INIT-scoped only — never rglob docs/specification (leaks prior INITs).
             candidates = spec_pr_push_paths(init, hit.repo, map_spec=hit.spec_to_create)
             push_paths = [p for p in candidates if (root / p).is_file()]
