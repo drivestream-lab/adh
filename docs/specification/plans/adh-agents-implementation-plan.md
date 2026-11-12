@@ -27,12 +27,18 @@ F1–F9 Team floor         ✅  PR #25; god INIT-004 → archive; traj hub mirro
 H1 Human rewind + traj    ✅  PR #27; 006 promote rewind+traj; 005 post-merge `rewind_denied`
 Human INIT-005 verify     ✅  full human forward → archive; hub traj mirrors
 
-── in progress (greenfield rewrite) ──
-E1 Dev engg = workflow.yaml  🟨  Greenfield rewrite; YAML SSOT like PM; no legacy spine; 001/002 after rewrite
+── landed (E1 Dev YAML) ──
+E1 Dev engg = workflow.yaml  ✅  develop tip; Gate2 + engg isolation (#30/#31); 002 board-seeded
+
+── planning (greenfield — no dual path) ──
+B0–B3 Hermes behaviour harness  🟨  single PR — ADR 0004 Accepted; packs+runners landed in branch;
+                                 live verify **003 god / 004 human** after merge
+                                 [hermes-behaviour-harness-plan.md](hermes-behaviour-harness-plan.md)
 
 ── later ──
 Coder hire (`adh.coder`) + verify agent + qa / iac / sre / obs + codegraph MCP + TaskGraph   ⬜
 ```
+
 
 ---
 

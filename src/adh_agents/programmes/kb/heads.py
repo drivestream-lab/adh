@@ -106,6 +106,31 @@ def stub_heads_from_signals(
     return out
 
 
+def load_kb_excerpt(
+    meta_root: Path,
+    *,
+    repos: list[str] | None = None,
+    max_chars: int = 6000,
+) -> str:
+    """Concatenate OKF knowledge head excerpts for behaviour-prompt inject (Mode A)."""
+    root = meta_root.expanduser() / "knowledge"
+    if not root.is_dir():
+        return ""
+    chunks: list[str] = []
+    foundation = root / "foundation.md"
+    if foundation.is_file():
+        chunks.append(foundation.read_text(encoding="utf-8")[:2000])
+    for name in repos or []:
+        short = (name or "").strip().rsplit("/", 1)[-1]
+        if not short:
+            continue
+        path = root / "repos" / f"{short}.md"
+        if path.is_file():
+            chunks.append(path.read_text(encoding="utf-8")[:2000])
+    text = "\n\n---\n\n".join(c.strip() for c in chunks if c.strip())
+    return text[:max_chars]
+
+
 def merge_llm_sections(stub: str, filled: str) -> str:
     """Prefer LLM body when it still looks like a head doc; else keep stub."""
     text = (filled or "").strip()

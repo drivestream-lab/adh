@@ -76,10 +76,11 @@ from src.adh_agents.settings import DevAgentSettings
 from src.adh_agents.surface.buzz_poster import HermesBuzzPoster
 from src.business_services.base_business_service import BaseBusinessService
 from src.business_services.buzz_service import BuzzService
+from src.adh_agents.programmes.kb.heads import load_kb_excerpt
 from src.infra_services.forge_action_service import ForgeActionService
 from src.infra_services.github_app_service import GitHubAppService
-from src.infra_services.litellm_service import LiteLLMService
 from src.infra_services.pm_workspace_service import PmWorkspaceService, prd_path
+from src.infra_services.prompt_service import PromptService
 from src.infra_services.tenant_registry_service import TenantRegistryService
 from src.infra_services.workflow_catalogue_service import WorkflowCatalogueService
 from src.models.buzz_models import EventType, TaskEventCreate, TaskEventKind, TaskState
@@ -119,7 +120,7 @@ class DevEnggProgramme(BaseBusinessService):
         gates: GateOpener,
         buzz: BuzzService,
         tenants: TenantRegistryService,
-        litellm: LiteLLMService,
+        prompts: PromptService,
         navigator: HermesNavigatorService,
         catalogue: WorkflowCatalogueService,
         forge: ForgeActionService,
@@ -135,7 +136,7 @@ class DevEnggProgramme(BaseBusinessService):
         self._gates = gates
         self._buzz = buzz
         self._tenants = tenants
-        self._litellm = litellm
+        self._prompts = prompts
         self._navigator = navigator
         self._catalogue = catalogue
         self._forge = forge
@@ -561,12 +562,13 @@ class DevEnggProgramme(BaseBusinessService):
             if not ok:
                 return False
             outcome = await decide_catalogue_outcome(
-                self._litellm,
+                self._prompts,
                 role_id=self.role_id,
                 node_id=stage,
                 initiative=session.initiative or "",
                 allowed_outcomes=list(node.outcomes.keys()),
                 evidence=evidence,
+                kb_excerpt=self._kb_excerpt(tenant, session),
             )
             await self._poster.post_status(
                 room,
@@ -594,12 +596,13 @@ class DevEnggProgramme(BaseBusinessService):
                 if not ok:
                     return False
                 outcome = await decide_catalogue_outcome(
-                    self._litellm,
+                    self._prompts,
                     role_id=self.role_id,
                     node_id=stage,
                     initiative=session.initiative or "",
                     allowed_outcomes=list(node.outcomes.keys()),
                     evidence=evidence,
+                    kb_excerpt=self._kb_excerpt(tenant, session),
                 )
                 await self._poster.post_status(
                     room,
@@ -1484,6 +1487,18 @@ class DevEnggProgramme(BaseBusinessService):
         body = self._workspace.read_local(tenant, impact_map_path(initiative)) or ""
         return parse_affected_repos(body, meta_repo=tenant.meta_repo)
 
+    def _kb_excerpt(self, tenant: TenantContext, session: AgentWorkSession) -> str:
+        init = session.initiative or session.work_id or ""
+        repos = [r.repo for r in self._impacted(tenant, init)]
+        return load_kb_excerpt(Path(tenant.meta_root), repos=repos)
+
+    def _kb_excerpt_for_init(self, *, tenant_slug: str, initiative: str) -> str:
+        tenant = next((t for t in self._tenants.active() if t.slug == tenant_slug), None)
+        if tenant is None:
+            return ""
+        repos = [r.repo for r in self._impacted(tenant, initiative)]
+        return load_kb_excerpt(Path(tenant.meta_root), repos=repos)
+
     async def _debate_hop(
         self,
         *,
@@ -1500,12 +1515,15 @@ class DevEnggProgramme(BaseBusinessService):
             identity_handle=self.role_id,
         )
         debate = await run_dev_debate(
-            self._litellm,
+            self._prompts,
             purpose=purpose,
             initiative=initiative,
             context=context,
             reply_tokens=reply_tokens,
             max_runs=int(self._settings.max_think_runs),
+            kb_excerpt=self._kb_excerpt_for_init(
+                tenant_slug=session.tenant_slug, initiative=initiative
+            ),
         )
         session.slots[f"debate:{purpose}:passes"] = str(debate.passes)
         session.slots[f"debate:{purpose}:converged_at"] = str(debate.converged_at_pass)

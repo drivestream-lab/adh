@@ -10,7 +10,7 @@ from src.adh_agents.baton.models import Baton, BatonStatus, Rollup
 from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.collaboration.brief_service import HermesBriefService
 from src.adh_agents.forge_acl import forge_allowed
-from src.adh_agents.runtime.agentic_extract import github_pull_number
+from src.adh_agents.runtime.agentic_extract import github_pull_number, match_allowed
 from src.adh_agents.programmes.pe.gate1_brief import (
     build_gate1_decision_card,
     format_gate1_brief_markdown,
@@ -41,11 +41,16 @@ from src.adh_agents.settings import PeAgentSettings
 from src.adh_agents.surface.buzz_poster import HermesBuzzPoster
 from src.business_services.base_business_service import BaseBusinessService
 from src.business_services.buzz_service import BuzzService
+from src.adh_agents.programmes.kb.heads import load_kb_excerpt
 from src.infra_services.forge_action_service import ForgeActionService
 from src.infra_services.pm_workspace_service import PmWorkspaceService
+from src.infra_services.prompt_service import PromptService
 from src.infra_services.tenant_registry_service import TenantRegistryService
 from src.models.buzz_models import EventType
 from src.models.tenant_models import TenantContext
+
+_GATE1_RECOMMEND = "hermes.pe.gate1.recommend"
+_GATE1_TOKENS = ("await_pm", "new_round", "hold", "attest")
 
 
 class PeReviewProgramme(BaseBusinessService):
@@ -64,6 +69,7 @@ class PeReviewProgramme(BaseBusinessService):
         tenants: TenantRegistryService,
         buzz: BuzzService,
         engg_handoff: PeEnggHandoff,
+        prompts: PromptService,
     ) -> None:
         super().__init__()
         self._store = store
@@ -75,6 +81,7 @@ class PeReviewProgramme(BaseBusinessService):
         self._tenants = tenants
         self._buzz = buzz
         self._engg_handoff = engg_handoff
+        self._prompts = prompts
         self._settings = PeAgentSettings.get_instance()
 
     async def list_active(self, tenant_slug: str) -> list[AgentWorkSession]:
@@ -469,13 +476,26 @@ class PeReviewProgramme(BaseBusinessService):
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(doc, encoding="utf-8")
 
-        # Full recommendation paper (PM promote/post-pm parity) — Buzz stays light.
+        # Behaviour harness: Gate-1 recommend card via hermes.pe.gate1.recommend.
+        judge = await self._gate1_recommend(
+            tenant,
+            initiative=init,
+            round_number=round_n,
+            max_rounds=max_rounds,
+            questions_summary="\n".join(q.to_markdown() for q in questions[:8]),
+            impact_excerpt=map_text[:8000],
+        )
         card = build_gate1_decision_card(
             initiative=init,
             round_number=round_n,
             max_rounds=max_rounds,
             questions=questions,
-            recommend="await_pm",
+            recommend=str(judge.get("recommend") or "await_pm"),
+            bluf=str(judge.get("bluf") or ""),
+            example=str(judge.get("example") or ""),
+            locking=list(judge.get("locking") or []),
+            not_locking=list(judge.get("not_locking") or []),
+            revise_if=list(judge.get("revise_if") or []),
         )
         brief_rel = hermes_gate1_brief_path(init)
         brief_md = format_gate1_brief_markdown(
@@ -765,6 +785,48 @@ class PeReviewProgramme(BaseBusinessService):
             },
             identity_handle=self.role_id,
         )
+
+    async def _gate1_recommend(
+        self,
+        tenant: TenantContext,
+        *,
+        initiative: str,
+        round_number: int,
+        max_rounds: int,
+        questions_summary: str,
+        impact_excerpt: str,
+    ) -> dict:
+        kb = load_kb_excerpt(Path(tenant.meta_root), repos=[])
+        run = await self._prompts.complete(
+            _GATE1_RECOMMEND,
+            {
+                "initiative": initiative,
+                "round_number": str(round_number),
+                "max_rounds": str(max_rounds),
+                "reply_tokens": ", ".join(f"`{t}`" for t in _GATE1_TOKENS),
+                "questions_summary": questions_summary[:12000] or "(none)",
+                "impact_excerpt": (impact_excerpt or "")[:8000] or "(none)",
+                "kb_excerpt": kb[:6000] or "(none)",
+            },
+        )
+        parsed = run.parsed or {}
+        recommend = match_allowed(str(parsed.get("recommend") or ""), _GATE1_TOKENS) or "await_pm"
+
+        def _list(key: str) -> list[str]:
+            raw = parsed.get(key)
+            if isinstance(raw, list):
+                return [str(x) for x in raw if str(x).strip()]
+            return []
+
+        return {
+            "recommend": recommend,
+            "bluf": str(parsed.get("bluf") or ""),
+            "example": str(parsed.get("example") or ""),
+            "locking": _list("locking"),
+            "not_locking": _list("not_locking"),
+            "revise_if": _list("revise_if"),
+            "template_id": run.template_id,
+        }
 
 
 def _pr_number(pr_url: str) -> int | None:

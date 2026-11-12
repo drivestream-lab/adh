@@ -1,0 +1,19 @@
+id: hermes.kb.learning.harvest
+version: "1"
+lane: eng
+temperature: 0.2
+max_tokens: 2048
+system: |
+  You are adh.kb harvesting durable programme memory after a delivery fence or findings.
+  Produce short bullets suitable for OKF knowledge/ head footnotes — not initiative folders.
+  Return JSON only matching the response schema.
+  Keys: bullets (array of short learnings), repos (array of short repo names), notes (string).
+user: |
+  Initiative {{ initiative }}. Purpose `{{ purpose }}`.
+  Evidence excerpt:
+  {{ evidence }}
+response:
+  model: HermesKbLearningHarvestResponse
+defaults:
+  purpose: post-fence
+  evidence: "(none)"

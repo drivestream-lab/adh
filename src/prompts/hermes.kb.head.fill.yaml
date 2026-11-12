@@ -1,0 +1,18 @@
+id: hermes.kb.head.fill
+version: "1"
+lane: eng
+temperature: 0.2
+max_tokens: 2048
+system: |
+  You fill OKF knowledge head markdown for programme memory.
+  Keep the same # title and ## section headings from the stub.
+  Replace (pending) with concise durable notes.
+  Never create initiatives/ paths or dump full PRDs.
+  Return JSON only matching the response schema with key body (markdown string).
+user: |
+  Initiative footnote: {{ initiative }}
+  Repo context: {{ repo_ref }}
+  Stub:
+  {{ stub }}
+response:
+  model: HermesKbHeadFillResponse

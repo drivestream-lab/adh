@@ -27,8 +27,10 @@
 | KB land approve-before-merge | ✅ PR #24 — reviewer APPROVE for branch protection; stall reopens Buzz gate |
 | F1–F9 Team floor (single PR) | ✅ PR #25; god INIT-004 → archive; traj hub mirrors |
 | H1 Human rewind + traj-on-Buzz | ✅ PR #27; INIT-006 promote rewind + Lead `traj`; INIT-005 post-merge `rewind_denied` |
-| E1 Dev engg = workflow.yaml | 🟨 Greenfield rewrite (YAML SSOT like PM); platform `agentic_extract`/`decide`/`lead_commands` (ADR 0003); no regex under `adh_agents`; verify **001/002** Dev + **007/008** PM+PE |
-| ADR 0003 platform extract/decide | 🟨 Same PR — labeled-line extract; phrase-list Lead cmds + agentic hole; Dev wired; PM/PE/collab purge |
+| E1 Dev engg = workflow.yaml | ✅ develop tip (#29–#31); YAML walker + Gate2 + engg isolation; INIT-002 board-seeded |
+| ADR 0003 platform extract/decide | ✅ labeled-line extract; phrase-list Lead cmds + agentic hole; Dev wired |
+| B0–B3 Hermes behaviour harness | 🟨 Single PR in flight — [ADR 0004](../adr/0004-hermes-behaviour-harness.md) Accepted; packs + PromptService runners; zero dead inline; live verify **INIT-003 god / INIT-004 human** pending |
+
 
 ## Landed (0b)
 

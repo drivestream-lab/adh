@@ -31,33 +31,46 @@ def build_gate1_decision_card(
     max_rounds: int,
     questions: list[ProductQuestion],
     recommend: str = "await_pm",
+    bluf: str = "",
+    example: str = "",
+    locking: list[str] | None = None,
+    not_locking: list[str] | None = None,
+    revise_if: list[str] | None = None,
 ) -> DecisionCard:
-    """Product skim card for Lead/PE after a product-question round."""
-    locking = [f"{q.qid}: {q.recommendation}" for q in questions[:3] if q.recommendation] or [
-        "Product questions posted — PM stance still open."
-    ]
-    not_locking = [
+    """Product skim card for Lead/PE after a product-question round.
+
+    Behaviour pack (``hermes.pe.gate1.recommend``) supplies recommend/bluf/locking
+    when present; deterministic fallbacks fill any empty fields.
+    """
+    lock = (
+        locking
+        or [f"{q.qid}: {q.recommendation}" for q in questions[:3] if q.recommendation]
+        or ["Product questions posted — PM stance still open."]
+    )
+    not_lock = not_locking or [
         "Merge authorize (separate PM/Lead forge gate)",
         "App-repo mutate (later hire)",
     ]
-    revise_if = [
+    revise = revise_if or [
         "PM rejects or adjusts a PQ stance",
         "Impact-Map CAP/CTR tables drift from PRD",
         f"Question budget exhausted ({max_rounds} rounds)",
     ]
     return decision_card(
-        recommend=recommend,
-        bluf=(
+        recommend=recommend or "await_pm",
+        bluf=bluf
+        or (
             f"Product brief round {round_number}/{max_rounds} for {initiative}: "
             "wait for PM answers before attesting this product PR head."
         ),
-        example=(
+        example=example
+        or (
             "PM answers on the PR thread / Buzz; PE attests only when product stance "
             "is clear. Merge stays a separate authorize."
         ),
-        locking=locking,
-        not_locking=not_locking,
-        revise_if=revise_if,
+        locking=lock,
+        not_locking=not_lock,
+        revise_if=revise,
         card_kind=CARD_PROMOTE,
     )
 

@@ -106,16 +106,28 @@ Canonical task row lives in **Postgres** (`buzz_tasks`). Unique `(tenant, source
 Redis work sessions / batons are the **live projection** of that task — they must not
 become a second task SSOT.
 
+## Two harnesses (normative)
+
+| Harness | SSOT | Job |
+|---------|------|-----|
+| **Delivery** | `workflow.yaml` + prayog skills + forge ACL | Produce artefacts; GitHub; predicates |
+| **Behaviour** | `src/prompts/hermes.{role}.*` via PromptService | Mimic human judgment — questions, ADR/TDD/impact review, recommend |
+
+Skills without behaviour packs = pipeline with token gates.  
+Behaviour packs without skills = reviewer with no delivery teeth.  
+Both required. See [ADR 0004](../adr/0004-hermes-behaviour-harness.md) + [behaviour plan](../plans/hermes-behaviour-harness-plan.md).  
+**Greenfield:** no inline judgment prompts; delete dual paths in-wave. Knowledge closes the evolution loop (Mode A inject → Mode B Lead-gated prompt PRs later).
+
 ## Roles (incremental roster)
 
 | Role | Buzz id | Owns | Hire / verify |
 |------|---------|------|----------------|
-| PM | `adh.pm` | Requirements → draft PRD PR; product answers; PRD merge | Verify first on new OS |
-| Dev | `adh.dev` | YAML `development` lane after PRD merge: spec → spec PR → review/plan → merge → board | E1 greenfield; **not** coder |
+| PM | `adh.pm` | Requirements → draft PRD PR; product answers; PRD merge | Verify first on new OS; `hermes.pm.*` gold |
+| Dev | `adh.dev` | YAML `development` lane after PRD merge: spec → spec PR → review/plan → merge → board | E1 landed; behaviour packs wave B1 |
 | Coder | `adh.coder` (later) | Execute board/WorkManifest → code PRs | After Dev fence |
 | Read | `adh.read` | Walk one repo; Buzz rollup | Before / with PE fan-out |
-| PE | `adh.pe` | Product review: fan-out reads, ≤10 Q / ≤2 agent rounds, attest, ping PM | After PM verify; consume `pe.review` |
-| KB | `adh.kb` | Patch OKF `knowledge/` heads | After merge enrich |
+| PE | `adh.pe` | Product review: fan-out reads, ≤10 Q / ≤2 agent rounds, attest, ping PM | Behaviour packs wave B2 |
+| KB | `adh.kb` | Patch OKF `knowledge/` heads; feed next-hop `kb_excerpt` | After merge enrich; loop Mode A in B3 |
 | QA / IaC / SRE / Obs | later | … | later |
 
 ## Workers

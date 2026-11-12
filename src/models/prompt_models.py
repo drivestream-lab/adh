@@ -790,6 +790,48 @@ class HermesPmValidateCardResponse(BaseCreateModel):
     notes: str = ""
 
 
+class HermesBehaviourRecommendResponse(BaseCreateModel):
+    """Dev/PE judgment recommend card (behaviour harness)."""
+
+    recommend: str = ""
+    bluf: str = ""
+    example: str = ""
+    locking: list[str] = Field(default_factory=list)
+    not_locking: list[str] = Field(default_factory=list)
+    revise_if: list[str] = Field(default_factory=list)
+
+    @field_validator("locking", "not_locking", "revise_if", mode="before")
+    @classmethod
+    def _coerce_str_lists(cls, value: Any) -> list[str]:
+        return coerce_string_list(value)
+
+
+class HermesBehaviourOutcomeResponse(BaseCreateModel):
+    """Catalogue outcome decide (behaviour harness)."""
+
+    outcome: str = ""
+    why: str = ""
+
+
+class HermesKbLearningHarvestResponse(BaseCreateModel):
+    """Learning harvest bullets for OKF head footnotes (Mode A)."""
+
+    bullets: list[str] = Field(default_factory=list)
+    repos: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+    @field_validator("bullets", "repos", mode="before")
+    @classmethod
+    def _coerce_lists(cls, value: Any) -> list[str]:
+        return coerce_string_list(value)
+
+
+class HermesKbHeadFillResponse(BaseCreateModel):
+    """Filled OKF knowledge head markdown body."""
+
+    body: str = ""
+
+
 RESPONSE_MODELS: dict[str, type[BaseCreateModel]] = {
     "HermesPmBriefResponse": HermesPmBriefResponse,
     "HermesPmOutlineResponse": HermesPmOutlineResponse,
@@ -801,6 +843,10 @@ RESPONSE_MODELS: dict[str, type[BaseCreateModel]] = {
     "HermesPmRecommendResponse": HermesPmRecommendResponse,
     "HermesPmValidateCardResponse": HermesPmValidateCardResponse,
     "HermesEngGradeResponse": HermesEngGradeResponse,
+    "HermesBehaviourRecommendResponse": HermesBehaviourRecommendResponse,
+    "HermesBehaviourOutcomeResponse": HermesBehaviourOutcomeResponse,
+    "HermesKbLearningHarvestResponse": HermesKbLearningHarvestResponse,
+    "HermesKbHeadFillResponse": HermesKbHeadFillResponse,
 }
 
 

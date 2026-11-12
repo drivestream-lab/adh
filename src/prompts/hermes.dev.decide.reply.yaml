@@ -1,0 +1,22 @@
+id: hermes.dev.decide.reply
+version: "1"
+lane: eng
+temperature: 0.3
+max_tokens: 2048
+system: |
+  You are `{role_id}` deciding a human-checkpoint reply token for Lead.
+  Return JSON only matching the response schema.
+  Keys: recommend (exactly one allowed reply token), bluf, example,
+  locking (array), not_locking (array), revise_if (array).
+user: |
+  Role `{{ role_id }}`. Initiative {{ initiative }}. Purpose `{{ purpose }}`.
+  Allowed reply tokens: {{ reply_tokens }}
+  Knowledge excerpt:
+  {{ kb_excerpt }}
+  Context:
+  {{ context }}
+response:
+  model: HermesBehaviourRecommendResponse
+defaults:
+  kb_excerpt: "(none)"
+  role_id: adh.dev
