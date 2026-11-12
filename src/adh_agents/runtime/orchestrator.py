@@ -626,9 +626,11 @@ class Orchestrator(BaseBusinessService):
             return True
         node = self._navigator.current(session)
         runner = self._runner_for(session)
-        # Dev YAML authorize gates (spec-merge / board) are programme-owned —
-        # not catalogue forge nodes. Mirror judgment → after_judgment.
-        if runner is not None and session.programme and not node.is_external_action():
+        # Dev YAML authorize gates (spec-merge) are typed external-action but
+        # declare no forge.action — programme owns land via after_judgment.
+        # board-tickets-action keeps forge.action and stays on the dispatch path.
+        forge_action = (node.forge.action or "").strip() if node.forge is not None else ""
+        if runner is not None and session.programme and not forge_action:
             session.handoff_outcome = token
             session.slots[f"reply:{brief.node_id}"] = token
             session.open_brief = None
