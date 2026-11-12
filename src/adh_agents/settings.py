@@ -136,6 +136,6 @@ class AdhAutonomySettings(BaseSettings):
     god_chain_cap: int = Field(
         default=12,
         ge=1,
-        le=40,
+        le=200,
         description="Max auto-takes per initiative in one god chain",
     )
