@@ -15,9 +15,21 @@ _KEY_PREFIX = "adh:agent:work:"
 _INDEX_PREFIX = "adh:agent:works:"
 
 
+def _normalize_work_id(work_id: str) -> str:
+    """INIT ids uppercased; ``__unbound__`` kept canonical (case-stable).
+
+    Uppercasing the unbound sentinel made ``save`` treat ``__UNBOUND__ !=
+    __unbound__`` and immediately delete the key it just wrote — resume picks
+    never stuck.
+    """
+    raw = (work_id or UNBOUND_WORK_ID).strip() or UNBOUND_WORK_ID
+    if raw.lower() == UNBOUND_WORK_ID.lower():
+        return UNBOUND_WORK_ID
+    return raw.upper()
+
+
 def work_key(tenant: str, role_id: str, work_id: str) -> str:
-    wid = (work_id or UNBOUND_WORK_ID).strip().upper() or UNBOUND_WORK_ID
-    return f"{_KEY_PREFIX}{tenant}:{role_id}:{wid}"
+    return f"{_KEY_PREFIX}{tenant}:{role_id}:{_normalize_work_id(work_id)}"
 
 
 def works_index_key(tenant: str, role_id: str) -> str:
@@ -28,8 +40,7 @@ def _work_id_part(session: AgentWorkSession) -> str:
     init = session.initiative
     if init and init.strip():
         return init.strip().upper()
-    wid = (session.work_id or "").strip().upper()
-    return wid or UNBOUND_WORK_ID
+    return _normalize_work_id(session.work_id or UNBOUND_WORK_ID)
 
 
 class AgentWorkStore(BaseBusinessService):
@@ -90,7 +101,7 @@ class AgentWorkStore(BaseBusinessService):
             ttl=self._ttl,
         )
         await self._index_add(session.tenant_slug, session.role_id, wid)
-        if wid != UNBOUND_WORK_ID:
+        if _normalize_work_id(wid) != UNBOUND_WORK_ID:
             await self._delete_key(session.tenant_slug, session.role_id, UNBOUND_WORK_ID)
         self.logger.info(
             "Saved agent work session",
@@ -114,7 +125,7 @@ class AgentWorkStore(BaseBusinessService):
             await self._redis.delete(works_index_key(tenant, role_id))
             self.logger.info("Cleared all agent work sessions", tenant=tenant, role=role_id)
             return
-        wid = work_id.strip().upper() or UNBOUND_WORK_ID
+        wid = _normalize_work_id(work_id)
         await self._delete_key(tenant, role_id, wid)
         self.logger.info("Cleared agent work session", tenant=tenant, role=role_id, work_id=wid)
 
@@ -127,12 +138,12 @@ class AgentWorkStore(BaseBusinessService):
         if raw is None:
             return []
         if isinstance(raw, list):
-            return sorted({str(x).strip().upper() for x in raw if str(x).strip()})
+            return sorted({_normalize_work_id(str(x)) for x in raw if str(x).strip()})
         return []
 
     async def _index_add(self, tenant: str, role_id: str, work_id: str) -> None:
         members = set(await self._index_members(tenant, role_id))
-        members.add(work_id.strip().upper() or UNBOUND_WORK_ID)
+        members.add(_normalize_work_id(work_id))
         await self._redis.set(
             works_index_key(tenant, role_id),
             sorted(members),
@@ -141,7 +152,7 @@ class AgentWorkStore(BaseBusinessService):
 
     async def _index_remove(self, tenant: str, role_id: str, work_id: str) -> None:
         members = set(await self._index_members(tenant, role_id))
-        members.discard(work_id.strip().upper() or UNBOUND_WORK_ID)
+        members.discard(_normalize_work_id(work_id))
         key = works_index_key(tenant, role_id)
         if not members:
             await self._redis.delete(key)

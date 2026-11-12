@@ -125,23 +125,29 @@ class ForgeActionService(BaseInfraService):
         gate_labels: bool = True,
         label_add: list[str] | None = None,
         label_remove: list[str] | None = None,
+        submit_review: bool = True,
     ) -> ForgeActionResult:
         """APPROVE on exact head + optional gate label projection.
 
         Default labels = Gate 1 (impact-map). Gate 2 (spec) callers pass
         ``label_add=["spec-lgtm"]`` / remove ``spec-pending`` family — same
         delivery rule as PRD: labels move + attestation before merge.
+
+        Set ``submit_review=False`` when the app is also the PR author
+        (GitHub 422 self-APPROVE) — still project gate labels.
         """
         token, _ = await self._github.installation_token(app, write=True, repositories=[repo])
-        sha = commit_id or await self._github.pull_head_sha(token, repo, pr_number=pr_number)
-        url = await self._github.create_pull_review(
-            token,
-            repo,
-            pr_number=pr_number,
-            body=body,
-            event="APPROVE",
-            commit_id=sha,
-        )
+        url = ""
+        if submit_review:
+            sha = commit_id or await self._github.pull_head_sha(token, repo, pr_number=pr_number)
+            url = await self._github.create_pull_review(
+                token,
+                repo,
+                pr_number=pr_number,
+                body=body,
+                event="APPROVE",
+                commit_id=sha,
+            )
         if gate_labels:
             add = list(label_add) if label_add is not None else ["impact-map-lgtm"]
             remove = (
@@ -161,6 +167,11 @@ class ForgeActionService(BaseInfraService):
                 add=add,
                 remove=remove,
             )
+        if not url:
+            from src.configs.orchestrator_settings import OrchestratorSettings
+
+            org = OrchestratorSettings.get_instance().github_org
+            url = f"https://github.com/{org}/{repo}/pull/{pr_number}"
         return ForgeActionResult(
             action=_APPROVE_ATTESTATION, repo=repo, pr_number=pr_number, url=url
         )

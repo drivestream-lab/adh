@@ -9,6 +9,9 @@ from injector import inject
 from src.adh_agents.base import BaseHermesAgent
 from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.collaboration.human_replies import (
+    ANOTHER_ROUND,
+    CODING_READY,
+    HOLD,
     RESEED_BOARD,
     REVISE_ENGG,
     normalize_reply,
@@ -19,9 +22,10 @@ from src.adh_agents.runtime.autonomy import AutonomyPolicy
 from src.adh_agents.runtime.lead_commands import LeadCommand, match_lead_command
 from src.adh_agents.runtime.orchestrator import Orchestrator
 from src.adh_agents.runtime.presence import PresenceService
-from src.adh_agents.runtime.room_resolve import listen_rooms_for_tenants, resolve_tenant_for_room
+from src.adh_agents.runtime.room_resolve import listen_rooms_for_role, resolve_tenant_for_room
 from src.adh_agents.runtime.work_models import (
     AWAITING_AUTHORIZATION,
+    AWAITING_CLARIFY,
     AWAITING_JUDGMENT,
     AWAITING_NONE,
 )
@@ -66,7 +70,7 @@ class DevAgent(BaseHermesAgent):
         self._orchestrator.set_programme_runner(self._programme)
         for tenant in self._tenants.active():
             await self.ensure_hub_member(tenant.ops_room)
-        rooms = await listen_rooms_for_tenants(self._buzz, self._tenants)
+        rooms = await listen_rooms_for_role(self._buzz, self._tenants, self.role_id)
         await self.start_ops_listeners(rooms)
         await self._catch_up_pending_batons()
         task = asyncio.create_task(self._god_resume_open_gates())
@@ -75,7 +79,7 @@ class DevAgent(BaseHermesAgent):
         # Engg rooms appear after PE handoff; refresh subscribe + reclaim pending
         # batons (SSE only sees messages after subscribe — catch-up is required).
         self.start_listen_refresh_loop(
-            lambda: listen_rooms_for_tenants(self._buzz, self._tenants),
+            lambda: listen_rooms_for_role(self._buzz, self._tenants, self.role_id),
             interval_seconds=15.0,
             on_added=self._on_rooms_added,
         )
@@ -285,6 +289,12 @@ class DevAgent(BaseHermesAgent):
             await self._orchestrator.handle_lead_message(tenant, room, message)
             return
 
+        # Resume-pick / clarify on unbound must reach the orchestrator (same as PM).
+        unbound = await self._work_store.load_unbound(tenant.slug, self.role_id)
+        if unbound is not None and unbound.awaiting == AWAITING_CLARIFY:
+            await self._orchestrator.handle_lead_message(tenant, room, message)
+            return
+
         active = await self._work_store.list_active(tenant.slug, self.role_id)
         open_gates = [
             s
@@ -294,6 +304,29 @@ class DevAgent(BaseHermesAgent):
         ]
         if open_gates:
             await self._orchestrator.handle_lead_message(tenant, room, message)
+            return
+
+        # Gate 2 attest failure clears awaiting before retry text is posted —
+        # still accept coding-readiness tokens so Lead is not stuck silent.
+        if normalize_reply(body, [CODING_READY, ANOTHER_ROUND, HOLD]) is None:
+            return
+        stuck = [
+            s
+            for s in active
+            if (s.stage or "").strip() == "coding-readiness"
+            and s.awaiting == AWAITING_NONE
+            and (s.slots.get("coding_ready_accepted") or "").lower() not in {"1", "true", "yes"}
+            and (not s.room or s.room == room)
+        ]
+        if not stuck:
+            return
+        session = stuck[0]
+        await self.ack_received(
+            room,
+            lead_body=body,
+            source_message_id=str(message.id) if message.id else None,
+        )
+        await self._programme.after_judgment(tenant, room, session, body)
 
 
 def _extract_pr_url(body: str) -> str:

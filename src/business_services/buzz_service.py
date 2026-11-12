@@ -777,6 +777,23 @@ class BuzzService(BaseBusinessService):
         task = await self.get_task_by_room_slug(slug)
         if task is not None:
             return task.tenant_slug
+        # `#engg-{TASK_ID}` is not task_room_slug — resolve via INIT id.
+        from src.adh_agents.runtime.room_resolve import task_id_from_engg_room
+
+        engg_id = task_id_from_engg_room(slug)
+        if not engg_id:
+            return None
+        for tenant in self._tenants.active():
+            try:
+                engg_task = await self.get_task(tenant.slug, engg_id)
+                return engg_task.tenant_slug
+            except Exception:
+                continue
+        # Guinea pig: init prefix match when task row missing.
+        for tenant in self._tenants.active():
+            prefix = (tenant.init_prefix or "").strip().upper().rstrip("-")
+            if prefix and engg_id.startswith(prefix):
+                return tenant.slug
         return None
 
     async def _mirror_traj_to_hub(

@@ -12,7 +12,11 @@ from src.adh_agents.programmes.pm.lead_tokens import extract_initiative
 from src.adh_agents.runtime.lead_commands import LeadCommand, match_lead_command
 from src.adh_agents.runtime.orchestrator import Orchestrator
 from src.adh_agents.runtime.presence import PresenceService
-from src.adh_agents.runtime.room_resolve import listen_rooms_for_tenants, resolve_tenant_for_room
+from src.adh_agents.runtime.room_resolve import (
+    is_engg_room,
+    listen_rooms_for_role,
+    resolve_tenant_for_room,
+)
 from src.adh_agents.runtime.work_models import AWAITING_AUTHORIZATION, AWAITING_JUDGMENT
 from src.adh_agents.settings import PeAgentSettings
 from src.business_services.buzz_service import BuzzService
@@ -56,11 +60,11 @@ class PEAgent(BaseHermesAgent):
         self._orchestrator.set_programme_runner(self._pe)
         for tenant in self._tenants.active():
             await self.ensure_hub_member(tenant.ops_room)
-        rooms = await listen_rooms_for_tenants(self._buzz, self._tenants)
+        rooms = await listen_rooms_for_role(self._buzz, self._tenants, self.role_id)
         await self.start_ops_listeners(rooms)
         await self._catch_up_pending_batons()
         self.start_listen_refresh_loop(
-            lambda: listen_rooms_for_tenants(self._buzz, self._tenants),
+            lambda: listen_rooms_for_role(self._buzz, self._tenants, self.role_id),
             interval_seconds=15.0,
         )
         self.logger.info("PEAgent listening", rooms=rooms)
@@ -103,6 +107,9 @@ class PEAgent(BaseHermesAgent):
                     await self._pe.handle_baton(baton, room=room)
                 return
         if message.kind == MessageKind.MESSAGE and (message.identity_handle or "") == self._lead:
+            # `#engg-*` is Dev floor — PE Lead cmds live on hub / `#task-*`.
+            if is_engg_room(room):
+                return
             body = (message.body or "").strip()
             if match_lead_command(body, allowed=[LeadCommand.ENGG_GO]) == LeadCommand.ENGG_GO:
                 init = extract_initiative(body, tenant.init_prefix)
