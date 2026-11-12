@@ -7,8 +7,18 @@ from typing import Any
 import pytest
 
 from src.adh_agents.programmes.dev.debate import _extract_decision, run_dev_debate
+from src.adh_agents.programmes.dev.programme import debate_context_excerpt
 from src.adh_agents.runtime.room_resolve import engg_room_slug_for, task_id_from_engg_room
 from src.models.prompt_models import PromptRunResult
+
+
+def test_debate_context_excerpt_head_tail() -> None:
+    body = "HEAD-" + ("x" * 20000) + "-TAIL"
+    out = debate_context_excerpt(body, limit=4000)
+    assert out.startswith("HEAD-")
+    assert out.endswith("-TAIL")
+    assert "omitted from middle" in out
+    assert len(out) < len(body)
 
 
 def test_engg_room_slug() -> None:

@@ -13,6 +13,10 @@ system: |
   revise_if (array of strings).
   recommend MUST be exactly one of the allowed reply tokens.
   Prefer converging early when evidence is clear — do not pad.
+  Context may be a head+tail excerpt of a longer on-disk artefact (look for an
+  "omitted from middle" marker). Never recommend `another round` only because
+  the paste looks truncated — judge the design substance; prefer the progressive
+  accept token when boundaries, contracts, and ADR stance are coherent.
 user: |
   Initiative {{ initiative }}. Purpose `{{ purpose }}`. Pass {{ pass_number }}/{{ max_passes }}.
   Challenge: {{ challenge }}

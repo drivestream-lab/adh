@@ -90,6 +90,28 @@ _ENTRY = "spec-draft"
 _STAGE_DONE = "board-seeded"
 # E1 fence — stop after board seed (coder / wave-* is later).
 _E1_TERMINAL = "board-tickets-action"
+# Debate packs see an excerpt — head+tail so mid-doc tables are not mistaken for "truncated TDD".
+_DEBATE_CONTEXT_CHARS = 14000
+_ANOTHER_ROUND_CAP = 2
+
+
+def debate_context_excerpt(text: str, *, limit: int = _DEBATE_CONTEXT_CHARS) -> str:
+    """Build debate evidence from a large artefact without implying the source is truncated."""
+    body = (text or "").strip()
+    if not body:
+        return ""
+    if len(body) <= limit:
+        return body
+    head = max(2000, limit // 2)
+    tail = max(2000, limit - head - 120)
+    omitted = len(body) - head - tail
+    return (
+        f"{body[:head]}\n\n"
+        f"… [{omitted} chars omitted from middle — full artefact on disk; "
+        f"do not treat this paste as incomplete] …\n\n"
+        f"{body[-tail:]}"
+    )
+
 
 _PASS_CHAIN = (
     "spec-draft",
@@ -907,12 +929,21 @@ class DevEnggProgramme(BaseBusinessService):
         root = resolve_repo_root(self._tenants.workspace_root(), repo) if repo else None
         ctx = ""
         if root is not None and (root / artefact).is_file():
-            ctx = (root / artefact).read_text(encoding="utf-8")[:8000]
+            ctx = debate_context_excerpt((root / artefact).read_text(encoding="utf-8"))
+        rounds = int(session.slots.get("tdd_another_round_count") or "0")
+        tokens = [ACCEPT_TDD_ADR, ANOTHER_ROUND, HOLD]
+        if rounds >= _ANOTHER_ROUND_CAP:
+            # Escape hatch: after capped findings loops, LLM must accept or hold.
+            tokens = [ACCEPT_TDD_ADR, HOLD]
+            ctx = (
+                f"(another-round cap {_ANOTHER_ROUND_CAP} reached — prefer "
+                f"`{ACCEPT_TDD_ADR}` when design is coherent)\n\n"
+            ) + (ctx or artefact)
         debate = await self._debate_hop(
             purpose="tdd-adr-acceptance",
             initiative=init,
             context=ctx or artefact,
-            reply_tokens=[ACCEPT_TDD_ADR, ANOTHER_ROUND, HOLD],
+            reply_tokens=tokens,
             session=session,
         )
         brief = tdd_adr_brief(self._briefs, initiative=init, artefact=artefact, debate=debate)
@@ -934,7 +965,7 @@ class DevEnggProgramme(BaseBusinessService):
         root = resolve_repo_root(self._tenants.workspace_root(), repo) if repo else None
         plan_body = ""
         if root is not None and (root / plan).is_file():
-            plan_body = (root / plan).read_text(encoding="utf-8")[:8000]
+            plan_body = debate_context_excerpt((root / plan).read_text(encoding="utf-8"))
             session.slots["implementation_plan_current"] = "true"
         if not session.slots.get("workmanifest_contract_pass"):
             await self._poster.post_status(
@@ -944,11 +975,19 @@ class DevEnggProgramme(BaseBusinessService):
                 identity_handle=self.role_id,
             )
             return
+        rounds = int(session.slots.get("coding_another_round_count") or "0")
+        tokens = [CODING_READY, ANOTHER_ROUND, HOLD]
+        if rounds >= _ANOTHER_ROUND_CAP:
+            tokens = [CODING_READY, HOLD]
+            plan_body = (
+                f"(another-round cap {_ANOTHER_ROUND_CAP} reached — prefer "
+                f"`{CODING_READY}` when plan/WorkManifest look coherent)\n\n"
+            ) + (plan_body or plan)
         debate = await self._debate_hop(
             purpose="coding-readiness",
             initiative=init,
             context=plan_body or plan,
-            reply_tokens=[CODING_READY, ANOTHER_ROUND, HOLD],
+            reply_tokens=tokens,
             session=session,
         )
         brief = coding_ready_brief(self._briefs, initiative=init, plan_path=plan, debate=debate)
@@ -1059,6 +1098,8 @@ class DevEnggProgramme(BaseBusinessService):
         allowed = [ACCEPT_TDD_ADR, ANOTHER_ROUND, HOLD]
         matched = normalize_reply(token, allowed) or token
         if matched == ANOTHER_ROUND:
+            n = int(session.slots.get("tdd_another_round_count") or "0") + 1
+            session.slots["tdd_another_round_count"] = str(n)
             session.awaiting = AWAITING_NONE
             session.open_brief = None
             self._navigator.advance(session, "findings")
@@ -1067,6 +1108,7 @@ class DevEnggProgramme(BaseBusinessService):
             return
         if matched == ACCEPT_TDD_ADR:
             session.slots["tdd_adr_accepted"] = "true"
+            session.slots.pop("tdd_another_round_count", None)
             session.awaiting = AWAITING_NONE
             session.open_brief = None
             self._mark_tdd_status_accepted(tenant, session)
@@ -1087,6 +1129,8 @@ class DevEnggProgramme(BaseBusinessService):
         allowed = [CODING_READY, ANOTHER_ROUND, HOLD]
         matched = normalize_reply(token, allowed) or token
         if matched == ANOTHER_ROUND:
+            n = int(session.slots.get("coding_another_round_count") or "0") + 1
+            session.slots["coding_another_round_count"] = str(n)
             session.awaiting = AWAITING_NONE
             session.open_brief = None
             self._navigator.advance(session, "findings")
@@ -1110,6 +1154,7 @@ class DevEnggProgramme(BaseBusinessService):
                 return
             session.slots["coding_ready_accepted"] = "true"
             session.slots["spec_gate2_attested"] = "true"
+            session.slots.pop("coding_another_round_count", None)
             session.awaiting = AWAITING_NONE
             session.open_brief = None
             self._navigator.advance(session, "pass")
