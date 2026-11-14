@@ -30,13 +30,17 @@ Human INIT-005 verify     ✅  full human forward → archive; hub traj mirrors
 ── landed (E1 Dev YAML) ──
 E1 Dev engg = workflow.yaml  ✅  develop tip; Gate2 + engg isolation (#30/#31); 002 board-seeded
 
-── planning (greenfield — no dual path) ──
-B0–B3 Hermes behaviour harness  🟨  single PR — ADR 0004 Accepted; packs+runners landed in branch;
-                                 live verify **003 god / 004 human** after merge
+── behaviour harness ──
+B0–B3 Hermes behaviour harness  ✅  ADR 0004; packs+runners; Dev+PE live 003/004;
+                                 Stratum dry-run bank (#40)
                                  [hermes-behaviour-harness-plan.md](hermes-behaviour-harness-plan.md)
 
+── planning (Coder) ──
+C0–C4 Coder hire (`adh.coder`)  🟨  ADR 0005 + [coder-hire-plan.md](coder-hire-plan.md)
+                                 YAML wave-* after board-seed; live on board-seeded INIT
+
 ── later ──
-Coder hire (`adh.coder`) + verify agent + qa / iac / sre / obs + codegraph MCP + TaskGraph   ⬜
+verify agent + qa / iac / sre / obs + codegraph MCP + TaskGraph   ⬜
 ```
 
 

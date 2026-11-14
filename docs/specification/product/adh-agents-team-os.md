@@ -126,7 +126,7 @@ Both required. See [ADR 0004](../adr/0004-hermes-behaviour-harness.md) + [behavi
 |------|---------|------|----------------|
 | PM | `adh.pm` | Requirements → draft PRD PR; product answers; PRD merge | Verify first on new OS; `hermes.pm.*` gold |
 | Dev | `adh.dev` | YAML `development` lane after PRD merge: spec → spec PR → review/plan → merge → board | E1 landed; behaviour packs wave B1 |
-| Coder | `adh.coder` (later) | Execute board/WorkManifest → code PRs | After Dev fence |
+| Coder | `adh.coder` | Execute board/WorkManifest waves → code + draft wave PRs | Hiring now — [ADR 0005](../adr/0005-coder-hire.md) + [coder-hire-plan.md](../plans/coder-hire-plan.md); after Dev `board-seeded` |
 | Read | `adh.read` | Walk one repo; Buzz rollup | Before / with PE fan-out |
 | PE | `adh.pe` | Product review: fan-out reads, ≤10 Q / ≤2 agent rounds, attest, ping PM | Behaviour packs wave B2 |
 | KB | `adh.kb` | Patch OKF `knowledge/` heads; feed next-hop `kb_excerpt` | After merge enrich; loop Mode A in B3 |
@@ -247,4 +247,4 @@ See [`../references/adh-kb-heads.md`](../references/adh-kb-heads.md).
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md) · **As-built:** [`../as-built/implementation-status.md`](../as-built/implementation-status.md)
 
 Enabler = `BaseHermesAgent`; control plane = Orchestrator in `adh_agents/runtime`.  
-**Next:** E1 **greenfield** Dev rewrite + platform extract/decide; verify **001/002** (Dev) and **007/008** (PM+PE); coder hire later.
+**Next:** Hire **`adh.coder`** (ADR 0005) — YAML wave-* after Dev board-seed; verify on board-seeded RealWorld INIT.

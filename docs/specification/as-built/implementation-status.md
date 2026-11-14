@@ -30,7 +30,8 @@
 | E1 Dev engg = workflow.yaml | ✅ develop tip (#29–#31); YAML walker + Gate2 + engg isolation; INIT-002 board-seeded |
 | ADR 0003 platform extract/decide | ✅ labeled-line extract; phrase-list Lead cmds + agentic hole; Dev wired |
 | B0–B3 Hermes behaviour harness | 🟨 [ADR 0004](../adr/0004-hermes-behaviour-harness.md) Accepted; packs + PromptService runners; Dev live **003/004** done earlier; **B2 PE live** ✅ artefact replay Gate-1 + impact.challenge on Impact-Maps → `/tmp/adh-hermes-pe-b2-live/` (003 god / 004 human; recommend ∈ tokens) |
-| Stratum Hermes dry-run (no onboard) | ✅ Fixtures `tests/fixtures/hermes/stratum/`; L1/L2 `test_hermes_stratum_dryrun.py`; L3 `python -m tests.verify.hermes_stratum_dryrun [--live]` |
+| Stratum Hermes dry-run (no onboard) | ✅ Fixtures `tests/fixtures/hermes/stratum/`; L1/L2 `test_hermes_stratum_dryrun.py`; L3 `python -m tests.verify.hermes_stratum_dryrun [--live]` (#40) |
+| C0 Coder hire docs | 🟨 [ADR 0005](../adr/0005-coder-hire.md) + [coder-hire-plan.md](../plans/coder-hire-plan.md) — wave-* after board-seed |
 
 
 ## Landed (0b)
