@@ -1,0 +1,104 @@
+# Stratum-shaped Hermes dry-run scenario index.
+# INIT ids live only here (packs/runners stay tenant-agnostic).
+# No Buzz / forge / tenants.yaml — fixtures only.
+meta_repo: stratum-meta
+
+scenarios:
+  edge-008:
+    initiative: INIT-STRATUM-008
+    dir: edge-008
+    impact_map: Impact-Map.md
+    think: prd-think.md
+    quality: prd-quality.md
+    expected_affected:
+      - repo: stratum-edge-agent
+        full_name: Sandvik-Common/stratum-edge-agent
+        spec_to_create: INIT-STRATUM-008-edge-agent.md
+    deferred_must_not_include:
+      - stratum-platform-core
+      - stratum-iac-infra
+      - stratum-hitl-web
+      - stratum-meta
+
+  core-002:
+    initiative: INIT-STRATUM-PLATFORM-CORE-002
+    dir: core-002
+    impact_map: Impact-Map.md
+    think: prd-think.md
+    quality: prd-quality.md
+    expected_affected:
+      - repo: stratum-platform-core
+        full_name: Sandvik-Common/stratum-platform-core
+        spec_to_create: INIT-STRATUM-PLATFORM-CORE-002-platform-core.md
+    deferred_must_not_include:
+      - stratum-hitl-web
+      - stratum-meta
+
+  hitl-001:
+    initiative: INIT-STRATUM-HITL-WEB-001
+    dir: hitl-001
+    impact_map: Impact-Map.md
+    think: prd-think.md
+    quality: prd-quality.md
+    expected_affected:
+      - repo: stratum-hitl-web
+        full_name: Sandvik-Common/stratum-hitl-web
+        spec_to_create: INIT-STRATUM-HITL-WEB-001-hitl-web.md
+    deferred_must_not_include:
+      - stratum-meta
+
+  iac-004:
+    initiative: INIT-STRATUM-IAC-004
+    dir: iac-004
+    impact_map: Impact-Map.md
+    think: prd-think.md
+    quality: prd-quality.md
+    expected_affected:
+      - repo: stratum-iac-infra
+        full_name: Sandvik-Common/stratum-iac-infra
+        spec_to_create: INIT-STRATUM-IAC-004-iac-infra.md
+    deferred_must_not_include:
+      - stratum-meta
+
+# Per-role hops exercised against every scenario (L1 render / L3 complete).
+hops:
+  - id: pe.impact.challenge
+    kind: template
+    pack: hermes.pe.impact.challenge
+    live: true
+  - id: pe.gate1.recommend
+    kind: template
+    pack: hermes.pe.gate1.recommend
+    live: true
+  - id: dev.debate.pass
+    kind: template
+    pack: hermes.dev.debate.pass
+    live: true
+  - id: dev.decide.reply
+    kind: template
+    pack: hermes.dev.decide.reply
+    live: true
+  - id: dev.decide.outcome
+    kind: template
+    pack: hermes.dev.decide.outcome
+    live: true
+  - id: kb.learning.harvest
+    kind: template
+    pack: hermes.kb.learning.harvest
+    live: true
+  - id: kb.head.fill
+    kind: template
+    pack: hermes.kb.head.fill
+    live: true
+  - id: pm.validate.card
+    kind: template
+    pack: hermes.pm.validate.card
+    live: true
+  - id: pm.promote.judge
+    kind: copy
+    pack: hermes.pm.promote.judge
+    live: false  # copy-catalog: render only (artifact instruction, not JSON complete)
+  - id: pm.postpm.judge
+    kind: copy
+    pack: hermes.pm.postpm.judge
+    live: false
