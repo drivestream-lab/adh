@@ -55,9 +55,12 @@ C10 Live: human INIT — Lead plays wave-acceptance / signoff             ⬜
 | C.10 | **Ready-set scheduling** — Coder(s) claim only waves whose `depends_on` waves are done; never invent parallelism beyond the WM DAG |
 | C.11 | Guinea pigs: reuse board-seeded RealWorld INIT (004 human preferred; one god) — wipe coder session only, not Dev artefacts |
 | C.12 | Greenfield — delete “Coder hire is later” strings / stubs in the same PR as baton emit |
-| C.13 | **Swarm unit = repo-scoped coder handle** (`adh.coder.<repo>`) — one worker process per Affected repo when multiple ready waves target different repos |
+| C.13 | **Swarm unit = repo-scoped coder handle** (`adh.coder.<repo>`) — derived from Affected/WM `repo`, never hardcoded repo lists |
 | C.14 | **Within one repo / one wave:** walk TASK `depends_on` in order on **one** head branch; do not fan-out parallel TASK workers in v1 (WM defers `parallel_safe` / `shared_files`) |
 | C.15 | Lead (or god) still owns **wave-acceptance / wave-signoff** per wave tip — swarm does not auto-merge |
+| C.16 | **No hardcoding** — `integration_branch`, org, repos, INIT ids, board names come from tenant + WM + board + baton only |
+| C.17 | **Parallel cap** — `max_parallel_coders` (settings/env, overridable) clips ready-set; per-repo lease = 1; never spawn “all Affected” blindly |
+| C.18 | **Human-coder review bar (Hermes)** — after skills land tip: MDC/rules violations by severity (fix **P0/P1**, consciously defer **P2** with why); CAP/J coverage vs PRD+spec; fixtures/stimulus cover expectation; same packs drive **human** briefs and **god** `recommend` |
 
 ---
 
@@ -99,11 +102,40 @@ Buzz `#engg-<id>` stays the collaboration floor; board columns are the swarm sco
 
 ### What Coder owes Lead per wave
 
-- Pre-implement checklist on head  
+- Pre-implement checklist on head (clean sync of `integration_branch`)  
 - TASK\* execution + proofs → `Wave-Execution-{INIT}-W{n}.md`  
-- Draft wave PR (`wave-pr-action`)  
-- Brief for `wave-acceptance` (human or god)  
+- Draft wave PR (`wave-pr-action`, base = `integration_branch`)  
+- **Human-shaped review brief** for `wave-acceptance` / signoff (below)  
 - No merge without `wave-signoff`
+
+### Hermes value — mimic a human developer (collaborative human + god)
+
+Skills (`loop-spec` / `pre-implement`) are the hands. **Hermes `hermes.coder.*`** is how *you* review what those hands did before accepting the tip — same card in **human** (you reply tokens) and **god** (GateOpener plays `recommend`).
+
+```text
+skill tip (code + fixtures + Wave-Execution)
+        ↓
+hermes.coder.review / wave-acceptance brief
+  1) MDC / rules scan → severity bucket
+  2) Fix or demand fix: P0, P1
+  3) P2: explicit leave-with-why (not silent ignore)
+  4) CAP-* / J-* implemented vs PRD + spec slice
+  5) Fixtures / live_verify cover those CAP/J (stimulus+probes) — gaps called out
+  6) recommend ∈ reply_tokens + locking / not_locking / revise_if
+        ↓
+Lead (human) or god plays token → accept / findings / hold
+```
+
+| Human habit | Pack behaviour |
+|-------------|----------------|
+| Read diff vs `.cursor/rules` / MDC | List violations with **P0 / P1 / P2** |
+| Fix blockers before ask-for-review | P0/P1 → `findings` / hold until tip patched (or skill re-entry) |
+| “Why I left the lint nits” | P2 → `not_locking` + why deferred this wave |
+| Trace CAP/J to PRD/spec | Coverage matrix in brief (covered / missing / N/A) |
+| Do fixtures actually prove the story? | Fixture paths ↔ CAP/J ↔ REQ; call thin or missing packs |
+| Pair with Lead | Buzz helpful-army brief; god uses same `recommend` |
+
+**Not Hermes:** inventing TASK order, moving board columns, opening the PR, running live smoke and claiming look-at success (skill handoff already forbids that — human/god prove at acceptance).
 
 ---
 
@@ -128,7 +160,7 @@ PE → Dev (engg YAML → board-tickets-action)
 | **C1** | `settings.CoderAgentSettings`, `agents/coder_agent.py`, `adh_coder_worker.py`, `scripts/run_adh_coder_worker.sh`, Makefile |
 | **C2** | `programmes/dev` emit coder baton; `programmes/coder/` YAML walker |
 | **C3** | Wire forge actions already used by Dev where YAML overlaps; wave-specific open_draft_pr / board status |
-| **C4** | `src/prompts/hermes.coder.*`; thin runners |
+| **C4** | `src/prompts/hermes.coder.*` (review / wave-acceptance / signoff) — MDC severity + CAP/J + fixtures; thin runners; human+god same packs |
 | **C5** | Units: stage order, baton claim, WM fail-closed; live 004/god |
 
 ---
