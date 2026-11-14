@@ -41,7 +41,7 @@ B9 Guinea pig **003/004**: post-fence learning visible on next hop  ⬜
 
 ── later ──
 Mode B: learning → Lead-gated hermes.*.yaml PR drafts         ⬜
-Coder hire behaviour packs                                    ⬜
+Coder hire behaviour packs                                    → see [coder-hire-plan.md](coder-hire-plan.md)
 Agentic Lead classify (ADR 0003 hole)                         ⬜
 ```
 
