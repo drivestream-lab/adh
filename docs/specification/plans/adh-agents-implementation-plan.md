@@ -51,7 +51,14 @@ verify agent + qa / iac / sre / obs + codegraph MCP + TaskGraph   ⬜
 
 ## Behaviour harness (landed — ADR 0004)
 
-Two harnesses: **delivery** = `workflow.yaml` + prayog + forge; **behaviour** = `src/prompts/hermes.{role}.*` via PromptService only. No tenant/INIT hardcoding in packs. Dev/PE/KB packs live; Stratum dry-run fixtures under `tests/fixtures/hermes/stratum/`. Coder packs are **this plan’s Coder wave** (not a separate plan file).
+**Inner / outer (normative):**
+
+| Layer | Name | What it does |
+|-------|------|----------------|
+| **Inner** | Repo / delivery harness | Skills + forge + repo MDC + fixtures — **generates the code/tip** |
+| **Outer** | Hermes / human harness | `hermes.{role}.*` packs — **mimics the human** reviewing that tip; briefs always |
+
+No tenant/INIT hardcoding in packs. Dev/PE/KB packs live; Stratum dry-run under `tests/fixtures/hermes/stratum/`. Coder packs = this plan’s Coder wave.
 
 ---
 

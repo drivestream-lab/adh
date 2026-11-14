@@ -6,9 +6,9 @@
 
 ## Decision
 
-1. **Two harnesses, one stack**
-   - **Delivery harness** — `workflow.yaml` + prayog skills + forge ACL (unchanged ownership).
-   - **Behaviour harness** — Hermes **role prompt packs** via `PromptService` only (`src/prompts/hermes.{role}.*`). Codifies *how the hire thinks* at judgment/authorize hops.
+1. **Two harnesses, one stack (inner / outer)**
+   - **Inner — repo / delivery harness** — `workflow.yaml` + prayog skills + forge ACL (+ repo MDC/fixtures). **Generates** code and artefacts.
+   - **Outer — Hermes / human harness** — role prompt packs via `PromptService` only (`src/prompts/hermes.{role}.*`). **Mimics the human** at judgment hops; briefs always (human awaits token; god consumes `recommend`).
 2. **Greenfield — no dual path, no dead code.** In the behaviour wave PR(s): delete inline system/user prompt construction for judgment/decide/debate, plus unused helpers and obsolete tests. Callers pass `template_id` + variables only. No “fallback inline if template missing,” no stubs left “for later.”
 3. **Pack layout (SSOT)**
    - `hermes.pm.*` — keep; gold pattern (already live).

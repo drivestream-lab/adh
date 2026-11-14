@@ -108,14 +108,14 @@ become a second task SSOT.
 
 ## Two harnesses (normative)
 
-| Harness | SSOT | Job |
-|---------|------|-----|
-| **Delivery** | `workflow.yaml` + prayog skills + forge ACL | Produce artefacts; GitHub; predicates |
-| **Behaviour** | `src/prompts/hermes.{role}.*` via PromptService | Mimic human judgment — questions, ADR/TDD/impact review, recommend |
+| Layer | Harness | SSOT | Job |
+|-------|---------|------|-----|
+| **Inner** | **Repo / delivery** | `workflow.yaml` + prayog skills + forge + repo MDC/rules + fixtures | Actually generate code and artefacts; GitHub; predicates |
+| **Outer** | **Hermes / human** | `src/prompts/hermes.{role}.*` via PromptService | Mimic the human (Lead/eng) — review, ask, recommend; always briefs; human awaits token / god consumes `recommend` |
 
-Skills without behaviour packs = pipeline with token gates.  
-Behaviour packs without skills = reviewer with no delivery teeth.  
-Both required. See [ADR 0004](../adr/0004-hermes-behaviour-harness.md) + sole plan [adh-agents-implementation-plan.md](../plans/adh-agents-implementation-plan.md) (Behaviour section).  
+Inner without outer = pipeline with no human judgment.  
+Outer without inner = reviewer with no hands.  
+Both required. See [ADR 0004](../adr/0004-hermes-behaviour-harness.md) + sole plan [adh-agents-implementation-plan.md](../plans/adh-agents-implementation-plan.md).  
 **Greenfield:** no inline judgment prompts; delete dual paths in-wave. Knowledge closes the evolution loop (Mode A inject → Mode B Lead-gated prompt PRs later).
 
 **Stratum dry-run (fixtures only):** CI L1/L2 + opt-in L3 — fixtures under `tests/fixtures/hermes/stratum/`; tracked in the sole implementation plan.
