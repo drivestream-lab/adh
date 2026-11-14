@@ -118,6 +118,8 @@ Behaviour packs without skills = reviewer with no delivery teeth.
 Both required. See [ADR 0004](../adr/0004-hermes-behaviour-harness.md) + [behaviour plan](../plans/hermes-behaviour-harness-plan.md).  
 **Greenfield:** no inline judgment prompts; delete dual paths in-wave. Knowledge closes the evolution loop (Mode A inject → Mode B Lead-gated prompt PRs later).
 
+**Stratum dry-run (fixtures only):** CI L1/L2 + opt-in L3 against Stratum Impact-Map scenarios — not tenant onboard, not a substitute for RealWorld live **003/004**. See behaviour plan § Stratum Hermes dry-run slate; fixtures under `tests/fixtures/hermes/stratum/`.
+
 ## Roles (incremental roster)
 
 | Role | Buzz id | Owns | Hire / verify |

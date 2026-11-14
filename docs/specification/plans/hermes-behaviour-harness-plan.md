@@ -28,8 +28,11 @@ B3 Units + prompt contract; rg clean (zero hits)              ⬜
 B4 Live verify Dev **INIT-003 god** / **INIT-004 human**      ⬜
 
 ── wave B2 (PE packs — same guinea pigs) ──
-B5 hermes.pe.* + PE programme wired; DELETE heuristic judge dead code  ⬜
-B6 Live verify PE on **003 god** / **004 human** (product→engg as needed)  ⬜
+B5 hermes.pe.* + PE programme wired; DELETE heuristic judge dead code  ✅
+B6 Live verify PE on **003 god** / **004 human** (product→engg as needed)  ✅
+   evidence: /tmp/adh-hermes-pe-b2-live/{init-realworld-003,init-realworld-004}/
+   (product fence already closed — live PromptService.complete on Impact-Maps;
+    gate1.recommend ∈ await_pm|new_round|hold|attest; impact.challenge ∈ proceed|revise_map|hold)
 
 ── wave B3 (knowledge loop Mode A) ──
 B7 Inject OKF head excerpts into hop variables                ⬜
@@ -234,6 +237,31 @@ KB does **not** become initiative folders. Heads stay as [adh-kb-heads.md](../re
 
 ---
 
+## Stratum Hermes dry-run slate (no tenant onboard)
+
+Distinct from RealWorld **live** guinea pigs **INIT-003 / INIT-004**. Pressure-tests the
+same two harnesses against **Stratum-shaped** artefacts (multi-table Impact-Maps,
+`Sandvik-Common/…` full names, edge / platform-core / HITL / IaC) **without**
+`tenants.yaml`, roles install, Buzz army, or forge.
+
+| Layer | What | When |
+|-------|------|------|
+| **L1** pack render | Every `hermes.{pm,pe,dev,kb}.*` hop × scenario via PromptService | CI — `tests/unit/test_hermes_stratum_dryrun.py` |
+| **L2** delivery parse | `parse_affected_repos` Affected-only + Spec path/branch goldens | CI — same file |
+| **L3** live complete | Opt-in model complete → `/tmp/adh-hermes-stratum-dryrun/` | Lead laptop only |
+
+Fixtures + index: [`tests/fixtures/hermes/stratum/`](../../../tests/fixtures/hermes/stratum/)
+(`scenarios.yaml`). Runner:
+
+```bash
+.venv/bin/python -m tests.verify.hermes_stratum_dryrun
+.venv/bin/python -m tests.verify.hermes_stratum_dryrun --live --scenarios edge-008,core-002
+```
+
+Scenarios: `edge-008`, `core-002`, `hitl-001`, `iac-004`. No `src/` changes required for the dry-run bank.
+
+---
+
 ## Out of scope
 
 - Mode C auto-merge of prompt packs  
@@ -241,6 +269,8 @@ KB does **not** become initiative folders. Heads stay as [adh-kb-heads.md](../re
 - Coder / verify / qa hires  
 - Replacing forge/label/Gate 2 mechanical rules with prompts  
 - Rewriting E1 YAML walker  
+- Stratum tenant registration / ORCH cutover (dry-run uses fixtures only)  
+
 
 ---
 
