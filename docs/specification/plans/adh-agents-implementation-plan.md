@@ -1,12 +1,13 @@
 # Implementation plan — ADH Agents Team OS
 
-**Status:** D1–D5 + U1–U6 + **Floor F1–F9** landed on `develop` ([PR #25](https://github.com/drivestream-lab/adh/pull/25)). God guinea pig `INIT-REALWORLD-004` archived.  
-**ADR:** [0002](../adr/0002-adh-agents-team-os.md)  
+**Status:** Active — **sole implementation plan SSOT** for this repo (no sibling `*-plan.md` files).  
+**ADRs:** [0002](../adr/0002-adh-agents-team-os.md) Team OS · [0003](../adr/0003-platform-agentic-extract-decide.md) extract/decide · [0004](../adr/0004-hermes-behaviour-harness.md) behaviour · [0005](../adr/0005-coder-hire.md) Coder  
 **Product:** [adh-agents-team-os.md](../product/adh-agents-team-os.md)  
 **KB heads:** [adh-kb-heads.md](../references/adh-kb-heads.md)  
-**As-built:** [implementation-status.md](../as-built/implementation-status.md)
+**As-built:** [implementation-status.md](../as-built/implementation-status.md)  
+**YAML:** `prayog-skills/workflow.yaml`
 
-This is the **work tracker SSOT**.  
+This file is the **only** work tracker + locks + file-level plan. Decisions stay in ADRs; live status in as-built.  
 **No legacy / dual paths.** Greenfield replacements delete the old path in the same PR.  
 **ADH is the product**; RealWorld is guinea pig only.
 
@@ -28,21 +29,107 @@ H1 Human rewind + traj    ✅  PR #27; 006 promote rewind+traj; 005 post-merge `
 Human INIT-005 verify     ✅  full human forward → archive; hub traj mirrors
 
 ── landed (E1 Dev YAML) ──
-E1 Dev engg = workflow.yaml  ✅  develop tip; Gate2 + engg isolation (#30/#31); 002 board-seeded
+E1 Dev engg = workflow.yaml  ✅  develop tip; Gate2 + engg isolation (#30/#31); board-seed fence
 
-── behaviour harness ──
+── landed (behaviour) ──
 B0–B3 Hermes behaviour harness  ✅  ADR 0004; packs+runners; Dev+PE live 003/004;
                                  Stratum dry-run bank (#40)
-                                 [hermes-behaviour-harness-plan.md](hermes-behaviour-harness-plan.md)
 
-── planning (Coder) ──
-C0–C4 Coder hire (`adh.coder`)  🟨  ADR 0005 + [coder-hire-plan.md](coder-hire-plan.md)
-                                 YAML wave-* after board-seed; live on board-seeded INIT
+── active (Coder) ──
+C0 docs / locks (this section)     🟨  ADR 0005; locks C.1–C.19 below
+C1 spine (agent+worker+baton)      ⬜
+C2 YAML walker wave-* + forge      ⬜
+C3 hermes.coder.* + units          ⬜
+C4 live board-seeded INIT god/human ⬜
 
 ── later ──
 verify agent + qa / iac / sre / obs + codegraph MCP + TaskGraph   ⬜
 ```
 
+
+---
+
+## Behaviour harness (landed — ADR 0004)
+
+**Inner / outer (normative):**
+
+| Layer | Name | What it does |
+|-------|------|----------------|
+| **Inner** | Repo / delivery harness | Skills + forge + repo MDC + fixtures — **generates the code/tip** |
+| **Outer** | Hermes / human harness | `hermes.{role}.*` packs — **mimics the human** reviewing that tip; briefs always |
+
+No tenant/INIT hardcoding in packs. Dev/PE/KB packs live; Stratum dry-run under `tests/fixtures/hermes/stratum/`. Coder packs = this plan’s Coder wave.
+
+---
+
+## Coder hire (active — ADR 0005)
+
+**Intent:** After Dev `board-seeded`, Coder walks YAML `wave-in-progress-action` → `pre-implement` → `loop-spec` → `wave-pr-action` → `wave-acceptance` → … → `wave-signoff`. Thin baton + Buzz `@adh.coder…` on `#engg-<id>`; work graph SSOT = board + WM.
+
+### Alignment (contracts)
+
+| Contract | Rule |
+|----------|------|
+| ADR 0001 / `workflow.yaml` | No invented hops; Dev does not move wave → In Progress |
+| ADR 0002 / Team OS | Batons + CollabPost; no INIT/repo literals |
+| ADR 0003 | Human + god same GateOpener / extract |
+| ADR 0004 | `hermes.coder.*` PromptService-only |
+| Prayog WM / live-fixture | `parallel_safe` deferred → serial TASK\*; `cap-{nn}-<slug>` + human titles |
+| Parallel INIT sessions (landed) | ≠ coder swarm; separate `max_parallel_coders` |
+
+### Locks C.1–C.19
+
+| # | Lock |
+|---|------|
+| C.1 | Buzz `adh.coder` / `adh.coder.<repo>` (suffix from WM/Affected — not hardcoded lists) |
+| C.2 | YAML-only after board seed through wave-signoff / complete |
+| C.3 | Dev does not code — fence `board-seeded`; baton to Coder |
+| C.4 | Floor `#engg-<id>`; board Issues = tickets |
+| C.5 | Skills + forge from pin only |
+| C.6 | GateOpener only on YAML human-checkpoints (`wave-acceptance`, `wave-signoff`, …) |
+| C.7 | God plays `recommend` on those gates |
+| C.8 | `hermes.coder.*` via PromptService only |
+| C.9 | WM + board ticket binding — fail closed |
+| C.10 | Ready-set only (`depends_on` satisfied); no invented parallelism |
+| C.11 | Guinea pigs: board-seeded RealWorld INIT (004 human + one god) |
+| C.12 | Delete “Coder hire is later” in same PR as baton |
+| C.13 | Swarm unit = repo lease / handle |
+| C.14 | Within wave: serial TASK\* on one head (WM defers `parallel_safe`) |
+| C.15 | Lead/god own acceptance + signoff — no auto-merge |
+| C.16 | No hardcoding — tenant `integration_branch`, org, repos, board from data |
+| C.17 | `max_parallel_coders` (settings/env) clips ready-set; per-repo lease = 1 |
+| C.18 | Human-coder review: MDC P0/P1 fix; P2 defer+why; CAP/J vs PRD/spec; fixtures; human+god same packs |
+| C.19 | Human-named CAP/J packet for later QA/verifier — bare `CAP-01` fail |
+
+### Handoff artefacts (Dev → Coder)
+
+Merged spec(s) on `integration_branch` · plan §9 WM (walk-time) · **board EPIC+waves** (long-term WM) · seed URLs · `#engg-…`. Dev **creates** tickets; Coder **moves** them (In Progress → Done per YAML).
+
+### Hermes on Coder (outer human harness over inner repo harness)
+
+**Inner** (skills + forge + repo MDC + fixtures): generates the tip.  
+**Outer** (`hermes.coder.*`): human-coder review — **brief always**. Human awaits your token; god consumes the same `recommend`.
+
+```text
+INNER → tip → OUTER Hermes brief (MDC P0/P1/P2 · named CAP/J · fixtures↔PRD/spec)
+                → human awaits  |  god uses recommend
+```
+
+Coverage packet: `{id, human_title, fixture_path, covers, prove_status}` — value for later QA/verifier hire.
+
+### File-level (Coder)
+
+| Step | Scope |
+|------|--------|
+| C0 | ADR 0005 + this section + Team OS / as-built |
+| C1 | `CoderAgent` + `adh_coder_worker` + `make adh-coder` + Dev baton |
+| C2 | Programme YAML walker from `wave-in-progress-action`; forge board/PR |
+| C3 | `hermes.coder.*`; units; WM fail-closed |
+| C4 | Live god + human on board-seeded INIT |
+
+### Coder out of scope
+
+Verify/qa/iac/sre/obs · codegraph MCP · Stratum tenant onboard · moving Dev fence past board-seed
 
 ---
 
@@ -174,7 +261,7 @@ verify agent + qa / iac / sre / obs + codegraph MCP + TaskGraph   ⬜
 **No legacy / no dual spine.** Delete the invented programme stages (including **`deps-acceptance`**) and rewrite Dev to walk YAML only.
 
 **Product fence → engg:** After **`prd-merge`**, PE → Dev baton opens `#engg-<id>`. Dev runs skills + forge against the **Impact-Map repos** (PRD + codebase → **spec**), not a meta-only report theatre.  
-**Coder** (`adh.coder` / `loop-spec` waves) stays **out of E1**.
+**Coder** (`adh.coder` / `loop-spec` waves) was **out of E1** (board-seed fence). Active now — see **Coder hire** section above.
 
 **Live slate reset (2026-11-11):** Deleted `#engg-init-realworld-001`, `#task-init-realworld-001`, task row/events, and Redis work/baton/god-chain for **INIT-REALWORLD-001**. Guinea pigs restart from scratch after the rewrite.
 
@@ -240,9 +327,9 @@ G0 docs → G1 delete dead Dev spine → G2 YAML programme walker
 | **G5** | Units: YAML order, no `deps-acceptance`, god re-entry, board predicates; `rg` clean (no `re` under `adh_agents`) |
 | **G6** | Fresh rooms: Dev **001 god / 002 human**; PM+PE **007 god / 008 human**; army restart; evidence in PR |
 
-### Out of scope (E1)
+### Out of scope (E1 — historical)
 
-`adh.coder`, `pre-implement` / `loop-spec` / wave PRs as OS bar, codegraph MCP productization, collapsing engg into task room, inventing catalogue nodes in ADH.
+Wave coding / `adh.coder` (now **Coder hire** section) · codegraph MCP · collapsing engg into task room · inventing catalogue nodes in ADH.
 
 ---
 
@@ -417,32 +504,31 @@ F1 → F2 → F3 → F4 → F5 → F6 → F7 → F8 → F9
 
 ---
 
-## Out of scope (this PR)
+## Out of scope (floor / historical PR notes)
 
 - Webhook-grade GH ingress (poll stub only)
-- Dev / QA / IaC / TaskGraph hires
 - Auto-delete task rooms on Redis TTL
 - Trajectory files in meta git
-- Splitting F1–F9 across multiple product PRs
 
 ---
 
 ## Landed reference (condensed)
 
-U1–U6 file plans executed: `gate_coach`, `delivery_voice`, `post_human_next`, land+sync, KB land+approve, PE↔PM settle, OKF context, human_replies. See git history PRs #21–#24 and as-built.
+U1–U6 · F1–F9 · E1 Dev · ADR 0004 behaviour · Stratum dry-run #40 · ADR 0005 C0 docs. See as-built + git history.
 
 ### Develop merge ledger (recent)
 
 | PR | Summary |
 |----|---------|
-| #21 | Gate‑1 decision paper + global temp purge |
-| #22 | GraphQL undraft before merge |
-| #23 | U1–U6 helpful-army + clarification rally |
-| #24 | KB land pre-approve + reopen Buzz gate |
-| next | **F1–F9 Team floor (single PR)** |
+| #25–#31 | Floor + E1 Dev YAML |
+| #32+ | Behaviour harness packs |
+| #39 | Impact-Map Affected-only |
+| #40 | Stratum Hermes dry-run + B2 PE slate |
+| #41 | ADR 0005 Coder C0 |
+| next | Single-plan consolidation + Coder C1 |
 
 ---
 
-## Later hires (unchanged north star)
+## Later hires (north star)
 
-dev / qa / iac / sre / obs · codegraph MCP · TaskGraph as hire when Impact-Map alone is insufficient for mutate tiers.
+**qa / verifier** (consumes C.19 packet) · iac / sre / obs · codegraph MCP · TaskGraph when Impact-Map alone is insufficient.

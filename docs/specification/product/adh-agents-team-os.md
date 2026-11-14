@@ -108,17 +108,17 @@ become a second task SSOT.
 
 ## Two harnesses (normative)
 
-| Harness | SSOT | Job |
-|---------|------|-----|
-| **Delivery** | `workflow.yaml` + prayog skills + forge ACL | Produce artefacts; GitHub; predicates |
-| **Behaviour** | `src/prompts/hermes.{role}.*` via PromptService | Mimic human judgment — questions, ADR/TDD/impact review, recommend |
+| Layer | Harness | SSOT | Job |
+|-------|---------|------|-----|
+| **Inner** | **Repo / delivery** | `workflow.yaml` + prayog skills + forge + repo MDC/rules + fixtures | Actually generate code and artefacts; GitHub; predicates |
+| **Outer** | **Hermes / human** | `src/prompts/hermes.{role}.*` via PromptService | Mimic the human (Lead/eng) — review, ask, recommend; always briefs; human awaits token / god consumes `recommend` |
 
-Skills without behaviour packs = pipeline with token gates.  
-Behaviour packs without skills = reviewer with no delivery teeth.  
-Both required. See [ADR 0004](../adr/0004-hermes-behaviour-harness.md) + [behaviour plan](../plans/hermes-behaviour-harness-plan.md).  
+Inner without outer = pipeline with no human judgment.  
+Outer without inner = reviewer with no hands.  
+Both required. See [ADR 0004](../adr/0004-hermes-behaviour-harness.md) + sole plan [adh-agents-implementation-plan.md](../plans/adh-agents-implementation-plan.md).  
 **Greenfield:** no inline judgment prompts; delete dual paths in-wave. Knowledge closes the evolution loop (Mode A inject → Mode B Lead-gated prompt PRs later).
 
-**Stratum dry-run (fixtures only):** CI L1/L2 + opt-in L3 against Stratum Impact-Map scenarios — not tenant onboard, not a substitute for RealWorld live **003/004**. See behaviour plan § Stratum Hermes dry-run slate; fixtures under `tests/fixtures/hermes/stratum/`.
+**Stratum dry-run (fixtures only):** CI L1/L2 + opt-in L3 — fixtures under `tests/fixtures/hermes/stratum/`; tracked in the sole implementation plan.
 
 ## Roles (incremental roster)
 
@@ -126,7 +126,7 @@ Both required. See [ADR 0004](../adr/0004-hermes-behaviour-harness.md) + [behavi
 |------|---------|------|----------------|
 | PM | `adh.pm` | Requirements → draft PRD PR; product answers; PRD merge | Verify first on new OS; `hermes.pm.*` gold |
 | Dev | `adh.dev` | YAML `development` lane after PRD merge: spec → spec PR → review/plan → merge → board | E1 landed; behaviour packs wave B1 |
-| Coder | `adh.coder` | Execute board/WorkManifest waves → code + draft wave PRs | Hiring now — [ADR 0005](../adr/0005-coder-hire.md) + [coder-hire-plan.md](../plans/coder-hire-plan.md); after Dev `board-seeded` |
+| Coder | `adh.coder` / `adh.coder.<repo>` | Execute ready WorkManifest waves → code + draft wave PRs; **swarm per Affected repo** | Hiring now — [ADR 0005](../adr/0005-coder-hire.md) + [implementation plan § Coder](../plans/adh-agents-implementation-plan.md); after Dev `board-seeded` |
 | Read | `adh.read` | Walk one repo; Buzz rollup | Before / with PE fan-out |
 | PE | `adh.pe` | Product review: fan-out reads, ≤10 Q / ≤2 agent rounds, attest, ping PM | Behaviour packs wave B2 |
 | KB | `adh.kb` | Patch OKF `knowledge/` heads; feed next-hop `kb_excerpt` | After merge enrich; loop Mode A in B3 |
@@ -213,7 +213,7 @@ Skills + forge use **PRD + impacted codebases** (`commit_workspace` as declared)
 | INIT-REALWORLD-007 | PM + PE | **god** | Product lane autopilot |
 | INIT-REALWORLD-008 | PM + PE | **human** | Lead manual from briefs |
 
-Prior `#engg-init-realworld-001` wiped. **Coder** later. Lead ops cmds = phrase lists + `normalize_reply` (agentic hole reserved — [ADR 0003](../adr/0003-platform-agentic-extract-decide.md)).
+Prior `#engg-init-realworld-001` wiped. **Coder** hiring now ([ADR 0005](../adr/0005-coder-hire.md)). Lead ops cmds = phrase lists + `normalize_reply` (agentic hole reserved — [ADR 0003](../adr/0003-platform-agentic-extract-decide.md)).
 
 ## KB heads (OKF in tenant meta)
 
