@@ -213,7 +213,7 @@ Skills + forge use **PRD + impacted codebases** (`commit_workspace` as declared)
 | INIT-REALWORLD-007 | PM + PE | **god** | Product lane autopilot |
 | INIT-REALWORLD-008 | PM + PE | **human** | Lead manual from briefs |
 
-Prior `#engg-init-realworld-001` wiped. **Coder** later. Lead ops cmds = phrase lists + `normalize_reply` (agentic hole reserved — [ADR 0003](../adr/0003-platform-agentic-extract-decide.md)).
+Prior `#engg-init-realworld-001` wiped. **Coder** hiring now ([ADR 0005](../adr/0005-coder-hire.md)). Lead ops cmds = phrase lists + `normalize_reply` (agentic hole reserved — [ADR 0003](../adr/0003-platform-agentic-extract-decide.md)).
 
 ## KB heads (OKF in tenant meta)
 

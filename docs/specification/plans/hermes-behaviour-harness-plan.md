@@ -266,7 +266,8 @@ Scenarios: `edge-008`, `core-002`, `hitl-001`, `iac-004`. No `src/` changes requ
 
 - Mode C auto-merge of prompt packs  
 - Moving prayog skill templates into `src/prompts/`  
-- Coder / verify / qa hires  
+- Coder hire implementation (tracked in [coder-hire-plan.md](coder-hire-plan.md) / ADR 0005 — packs only referenced from here)  
+- verify / qa hires  
 - Replacing forge/label/Gate 2 mechanical rules with prompts  
 - Rewriting E1 YAML walker  
 - Stratum tenant registration / ORCH cutover (dry-run uses fixtures only)  

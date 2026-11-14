@@ -10,6 +10,24 @@
 
 ---
 
+## Alignment with in-flight plans (must stay true)
+
+| Plan / contract | Alignment rule for Coder |
+|-----------------|--------------------------|
+| [adh-agents-implementation-plan](adh-agents-implementation-plan.md) | Tracker: Coder is **next** after E1 + behaviour; verify/qa/iac remain **later** — Coder leaves a legible CAP/J packet for them (C.19), does not hire them |
+| [ADR 0001](../adr/0001-hermes-catalogue-driven-collaborator.md) + `workflow.yaml` | Stage SSOT = pin only; Coder starts at `wave-in-progress-action`, never invents hops; Dev fence = `board-tickets-action` |
+| [ADR 0002](../adr/0002-adh-agents-team-os.md) / Team OS | Batons + Buzz CollabPost; engg floor; **no INIT/repo hardcoding**; graphs table: WM = task DAG, YAML = delivery |
+| [ADR 0003](../adr/0003-platform-agentic-extract-decide.md) | Lead tokens + god `recommend` via extract allow-lists; coder packs use same GateOpener path |
+| [ADR 0004](../adr/0004-hermes-behaviour-harness.md) / [behaviour plan](hermes-behaviour-harness-plan.md) | Two harnesses; `hermes.coder.*` lives here (Coder hire), not in B1–B3 Dev/PE wave; **B.10** no hardcoding carries over as **C.16** |
+| Prayog WM / live-fixture contracts | v1 **defers** `parallel_safe` → **C.14** serial TASK\*; fixtures `cap-{nn}-…` / `j-{nn}-…` + human titles (**C.19**); board = long-term WM after seed |
+| E1 Dev programme | Stops at `board-seeded`; emits thin baton(s); does **not** `update_board_status` to In Progress |
+| Stratum dry-run (#40) | Fixture pressure only; Coder live stays RealWorld board-seeded INIT until tenant onboard |
+| Parallel programmes (landed: per-INIT sessions) | Multi-INIT concurrency ≠ multi-coder swarm; coder **cap** (`max_parallel_coders`) is a separate knob under LiteLLM/forge budget |
+
+**Tension to avoid:** behaviour plan “Out of scope: Coder hire” means *not in the B1–B3 PR* — not “never.” SSOT for Coder behaviour is **this plan + ADR 0005**.
+
+---
+
 ## Work tracker
 
 ```text

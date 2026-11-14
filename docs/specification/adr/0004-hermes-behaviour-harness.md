@@ -33,7 +33,7 @@
 
 - Replacing skill templates with Hermes packs.
 - Agentic Lead command classify (still ADR 0003 hole).
-- Coder hire / wave PRs as OS bar.
+- Coder hire / wave PRs as OS bar **in this behaviour wave** (see [ADR 0005](0005-coder-hire.md) — separate hire).
 - Auto-evolving prompts without Lead (Mode C).
 
 ## Verify slate (after greenfield land)
