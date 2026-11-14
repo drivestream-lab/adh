@@ -105,12 +105,14 @@ No tenant/INIT hardcoding in packs. Dev/PE/KB packs live; Stratum dry-run under 
 
 Merged spec(s) on `integration_branch` · plan §9 WM (walk-time) · **board EPIC+waves** (long-term WM) · seed URLs · `#engg-…`. Dev **creates** tickets; Coder **moves** them (In Progress → Done per YAML).
 
-### Hermes on Coder (human developer mimic)
+### Hermes on Coder (outer human harness over inner repo harness)
+
+**Inner** (skills + forge + repo MDC + fixtures): generates the tip.  
+**Outer** (`hermes.coder.*`): human-coder review — **brief always**. Human awaits your token; god consumes the same `recommend`.
 
 ```text
-loop-spec tip → hermes.coder review brief
-  MDC P0/P1/P2 · named CAP/J · fixtures ↔ PRD/spec
-  → human token or god recommend
+INNER → tip → OUTER Hermes brief (MDC P0/P1/P2 · named CAP/J · fixtures↔PRD/spec)
+                → human awaits  |  god uses recommend
 ```
 
 Coverage packet: `{id, human_title, fixture_path, covers, prove_status}` — value for later QA/verifier hire.
