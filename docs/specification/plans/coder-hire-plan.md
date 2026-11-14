@@ -52,9 +52,58 @@ C10 Live: human INIT — Lead plays wave-acceptance / signoff             ⬜
 | C.7 | God plays `recommend` on those gates (same AutonomyPolicy as Dev) |
 | C.8 | Behaviour packs `hermes.coder.*` via PromptService only |
 | C.9 | WorkManifest §9 + board ticket binding — fail closed if missing/stale |
-| C.10 | One wave at a time per INIT until wave-complete (no parallel wave chaos in v1) |
+| C.10 | **Ready-set scheduling** — Coder(s) claim only waves whose `depends_on` waves are done; never invent parallelism beyond the WM DAG |
 | C.11 | Guinea pigs: reuse board-seeded RealWorld INIT (004 human preferred; one god) — wipe coder session only, not Dev artefacts |
 | C.12 | Greenfield — delete “Coder hire is later” strings / stubs in the same PR as baton emit |
+| C.13 | **Swarm unit = repo-scoped coder handle** (`adh.coder.<repo>`) — one worker process per Affected repo when multiple ready waves target different repos |
+| C.14 | **Within one repo / one wave:** walk TASK `depends_on` in order on **one** head branch; do not fan-out parallel TASK workers in v1 (WM defers `parallel_safe` / `shared_files`) |
+| C.15 | Lead (or god) still owns **wave-acceptance / wave-signoff** per wave tip — swarm does not auto-merge |
+
+---
+
+## Coder expectations (what “done with Dev” means)
+
+After Dev we already have:
+
+| Artefact | Role for Coder |
+|----------|----------------|
+| Merged **spec** slice(s) | Product contract per Affected repo |
+| **Implementation-Plan** §9 WorkManifest | Immutable execution DAG (until coding-readiness lock) |
+| **Board** EPIC + wave Issues | Long-term WM home — ticket ↔ `W{n}` ↔ `repo` ↔ TASK\* |
+
+Coder does **not** re-plan. It **schedules and executes** ready work.
+
+### Parallelism (swarm) — three layers
+
+```text
+INIT
+ ├─ repo A ── adh.coder.repo-a ── ready waves (DAG) ── serial TASK* on one branch
+ ├─ repo B ── adh.coder.repo-b ── ready waves (DAG) ── serial TASK* on one branch
+ └─ …
+```
+
+1. **Across repos (swarm yes)** — If Impact-Map Affected has `api` + `web` and their waves do not depend on each other (no cross-wave / CTR gate forcing order), run **two coder workers** in parallel. Identity already seeded: `adh.coder.realworld-api`, etc. Stratum pressure = this layer.
+2. **Across waves, same repo** — Only when wave `depends_on` is satisfied (e.g. W0 done → W1 ready). Same-repo waves usually chain (`W1 depends_on: [W0]`); do **not** parallelize those.
+3. **Across TASK\* inside a wave** — DAG exists (`depends_on: [TASK-W0-01]`), but v1 stays **single worker, topological order** on one `feature/…-w{n}-…` branch. Prayog WM explicitly defers `parallel_safe` / file locks — overlapping `files[]` would thrash one PR tip.
+
+### Ready-set (scheduler job)
+
+At each hop, Coder computes:
+
+```text
+ready_waves = { W | all(d in W.depends_on are board-Done) and W not in progress }
+claim = pick ready_waves filtered by this worker's repo handle
+```
+
+Buzz `#engg-<id>` stays the collaboration floor; board columns are the swarm scoreboard.
+
+### What Coder owes Lead per wave
+
+- Pre-implement checklist on head  
+- TASK\* execution + proofs → `Wave-Execution-{INIT}-W{n}.md`  
+- Draft wave PR (`wave-pr-action`)  
+- Brief for `wave-acceptance` (human or god)  
+- No merge without `wave-signoff`
 
 ---
 
@@ -62,10 +111,11 @@ C10 Live: human INIT — Lead plays wave-acceptance / signoff             ⬜
 
 ```text
 PE → Dev (engg YAML → board-tickets-action)
-        ↓ board-seeded + baton
-     Coder (wave-* YAML → code + draft PR)
+        ↓ board-seeded + baton(s) per Affected repo
+     Coder swarm (adh.coder.<repo>) — ready waves only
+        ↓ each wave: pre-implement → loop-spec → draft PR
         ↓ wave-acceptance / wave-signoff (Lead or god)
-     next wave or initiative-closure
+     next ready wave(s) or initiative-closure
 ```
 
 ---
