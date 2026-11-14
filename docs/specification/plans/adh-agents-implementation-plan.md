@@ -36,11 +36,11 @@ B0–B3 Hermes behaviour harness  ✅  ADR 0004; packs+runners; Dev+PE live 003/
                                  Stratum dry-run bank (#40)
 
 ── active (Coder) ──
-C0 docs / locks (this section)     🟨  ADR 0005; locks C.1–C.19 below
-C1 spine (agent+worker+baton)      ⬜
-C2 YAML walker wave-* + forge      ⬜
+C0 docs / locks (this section)     ✅  ADR 0005 Accepted; C.1–C.19 locked (Lead)
+C1 spine (agent+worker+baton)      ✅  feature/coder-hire — agent+worker+Dev `coder.wave`
+C2 YAML walker wave-* + forge      🟨  repo lease + clip landed; forge/walker next
 C3 hermes.coder.* + units          ⬜
-C4 live board-seeded INIT god/human ⬜
+C4 live INIT-REALWORLD-001         ⬜  resume unfinished coding; god + human
 
 ── later ──
 verify agent + qa / iac / sre / obs + codegraph MCP + TaskGraph   ⬜
@@ -91,13 +91,13 @@ No tenant/INIT hardcoding in packs. Dev/PE/KB packs live; Stratum dry-run under 
 | C.8 | `hermes.coder.*` via PromptService only |
 | C.9 | WM + board ticket binding — fail closed |
 | C.10 | Ready-set only (`depends_on` satisfied); no invented parallelism |
-| C.11 | Guinea pigs: board-seeded RealWorld INIT (004 human + one god) |
+| C.11 | Guinea pigs: **INIT-REALWORLD-001** (coding not finished — Coder picks this up); human + god paths |
 | C.12 | Delete “Coder hire is later” in same PR as baton |
-| C.13 | Swarm unit = repo lease / handle |
+| C.13 | Swarm unit = repo lease / handle; baton `to_role` = `adh.coder.<repo>`; **one** `make adh-coder` worker claims matching batons |
 | C.14 | Within wave: serial TASK\* on one head (WM defers `parallel_safe`) |
 | C.15 | Lead/god own acceptance + signoff — no auto-merge |
 | C.16 | No hardcoding — tenant `integration_branch`, org, repos, board from data |
-| C.17 | `max_parallel_coders` (settings/env) clips ready-set; per-repo lease = 1 |
+| C.17 | `max_parallel_coders` **default 3** (settings/env overridable); per-repo lease = 1 |
 | C.18 | Human-coder review: MDC P0/P1 fix; P2 defer+why; CAP/J vs PRD/spec; fixtures; human+god same packs |
 | C.19 | Human-named CAP/J packet for later QA/verifier — bare `CAP-01` fail |
 
@@ -125,7 +125,7 @@ Coverage packet: `{id, human_title, fixture_path, covers, prove_status}` — val
 | C1 | `CoderAgent` + `adh_coder_worker` + `make adh-coder` + Dev baton |
 | C2 | Programme YAML walker from `wave-in-progress-action`; forge board/PR |
 | C3 | `hermes.coder.*`; units; WM fail-closed |
-| C4 | Live god + human on board-seeded INIT |
+| C4 | Live god + human on **INIT-REALWORLD-001** (resume unfinished coding) |
 
 ### Coder out of scope
 

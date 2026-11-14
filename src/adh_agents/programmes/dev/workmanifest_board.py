@@ -20,6 +20,7 @@ class BoardWave:
     title: str
     body: str
     task_ids: tuple[str, ...] = ()
+    depends_on: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -125,6 +126,9 @@ def parse_board_manifest(text: str) -> BoardManifest:
             for t in tasks
             if isinstance(t, dict) and str(t.get("id") or "").strip()
         )
+        deps_field = row.get("depends_on")
+        deps_raw: list[Any] = deps_field if isinstance(deps_field, list) else []
+        depends_on = tuple(str(d).strip() for d in deps_raw if str(d).strip())
         waves.append(
             BoardWave(
                 wave_id=wid,
@@ -132,6 +136,7 @@ def parse_board_manifest(text: str) -> BoardManifest:
                 title=title,
                 body=body,
                 task_ids=task_ids,
+                depends_on=depends_on,
             )
         )
     if not waves:

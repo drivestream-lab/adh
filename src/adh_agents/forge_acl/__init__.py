@@ -25,6 +25,16 @@ _DEFAULT_ACL: dict[str, FrozenSet[str]] = {
             "apply_labels",
         }
     ),
+    # Coder wave lane — board move + wave draft PR (+ push) after board-seed.
+    "adh.coder": frozenset(
+        {
+            "update_board_status",
+            "open_draft_pr",
+            "push_branch",
+            "comment_pr",
+            "close_pull_request",
+        }
+    ),
     "adh.qa": frozenset({"comment_pr", "set_check"}),
     "adh.read": frozenset(),
     "adh.taskgraph": frozenset(),
@@ -33,11 +43,19 @@ _DEFAULT_ACL: dict[str, FrozenSet[str]] = {
 }
 
 
+def _acl_role(role_id: str) -> str:
+    """Map ``adh.coder.<repo>`` swarm handles onto the ``adh.coder`` allowlist."""
+    role = (role_id or "").strip()
+    if role.startswith("adh.coder."):
+        return "adh.coder"
+    return role
+
+
 def forge_allowed(role_id: str, action: str) -> bool:
     """Default deny: action allowed only if listed for role."""
-    allowed = _DEFAULT_ACL.get(role_id, frozenset())
+    allowed = _DEFAULT_ACL.get(_acl_role(role_id), frozenset())
     return (action or "").strip() in allowed
 
 
 def allowlist_for(role_id: str) -> FrozenSet[str]:
-    return _DEFAULT_ACL.get(role_id, frozenset())
+    return _DEFAULT_ACL.get(_acl_role(role_id), frozenset())

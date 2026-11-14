@@ -30,6 +30,7 @@ from src.adh_agents.programmes.dev.board_seed import (
     board_seed_preconditions,
     mark_board_seeded,
 )
+from src.adh_agents.programmes.dev.coder_handoff import DevCoderHandoff
 from src.adh_agents.programmes.dev.board_verify import verify_board_seed_output
 from src.adh_agents.programmes.dev.debate import DebateResult, run_dev_debate
 from src.adh_agents.programmes.dev.entry import resolve_dev_entry
@@ -149,6 +150,7 @@ class DevEnggProgramme(BaseBusinessService):
         catalogue: WorkflowCatalogueService,
         forge: ForgeActionService,
         github: GitHubAppService,
+        coder_handoff: DevCoderHandoff,
     ) -> None:
         super().__init__()
         self._store = store
@@ -165,6 +167,7 @@ class DevEnggProgramme(BaseBusinessService):
         self._catalogue = catalogue
         self._forge = forge
         self._github = github
+        self._coder_handoff = coder_handoff
         self._settings = DevAgentSettings.get_instance()
 
     async def start_programme(
@@ -1444,7 +1447,7 @@ class DevEnggProgramme(BaseBusinessService):
             (
                 f"**{init}** board tickets seeded — Dev YAML E1 fence complete "
                 f"(`{_E1_TERMINAL}`). Issues: {urls_line}. "
-                f"Coder hire is later. Reply `{RESEED_BOARD}` to reseed tickets, "
+                f"Handing ready repos to Coder… Reply `{RESEED_BOARD}` to reseed tickets, "
                 f"or `{REVISE_ENGG}` to reopen think."
             ),
             EventType.DONE,
@@ -1454,6 +1457,15 @@ class DevEnggProgramme(BaseBusinessService):
                 "issue_urls": list(proof.issue_urls),
             },
             identity_handle=self.role_id,
+        )
+        await self._coder_handoff.handoff_to_coder(
+            tenant,
+            initiative=init,
+            engg_room=room,
+            plan_path=plan_file,
+            board_seed_marker=session.slots.get("board_seed_marker") or "",
+            board_issue_urls=list(proof.issue_urls),
+            source_room=room,
         )
 
     # ── helpers ────────────────────────────────────────────────────────

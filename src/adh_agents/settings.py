@@ -120,6 +120,20 @@ class DevAgentSettings(AgentSettings):
     )
 
 
+class CoderAgentSettings(AgentSettings):
+    """Coder wave agent — board-seeded → YAML wave-* (ADR 0005 / C.17)."""
+
+    PREFIX: ClassVar[str] = "ADH_CODER"
+    role_id: str = Field(default="adh.coder")
+    progress_seconds: float = Field(default=90.0, ge=0.05)
+    max_parallel_coders: int = Field(
+        default=3,
+        ge=1,
+        le=32,
+        description="Cap concurrent repo leases (ADH_CODER_MAX_PARALLEL_CODERS; default 3)",
+    )
+
+
 class AdhAutonomySettings(BaseSettings):
     """Process-wide autonomy mode (all role workers read the same env)."""
 

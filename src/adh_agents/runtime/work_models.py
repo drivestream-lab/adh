@@ -24,6 +24,7 @@ PROGRAMME_PE = "pe"
 PROGRAMME_READ = "read"
 PROGRAMME_KB = "kb"
 PROGRAMME_DEV = "dev-engg"
+PROGRAMME_CODER = "coder-wave"
 
 
 def _utcnow() -> datetime:

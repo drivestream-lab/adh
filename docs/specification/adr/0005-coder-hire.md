@@ -1,6 +1,6 @@
 # ADR 0005 — Hire `adh.coder` (wave / WorkManifest execution)
 
-- **Status:** Proposed → Accepted when C.1–C.19 locked in the sole [implementation plan](../plans/adh-agents-implementation-plan.md)
+- **Status:** **Accepted** — locks C.1–C.19 in sole [implementation plan](../plans/adh-agents-implementation-plan.md) (Lead 2026-11-14: `max_parallel_coders` default 3; `adh.coder.<repo>` batons + one worker; guinea pig **INIT-REALWORLD-001**; branch `feature/coder-hire`)
 - **Date:** 2026-11-14
 - **Context:** Dev (`adh.dev`) walks `workflow.yaml` **development** through **board-tickets-action** and stops (`board-seeded`). YAML continues with `wave-in-progress-action` → `pre-implement` → `loop-spec` → `wave-pr-action` → acceptance / signoff. That post-board chain is **Coder** territory — execute WorkManifest TASK* into code + draft wave PRs. Identities `adh.coder.*` already exist in Buzz seed; there is no worker/programme yet. E1 explicitly deferred Coder. **Locks + tracker:** only [adh-agents-implementation-plan.md](../plans/adh-agents-implementation-plan.md) (no sibling plan files).
 
@@ -12,7 +12,7 @@
 4. **Swarm** — Parallelism = dynamic ready-set ∩ configurable **`max_parallel_coders`** (no hardcoded repo counts). Repo-scoped workers/leases; within a wave, TASK\* serial on one head. No tenant/repo/branch literals.
 5. **Behaviour** — Hermes packs `hermes.coder.*` mimic a **human developer review**: MDC/rules by severity (fix P0/P1; defer P2 with why); CAP/J vs PRD+spec with **human titles** (not bare `CAP-01`); fixture packs named `cap-{nn}-<slug>` / `j-{nn}-<slug>`; coverage packet must be legible for a later **QA/verifier** hire; same packs for **human** and **god** GateOpener. Skills stay prayog (`pre-implement`, `loop-spec`, …).
 6. **Forge** — `commit_workspace`, `open_draft_pr` (wave), `update_board_status` per YAML; GateOpener only on human-checkpoint nodes (`wave-acceptance`, `wave-signoff`, …).
-7. **Verify** — RealWorld guinea pig on a **board-seeded** INIT (prefer INIT-004 human + one god replay). Stratum dry-run fixtures stay pack/parse only until onboard.
+7. **Verify** — RealWorld guinea pig **INIT-REALWORLD-001** (unfinished coding — Coder resumes). Human + god paths. Stratum dry-run fixtures stay pack/parse only until onboard.
 
 ## Consequences
 

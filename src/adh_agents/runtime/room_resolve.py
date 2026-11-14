@@ -140,10 +140,10 @@ async def listen_rooms_for_role(
     tenants: TenantRegistryService,
     role_id: str,
 ) -> list[str]:
-    """Role-scoped Buzz listen set — engg floor is Dev-only."""
+    """Role-scoped Buzz listen set — engg floor is Dev + Coder."""
     role = (role_id or "").strip()
-    if role == "adh.dev":
-        # Hub (hire / announce) + `#engg-*` Dev lane. Not product `#task-*`.
+    if role == "adh.dev" or role == "adh.coder" or role.startswith("adh.coder."):
+        # Hub (hire / announce) + `#engg-*` engg lane. Not product `#task-*`.
         return await listen_rooms_for_tenants(buzz, tenants, include_task=False, include_engg=True)
     # PM / PE / KB / Read: hub + task homes. Never engg Lead traffic.
     return await listen_rooms_for_tenants(buzz, tenants, include_task=True, include_engg=False)
