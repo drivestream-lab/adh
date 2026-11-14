@@ -252,7 +252,7 @@ Verify/qa/iac/sre/obs · codegraph MCP · Stratum tenant onboard · moving Dev f
 **No legacy / no dual spine.** Delete the invented programme stages (including **`deps-acceptance`**) and rewrite Dev to walk YAML only.
 
 **Product fence → engg:** After **`prd-merge`**, PE → Dev baton opens `#engg-<id>`. Dev runs skills + forge against the **Impact-Map repos** (PRD + codebase → **spec**), not a meta-only report theatre.  
-**Coder** (`adh.coder` / `loop-spec` waves) stays **out of E1**.
+**Coder** (`adh.coder` / `loop-spec` waves) was **out of E1** (board-seed fence). Active now — see **Coder hire** section above.
 
 **Live slate reset (2026-11-11):** Deleted `#engg-init-realworld-001`, `#task-init-realworld-001`, task row/events, and Redis work/baton/god-chain for **INIT-REALWORLD-001**. Guinea pigs restart from scratch after the rewrite.
 
@@ -318,9 +318,9 @@ G0 docs → G1 delete dead Dev spine → G2 YAML programme walker
 | **G5** | Units: YAML order, no `deps-acceptance`, god re-entry, board predicates; `rg` clean (no `re` under `adh_agents`) |
 | **G6** | Fresh rooms: Dev **001 god / 002 human**; PM+PE **007 god / 008 human**; army restart; evidence in PR |
 
-### Out of scope (E1)
+### Out of scope (E1 — historical)
 
-`adh.coder`, `pre-implement` / `loop-spec` / wave PRs as OS bar, codegraph MCP productization, collapsing engg into task room, inventing catalogue nodes in ADH.
+Wave coding / `adh.coder` (now **Coder hire** section) · codegraph MCP · collapsing engg into task room · inventing catalogue nodes in ADH.
 
 ---
 
