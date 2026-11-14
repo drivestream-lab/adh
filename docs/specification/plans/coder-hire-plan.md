@@ -61,6 +61,7 @@ C10 Live: human INIT — Lead plays wave-acceptance / signoff             ⬜
 | C.16 | **No hardcoding** — `integration_branch`, org, repos, INIT ids, board names come from tenant + WM + board + baton only |
 | C.17 | **Parallel cap** — `max_parallel_coders` (settings/env, overridable) clips ready-set; per-repo lease = 1; never spawn “all Affected” blindly |
 | C.18 | **Human-coder review bar (Hermes)** — after skills land tip: MDC/rules violations by severity (fix **P0/P1**, consciously defer **P2** with why); CAP/J coverage vs PRD+spec; fixtures/stimulus cover expectation; same packs drive **human** briefs and **god** `recommend` |
+| C.19 | **Human-named CAP/J (QA/verifier handoff)** — ids (`CAP-01`, `J-01`) are indexes only; every brief, Wave-Execution, and fixture pack must carry a **derived human title** from PRD/spec (e.g. `cap-01-tag-follow-establish` + title “Establish owner-private tag follow”). Bare `CAP-01` / `cap-01` with no name is a fail. Downstream hire (**QA / verifier**) consumes titles + covers + fixture paths — Coder’s job is to leave that packet legible |
 
 ---
 
@@ -136,6 +137,22 @@ Lead (human) or god plays token → accept / findings / hold
 | Pair with Lead | Buzz helpful-army brief; god uses same `recommend` |
 
 **Not Hermes:** inventing TASK order, moving board columns, opening the PR, running live smoke and claiming look-at success (skill handoff already forbids that — human/god prove at acceptance).
+
+### CAP/J human names — packet for later QA / verifier
+
+`CAP-01` / `J-01` are **stable indexes** for contracts and `prayog:covers`. They are **not** how humans or future agents should talk about value.
+
+| Bad (id-only) | Good (derived human name) |
+|---------------|---------------------------|
+| fixture `tests/fixtures/cap-01/` | `tests/fixtures/cap-01-tag-follow-establish/` |
+| brief: “CAP-01 covered” | “**CAP-01 — Establish owner-private tag follow** — fixture `…/cap-01-tag-follow-establish`; covers REQ-01,19,20” |
+| journey `j-07` | **J-07 — Unseated establish deny** + look-ats / stimulus |
+
+**Derive** the human title from PRD capability/journey wording (or spec) at plan/fixture create time; Coder/Hermes **must surface** `{id, human_title, fixture_path, covers, prove_status}` in Wave-Execution + acceptance brief.
+
+That packet is the **value handoff** to a later **QA / verifier** hire: they should not reverse-engineer meaning from `CAP-01`. They should read titles, fixtures, and what was/wasn’t proved on the tip.
+
+Prayog already hints `cap-{nn}-…` / `j-{nn}-…` slugs ([live-fixture-contract](../../../prayog-skills/references/live-fixture-contract.md)) — we treat the slug + PRD title as **required legibility**, not optional garnish.
 
 ---
 
