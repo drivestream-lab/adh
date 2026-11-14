@@ -114,7 +114,9 @@ def test_ready_set_depends_on() -> None:
 def test_forge_acl_coder_prefix() -> None:
     assert forge_allowed("adh.coder", "open_draft_pr")
     assert forge_allowed("adh.coder.realworld-api", "update_board_status")
-    assert not forge_allowed("adh.coder", "prd_merge")
+    assert forge_allowed("adh.coder", "prd_merge")
+    assert forge_allowed("adh.coder", "land_pull_request")
+    assert not forge_allowed("adh.coder", "create_board_tickets")
 
 
 def test_list_pending_for_coder_prefix() -> None:
@@ -263,6 +265,13 @@ async def test_coder_programme_claim_smoke() -> None:
     programme._leases = leases
     programme._forge = MagicMock()
     programme._workspace = MagicMock()
+    programme._github = MagicMock()
+    programme._dispatch = MagicMock()
+    programme._catalogue = MagicMock()
+    programme._navigator = MagicMock()
+    programme._prompts = MagicMock()
+    programme._briefs = MagicMock()
+    programme._gates = MagicMock()
     programme._settings = MagicMock(baton_ttl_seconds=60, max_parallel_coders=3)
     programme.role_id = "adh.coder"
     programme.logger = MagicMock()
@@ -330,3 +339,42 @@ def test_pick_wave_issue_url_and_parse() -> None:
     assert org == "org" and repo == "api" and num == 2
     assert "in progress" in _status_option_names("in_progress")
     assert "done" in _status_option_names("done")
+
+
+def test_coder_coverage_rejects_bare_cap() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from src.models.prompt_models import HermesCoderWaveReviewResponse
+
+    with pytest.raises(ValidationError):
+        HermesCoderWaveReviewResponse.model_validate(
+            {
+                "recommend": "wave accepted",
+                "coverage": [{"id": "CAP-01", "human_title": "", "fixture_path": "x"}],
+            }
+        )
+    ok = HermesCoderWaveReviewResponse.model_validate(
+        {
+            "recommend": "wave accepted",
+            "coverage": [
+                {
+                    "id": "cap-01-login",
+                    "human_title": "Login happy path",
+                    "fixture_path": "tests/live/login.yaml",
+                    "covers": "REQ-01",
+                    "prove_status": "pending",
+                }
+            ],
+        }
+    )
+    assert ok.coverage[0].human_title == "Login happy path"
+
+
+def test_wave_branch_helper() -> None:
+    from src.adh_agents.programmes.coder.paths import wave_branch
+
+    assert (
+        wave_branch(initiative="INIT-REALWORLD-001", wave_id="W0", repo="realworld-api")
+        == "feature/init-realworld-001-w0-realworld-api"
+    )

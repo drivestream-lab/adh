@@ -38,9 +38,9 @@ B0–B3 Hermes behaviour harness  ✅  ADR 0004; packs+runners; Dev+PE live 003/
 ── active (Coder) ──
 C0 docs / locks (this section)     ✅  ADR 0005 Accepted; C.1–C.19 locked (Lead)
 C1 spine (agent+worker+baton)      ✅  feature/coder-hire — agent+worker+Dev `coder.wave`
-C2 YAML walker wave-* + forge      🟨  lease+clip+`update_board_status`; skill walker next
-C3 hermes.coder.* + units          ⬜
-C4 live INIT-REALWORLD-001         ⬜  resume unfinished coding; god + human
+C2 YAML walker wave-* + forge      ✅  lease+skills+board/PR/signoff walker
+C3 hermes.coder.* + units          ✅  wave.review + decide.outcome; GateOpener
+C4 live INIT-REALWORLD-001         🟨  `hire coder INIT-…` resume path wired; run live next
 
 ── later ──
 verify agent + qa / iac / sre / obs + codegraph MCP + TaskGraph   ⬜

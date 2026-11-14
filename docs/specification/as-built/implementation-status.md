@@ -32,9 +32,10 @@
 | B0–B3 Hermes behaviour harness | 🟨 [ADR 0004](../adr/0004-hermes-behaviour-harness.md) Accepted; packs + PromptService runners; Dev live **003/004** done earlier; **B2 PE live** ✅ artefact replay Gate-1 + impact.challenge on Impact-Maps → `/tmp/adh-hermes-pe-b2-live/` (003 god / 004 human; recommend ∈ tokens) |
 | Stratum Hermes dry-run (no onboard) | ✅ Fixtures `tests/fixtures/hermes/stratum/`; L1/L2 `test_hermes_stratum_dryrun.py`; L3 `python -m tests.verify.hermes_stratum_dryrun [--live]` (#40) |
 | C0 Coder hire docs | ✅ [ADR 0005](../adr/0005-coder-hire.md) **Accepted**; locks C.1–C.19 in sole plan; guinea pig **INIT-001**; default parallel **3**; branch `feature/coder-hire` |
-| C1 Coder spine | ✅ `CoderAgent` + `make adh-coder` + Dev `coder.wave` → `adh.coder.<repo>`; “hire later” removed; units `test_coder_c1_spine.py` |
-| C2 Coder lease / walker | 🟨 Redis repo lease + clip; forge `update_board_status` (Projects V2 Status); advances to `pre-implement` then awaits skill dispatch |
-| C3–C4 Hermes packs + live 001 | ⬜ Same feature branch |
+| C1 Coder spine | ✅ `CoderAgent` + `make adh-coder` + Dev `coder.wave` → `adh.coder.<repo>`; “hire later” removed |
+| C2 Coder walker | ✅ YAML wave-in-progress → signoff; skills; board status; wave Draft PR; dirty fail-fast; lease clip |
+| C3 Hermes coder | ✅ `hermes.coder.wave.review` + `decide.outcome`; GateOpener human+god; bare CAP rejected |
+| C4 live 001 | 🟨 `hire coder INIT-REALWORLD-001` resume wired — run live on engg floor next |
 
 
 ## Landed (0b)

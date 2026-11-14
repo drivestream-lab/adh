@@ -33,6 +33,8 @@ _DEFAULT_ACL: dict[str, FrozenSet[str]] = {
             "push_branch",
             "comment_pr",
             "close_pull_request",
+            "land_pull_request",
+            "prd_merge",
         }
     ),
     "adh.qa": frozenset({"comment_pr", "set_check"}),

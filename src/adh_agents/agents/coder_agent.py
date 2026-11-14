@@ -1,21 +1,43 @@
-"""CoderAgent — claim ``coder.wave`` batons for ``adh.coder.<repo>`` (one worker)."""
+"""CoderAgent — claim ``coder.wave`` batons; walk wave-* (human + god)."""
 
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from injector import inject
 
 from src.adh_agents.base import BaseHermesAgent
 from src.adh_agents.baton.models import Baton
 from src.adh_agents.baton.redis_store import RedisBatonStore
+from src.adh_agents.collaboration.human_replies import (
+    ANOTHER_ROUND,
+    ENTER_CLOSEOUT,
+    HOLD,
+    MERGE_WAVE_PR,
+    WAVE_ACCEPTED,
+    normalize_reply,
+)
 from src.adh_agents.programmes.coder.programme import CoderWaveProgramme
 from src.adh_agents.programmes.coder.repo_lease import CoderRepoLeaseStore
 from src.adh_agents.programmes.coder.roles import coder_role_prefix, is_coder_role
+from src.adh_agents.programmes.dev.coder_handoff import DevCoderHandoff
+from src.adh_agents.programmes.dev.impact_repos import resolve_repo_root
+from src.adh_agents.programmes.dev.paths import implementation_plan_path
+from src.adh_agents.programmes.pm.lead_tokens import extract_initiative
 from src.adh_agents.runtime.autonomy import AutonomyPolicy
+from src.adh_agents.runtime.lead_commands import LeadCommand, match_lead_command
 from src.adh_agents.runtime.orchestrator import Orchestrator
 from src.adh_agents.runtime.presence import PresenceService
-from src.adh_agents.runtime.room_resolve import listen_rooms_for_role, resolve_tenant_for_room
+from src.adh_agents.runtime.room_resolve import (
+    engg_collaboration_room,
+    listen_rooms_for_role,
+    resolve_tenant_for_room,
+)
+from src.adh_agents.runtime.work_models import (
+    AWAITING_AUTHORIZATION,
+    AWAITING_JUDGMENT,
+)
 from src.adh_agents.runtime.work_store import AgentWorkStore
 from src.adh_agents.settings import CoderAgentSettings
 from src.business_services.buzz_service import BuzzService
@@ -24,6 +46,7 @@ from src.infra_services.tenant_registry_service import TenantRegistryService
 from src.models.buzz_models import MessageKind, MessageRead
 
 _BATON_TYPE = "coder.wave"
+_GATE_TOKENS = [WAVE_ACCEPTED, MERGE_WAVE_PR, ENTER_CLOSEOUT, ANOTHER_ROUND, HOLD]
 
 
 class CoderAgent(BaseHermesAgent):
@@ -38,6 +61,7 @@ class CoderAgent(BaseHermesAgent):
         orchestrator: Orchestrator,
         programme: CoderWaveProgramme,
         leases: CoderRepoLeaseStore,
+        coder_handoff: DevCoderHandoff,
         work_store: AgentWorkStore,
         presence: PresenceService,
         autonomy: AutonomyPolicy,
@@ -48,6 +72,7 @@ class CoderAgent(BaseHermesAgent):
         self._orchestrator = orchestrator
         self._programme = programme
         self._leases = leases
+        self._coder_handoff = coder_handoff
         self._work_store = work_store
         self._autonomy = autonomy
         self._coder_settings = settings
@@ -63,6 +88,9 @@ class CoderAgent(BaseHermesAgent):
         rooms = await listen_rooms_for_role(self._buzz, self._tenants, self.role_id)
         await self.start_ops_listeners(rooms)
         await self._catch_up_pending_batons()
+        task = asyncio.create_task(self._god_resume_open_gates())
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
         self.start_listen_refresh_loop(
             lambda: listen_rooms_for_role(self._buzz, self._tenants, self.role_id),
             interval_seconds=15.0,
@@ -91,6 +119,58 @@ class CoderAgent(BaseHermesAgent):
             except Exception:
                 self.logger.exception("Coder pending baton loop failed")
 
+    async def _god_resume_open_gates(self) -> None:
+        if not self._autonomy.is_god:
+            return
+        for tenant in self._tenants.active():
+            try:
+                active = await self._work_store.list_active(tenant.slug, self.role_id)
+            except Exception:
+                self.logger.exception("god Coder resume list_active failed", tenant=tenant.slug)
+                continue
+            for session in active:
+                room = session.room or tenant.ops_room
+                if (
+                    session.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION)
+                    and session.open_brief is None
+                ):
+                    try:
+                        await self._programme.start_programme(tenant, room, session)
+                    except Exception:
+                        self.logger.exception(
+                            "god Coder spine re-open failed",
+                            initiative=session.slots.get("initiative"),
+                        )
+                    continue
+                if session.awaiting not in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION):
+                    continue
+                brief = session.open_brief
+                if brief is None:
+                    continue
+                token = self._autonomy.resolve_token(brief)
+                if token is None:
+                    continue
+                try:
+                    ok, reason = await self._autonomy.record_take(
+                        tenant=tenant.slug,
+                        initiative=(
+                            session.slots.get("initiative")
+                            or session.initiative
+                            or session.work_id
+                            or ""
+                        ).strip(),
+                        purpose=(brief.purpose or brief.node_id or "coder-gate"),
+                    )
+                    if not ok:
+                        self.logger.warning("god Coder resume skipped", reason=reason)
+                        continue
+                    await self._programme.after_judgment(tenant, room, session, token)
+                except Exception:
+                    self.logger.exception(
+                        "god Coder resume failed",
+                        initiative=session.slots.get("initiative"),
+                    )
+
     async def _catch_up_pending_batons(self) -> None:
         ttl = int(self._agent_settings.baton_ttl_seconds)
         for tenant in self._tenants.active():
@@ -100,7 +180,6 @@ class CoderAgent(BaseHermesAgent):
                 to_role_prefix=coder_role_prefix(),
                 baton_type=_BATON_TYPE,
             )
-            # Clip by held leases + max_parallel_coders (C.17); per-repo NX in programme.
             repos: list[str] = []
             by_repo: dict[str, Baton] = {}
             for baton in pending:
@@ -142,5 +221,92 @@ class CoderAgent(BaseHermesAgent):
 
         if message.kind != MessageKind.MESSAGE or (message.identity_handle or "") != self._lead:
             return
-        # C2+: Lead tokens for wave-acceptance / signoff via Orchestrator.
-        del message
+
+        body = (message.body or "").strip()
+        if not body:
+            return
+
+        cmd = match_lead_command(body, allowed=[LeadCommand.HIRE_CODER, LeadCommand.RESUME])
+        if cmd == LeadCommand.HIRE_CODER:
+            init = extract_initiative(body, tenant.init_prefix)
+            if not init:
+                await self.broadcast_progress(
+                    room,
+                    "Hire coder needs an INIT id (e.g. `hire coder INIT-REALWORLD-001`).",
+                    payload={"status": "hire_coder_need_init"},
+                )
+                return
+            await self.ack_received(
+                room,
+                lead_body=body,
+                source_message_id=str(message.id) if message.id else None,
+            )
+            await self._hire_coder(tenant, room, initiative=init.upper())
+            return
+
+        if cmd == LeadCommand.RESUME:
+            await self._orchestrator.handle_lead_message(tenant, room, message)
+            return
+
+        # Open-gate tokens (human mode) — same brief god would auto-play.
+        active = await self._work_store.list_active(tenant.slug, self.role_id)
+        open_gates = [
+            s
+            for s in active
+            if s.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION)
+            and s.open_brief is not None
+            and (not s.room or s.room == room)
+        ]
+        if open_gates and normalize_reply(body, _GATE_TOKENS) is not None:
+            session = open_gates[0]
+            await self.ack_received(
+                room,
+                lead_body=body,
+                source_message_id=str(message.id) if message.id else None,
+            )
+            await self._programme.after_judgment(tenant, room, session, body)
+            return
+
+        if open_gates:
+            await self._orchestrator.handle_lead_message(tenant, room, message)
+
+    async def _hire_coder(self, tenant, room: str, *, initiative: str) -> None:
+        """C4 resume — re-emit ready-repo batons for a board-seeded INIT (e.g. 001)."""
+        init = initiative.strip().upper()
+        engg = await engg_collaboration_room(self._buzz, tenant, initiative=init, fallback=room)
+        plan_rel = implementation_plan_path(init)
+        # Prefer product repo checkout of the plan when present under workspace.
+        plan_path: Path | str = plan_rel
+        ws = self._tenants.workspace_root()
+        for name in (
+            sorted(p.name for p in Path(ws).iterdir() if p.is_dir()) if Path(ws).is_dir() else []
+        ):
+            candidate = resolve_repo_root(ws, name)
+            if candidate is not None and (candidate / plan_rel).is_file():
+                plan_path = candidate / plan_rel
+                break
+        issued = await self._coder_handoff.handoff_to_coder(
+            tenant,
+            initiative=init,
+            engg_room=engg,
+            plan_path=plan_path,
+            board_seed_marker=f"hire_coder:{init}",
+            source_room=room,
+        )
+        if not issued:
+            await self.broadcast_progress(
+                room,
+                f"Hire coder **{init}** — no batons emitted (parse/ready-set failed).",
+                payload={"status": "hire_coder_empty", "initiative": init},
+            )
+            return
+        await self._catch_up_pending_batons()
+        await self.broadcast_progress(
+            room,
+            f"Hire coder **{init}** — {len(issued)} ready-repo baton(s) claimed/queued.",
+            payload={
+                "status": "hire_coder_done",
+                "initiative": init,
+                "baton_count": len(issued),
+            },
+        )

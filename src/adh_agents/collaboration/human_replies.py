@@ -26,6 +26,11 @@ RESEED_BOARD = "reseed board"
 REVISE_ENGG = "revise engg"
 HOLD = "hold"
 
+# Coder YAML wave-* (human + god same tokens)
+WAVE_ACCEPTED = "wave accepted"
+MERGE_WAVE_PR = "merge the wave PR"
+ENTER_CLOSEOUT = "enter closeout"
+
 # Canonical → accepted aliases (case-insensitive match on full line / prefix).
 _ALIASES: dict[str, tuple[str, ...]] = {
     MERGE_PRODUCT_PR: (
@@ -57,6 +62,25 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     ),
     REVISE_ENGG: (REVISE_ENGG, "revise engineering", "reopen engg"),
     HOLD: (HOLD, PARK),
+    WAVE_ACCEPTED: (
+        WAVE_ACCEPTED,
+        "wave-accepted",
+        "accept wave",
+        "approve wave",
+    ),
+    MERGE_WAVE_PR: (
+        MERGE_WAVE_PR,
+        "merge wave",
+        "merge the wave pr",
+        "signoff wave",
+        "wave signoff",
+    ),
+    ENTER_CLOSEOUT: (
+        ENTER_CLOSEOUT,
+        "closeout",
+        "enter learning-extract",
+        "pass-2",
+    ),
 }
 
 

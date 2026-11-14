@@ -18,6 +18,7 @@ class LeadCommand(str, Enum):
 
     ENGG_GO = "engg go"
     HIRE_ENGG = "hire engg"
+    HIRE_CODER = "hire coder"
     RESUME = "resume"
     TRAJ = "traj"
     REWIND = "rewind"
@@ -30,6 +31,7 @@ class LeadCommand(str, Enum):
 _PHRASE_FAMILIES: dict[LeadCommand, tuple[str, ...]] = {
     LeadCommand.ENGG_GO: ("engg go",),
     LeadCommand.HIRE_ENGG: ("hire engg", "hire dev", "@adh.dev", "engg think"),
+    LeadCommand.HIRE_CODER: ("hire coder", "@adh.coder", "coder go"),
     LeadCommand.RESUME: ("resume",),
     LeadCommand.TRAJ: ("traj", "trajectory", "show trajectory"),
     LeadCommand.REWIND: ("rewind",),
