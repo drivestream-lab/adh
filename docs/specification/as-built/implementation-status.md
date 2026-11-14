@@ -33,7 +33,7 @@
 | Stratum Hermes dry-run (no onboard) | ✅ Fixtures `tests/fixtures/hermes/stratum/`; L1/L2 `test_hermes_stratum_dryrun.py`; L3 `python -m tests.verify.hermes_stratum_dryrun [--live]` (#40) |
 | C0 Coder hire docs | ✅ [ADR 0005](../adr/0005-coder-hire.md) **Accepted**; locks C.1–C.19 in sole plan; guinea pig **INIT-001**; default parallel **3**; branch `feature/coder-hire` |
 | C1 Coder spine | ✅ `CoderAgent` + `make adh-coder` + Dev `coder.wave` → `adh.coder.<repo>`; “hire later” removed; units `test_coder_c1_spine.py` |
-| C2 Coder lease / walker | 🟨 Redis repo lease + `max_parallel_coders` clip; session stage `wave-in-progress-action`; forge `update_board_status` / skill walker next |
+| C2 Coder lease / walker | 🟨 Redis repo lease + clip; forge `update_board_status` (Projects V2 Status); advances to `pre-implement` then awaits skill dispatch |
 | C3–C4 Hermes packs + live 001 | ⬜ Same feature branch |
 
 

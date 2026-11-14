@@ -261,17 +261,20 @@ async def test_coder_programme_claim_smoke() -> None:
     programme._poster = poster
     programme._tenants = tenants
     programme._leases = leases
+    programme._forge = MagicMock()
+    programme._workspace = MagicMock()
     programme._settings = MagicMock(baton_ttl_seconds=60, max_parallel_coders=3)
     programme.role_id = "adh.coder"
     programme.logger = MagicMock()
+    programme._continue_wave = AsyncMock()  # type: ignore[method-assign]
 
     rollup = await programme.handle_baton(baton, room="engg-init-x-1")
     assert rollup.status == BatonStatus.DONE
     assert "api" in (rollup.summary or "")
-    assert "wave-in-progress-action" in (rollup.summary or "")
     work_store.save.assert_awaited()
     poster.post_status.assert_awaited()
     leases.try_acquire.assert_awaited()
+    programme._continue_wave.assert_awaited()
 
     loaded = await store.get(
         tenant="realworld", idempotency_key="coder.wave:realworld:INIT-X-1:api:seed"
@@ -310,3 +313,20 @@ async def test_repo_lease_nx_and_clip() -> None:
     assert clipped == ["web"]
     await leases.try_acquire(tenant="realworld", repo="web", holder="adh.coder", ttl_seconds=60)
     assert await leases.clip_ready(["api", "web", "edge"], tenant="realworld", max_parallel=2) == []
+
+
+def test_pick_wave_issue_url_and_parse() -> None:
+    from src.adh_agents.programmes.coder.forge_ops import parse_issue_url, pick_wave_issue_url
+    from src.infra_services.github_app_service import _status_option_names
+
+    urls = [
+        "https://github.com/org/api/issues/1",
+        "https://github.com/org/api/issues/2",
+        "https://github.com/org/web/issues/3",
+    ]
+    assert pick_wave_issue_url(urls, wave_id="W0", wave_index=0).endswith("/2")
+    assert pick_wave_issue_url(urls, wave_id="W1", wave_index=1).endswith("/3")
+    org, repo, num = parse_issue_url(urls[1])
+    assert org == "org" and repo == "api" and num == 2
+    assert "in progress" in _status_option_names("in_progress")
+    assert "done" in _status_option_names("done")

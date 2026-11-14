@@ -1131,6 +1131,26 @@ class GitHubAppService(BaseInfraService):
         logger.info("Created GitHub issue", repo=repo, issue=number, url=url)
         return number, url, node_id, numeric_id
 
+    async def get_issue_node_id(self, token: str, repo: str, *, number: int) -> str:
+        """REST lookup for an issue GraphQL ``node_id`` (Projects V2 content id)."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        response = await self._request(
+            "GET",
+            f"{api}/repos/{org}/{repo}/issues/{int(number)}",
+            headers=_token_headers(token),
+        )
+        if response.status_code >= 400:
+            raise ValidationError(f"get issue {repo}#{number} failed HTTP {response.status_code}")
+        raw = response.json()
+        data = raw if isinstance(raw, dict) else {}
+        node_id = str(data.get("node_id") or "").strip()
+        if not node_id:
+            raise ValidationError(f"issue {repo}#{number} has no node_id")
+        return node_id
+
     async def add_sub_issue(
         self,
         token: str,
@@ -1261,6 +1281,181 @@ class GitHubAppService(BaseInfraService):
                 return
             raise ValidationError(f"addProjectV2ItemById failed: {msg[:200]}")
         logger.info("Added issue to project", project=project_id)
+
+    async def set_project_item_status(
+        self,
+        token: str,
+        *,
+        project_id: str,
+        content_node_id: str,
+        status: str,
+    ) -> str:
+        """Set Projects V2 Status single-select for an issue already on the board.
+
+        ``status`` is a forge token (``in_progress`` / ``done``) mapped to common
+        column names. Returns the project item id. Fail-closed when field/option
+        cannot be resolved.
+        """
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        wanted = _status_option_names(status)
+        api = self._settings.github_api.rstrip("/")
+
+        field_query = (
+            "query($project: ID!) {"
+            " node(id: $project) {"
+            "  ... on ProjectV2 {"
+            "   fields(first: 40) {"
+            "    nodes {"
+            "     ... on ProjectV2SingleSelectField {"
+            "      id name options { id name }"
+            "     }"
+            "    }"
+            "   }"
+            "  }"
+            " }"
+            "}"
+        )
+        field_resp = await self._request(
+            "POST",
+            f"{api}/graphql",
+            headers={**_token_headers(token), "Content-Type": "application/json"},
+            json={"query": field_query, "variables": {"project": project_id}},
+        )
+        field_resp.raise_for_status()
+        field_raw = field_resp.json()
+        field_payload = field_raw if isinstance(field_raw, dict) else {}
+        if field_payload.get("errors"):
+            msg = "; ".join(
+                str(e.get("message") or e) for e in field_payload["errors"] if isinstance(e, dict)
+            )
+            raise ValidationError(f"project fields GraphQL failed: {msg[:200]}")
+        nodes = (((field_payload.get("data") or {}).get("node") or {}).get("fields") or {}).get(
+            "nodes"
+        ) or []
+        field_id = ""
+        option_id = ""
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            name = str(node.get("name") or "").strip().lower()
+            if name != "status":
+                continue
+            field_id = str(node.get("id") or "")
+            for opt in node.get("options") or []:
+                if not isinstance(opt, dict):
+                    continue
+                opt_name = str(opt.get("name") or "").strip().lower()
+                if opt_name in wanted:
+                    option_id = str(opt.get("id") or "")
+                    break
+            break
+        if not field_id or not option_id:
+            raise ValidationError(
+                f"project Status option for {status!r} not found "
+                f"(tried {sorted(wanted)}; field_id={field_id or 'missing'})"
+            )
+
+        item_query = (
+            "query($content: ID!, $project: ID!) {"
+            " node(id: $content) {"
+            "  ... on Issue {"
+            "   projectItems(first: 20) {"
+            "    nodes { id project { id } }"
+            "   }"
+            "  }"
+            "  ... on PullRequest {"
+            "   projectItems(first: 20) {"
+            "    nodes { id project { id } }"
+            "   }"
+            "  }"
+            " }"
+            "}"
+        )
+        item_resp = await self._request(
+            "POST",
+            f"{api}/graphql",
+            headers={**_token_headers(token), "Content-Type": "application/json"},
+            json={
+                "query": item_query,
+                "variables": {"content": content_node_id, "project": project_id},
+            },
+        )
+        item_resp.raise_for_status()
+        item_raw = item_resp.json()
+        item_payload = item_raw if isinstance(item_raw, dict) else {}
+        if item_payload.get("errors"):
+            msg = "; ".join(
+                str(e.get("message") or e) for e in item_payload["errors"] if isinstance(e, dict)
+            )
+            raise ValidationError(f"projectItems GraphQL failed: {msg[:200]}")
+        item_nodes = (
+            ((item_payload.get("data") or {}).get("node") or {}).get("projectItems") or {}
+        ).get("nodes") or []
+        item_id = ""
+        for node in item_nodes:
+            if not isinstance(node, dict):
+                continue
+            proj_raw = node.get("project")
+            proj: dict[str, object] = proj_raw if isinstance(proj_raw, dict) else {}
+            if str(proj.get("id") or "") == project_id:
+                item_id = str(node.get("id") or "")
+                break
+        if not item_id:
+            raise ValidationError(
+                f"issue {content_node_id} is not on project {project_id} — "
+                "board seed must attach the wave ticket first"
+            )
+
+        mutation = (
+            "mutation($project: ID!, $item: ID!, $field: ID!, $option: String!) {"
+            " updateProjectV2ItemFieldValue(input: {"
+            "  projectId: $project, itemId: $item, fieldId: $field,"
+            "  value: { singleSelectOptionId: $option }"
+            " }) { projectV2Item { id } }"
+            "}"
+        )
+        mut_resp = await self._request(
+            "POST",
+            f"{api}/graphql",
+            headers={**_token_headers(token), "Content-Type": "application/json"},
+            json={
+                "query": mutation,
+                "variables": {
+                    "project": project_id,
+                    "item": item_id,
+                    "field": field_id,
+                    "option": option_id,
+                },
+            },
+        )
+        mut_resp.raise_for_status()
+        mut_raw = mut_resp.json()
+        mut_payload = mut_raw if isinstance(mut_raw, dict) else {}
+        if mut_payload.get("errors"):
+            msg = "; ".join(
+                str(e.get("message") or e) for e in mut_payload["errors"] if isinstance(e, dict)
+            )
+            raise ValidationError(f"updateProjectV2ItemFieldValue failed: {msg[:200]}")
+        logger.info(
+            "Set project item status",
+            project=project_id,
+            item=item_id,
+            status=status,
+        )
+        return item_id
+
+
+def _status_option_names(status: str) -> frozenset[str]:
+    token = (status or "").strip().lower().replace("-", "_")
+    if token in {"in_progress", "inprogress", "started"}:
+        return frozenset({"in progress", "in_progress", "started", "doing"})
+    if token in {"done", "complete", "completed", "closed"}:
+        return frozenset({"done", "complete", "completed", "finished"})
+    if token in {"todo", "backlog", "ready"}:
+        return frozenset({"todo", "to do", "backlog", "ready", "not started"})
+    # Literal column name fallback.
+    return frozenset({(status or "").strip().lower()})
 
 
 def _token_headers(token: str) -> dict[str, str]:
