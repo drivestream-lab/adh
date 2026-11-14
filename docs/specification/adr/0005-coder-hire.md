@@ -1,8 +1,8 @@
 # ADR 0005 — Hire `adh.coder` (wave / WorkManifest execution)
 
-- **Status:** Proposed → Accepted when C.1–C.12 locked in plan
+- **Status:** Proposed → Accepted when C.1–C.19 locked in the sole [implementation plan](../plans/adh-agents-implementation-plan.md)
 - **Date:** 2026-11-14
-- **Context:** Dev (`adh.dev`) walks `workflow.yaml` **development** through **board-tickets-action** and stops (`board-seeded`). YAML continues with `wave-in-progress-action` → `pre-implement` → `loop-spec` → `wave-pr-action` → acceptance / signoff. That post-board chain is **Coder** territory — execute WorkManifest TASK* into code + draft wave PRs. Identities `adh.coder.*` already exist in Buzz seed; there is no worker/programme yet. E1 explicitly deferred Coder.
+- **Context:** Dev (`adh.dev`) walks `workflow.yaml` **development** through **board-tickets-action** and stops (`board-seeded`). YAML continues with `wave-in-progress-action` → `pre-implement` → `loop-spec` → `wave-pr-action` → acceptance / signoff. That post-board chain is **Coder** territory — execute WorkManifest TASK* into code + draft wave PRs. Identities `adh.coder.*` already exist in Buzz seed; there is no worker/programme yet. E1 explicitly deferred Coder. **Locks + tracker:** only [adh-agents-implementation-plan.md](../plans/adh-agents-implementation-plan.md) (no sibling plan files).
 
 ## Decision
 
