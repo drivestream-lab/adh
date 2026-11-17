@@ -38,6 +38,8 @@ _DEFAULT_ACL: dict[str, FrozenSet[str]] = {
         }
     ),
     "adh.qa": frozenset({"comment_pr", "set_check"}),
+    # Verify — comment/check only; never product commit or draft PR.
+    "adh.verify": frozenset({"comment_pr", "set_check"}),
     "adh.read": frozenset(),
     "adh.taskgraph": frozenset(),
     # KB may open + land enrich PRs under knowledge/** (Contents push via workspace).

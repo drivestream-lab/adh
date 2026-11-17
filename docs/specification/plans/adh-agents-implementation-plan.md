@@ -169,6 +169,8 @@ Verify / Coder live prove is **blocked** until Phase 1 is done. See cursor plan 
 | V.14 | Sole plan + ADR 0006; guinea pig INIT-REALWORLD-001; branch `feature/coder-hire` |
 | V.15 | Out of scope: `adh.qa`, cloud IAC day-1, Verify writing fixtures, auto-pass skill |
 | V.16 | **No faking.** **Phase 1** = `dev-infra-lab` + separate ADH / RealWorld local IAC. Verify (**Phase 2**) **assumes** that stack present. Missing/down → hold. Not an `adh.iac` agent unless Lead expands scope. |
+| V.17 | **Deploy tip (Q1A):** lab healthy → project overlay `make up` → `make verify` → IAC DB analysis; lab down → hold |
+| V.18 | **Single Verify worker (Q2A):** `adh.verify` / `make adh-verify`; repo in baton payload (no `adh.verify.<repo>` swarm day-1) |
 
 ### File-level
 

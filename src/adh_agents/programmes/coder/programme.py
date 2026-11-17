@@ -30,15 +30,13 @@ from src.adh_agents.programmes.coder.forge_ops import (
 from src.adh_agents.programmes.coder.gates import (
     closeout_enter_brief,
     closeout_enter_coach,
-    wave_acceptance_brief,
-    wave_acceptance_coach,
     wave_signoff_brief,
     wave_signoff_coach,
 )
 from src.adh_agents.programmes.coder.paths import wave_branch, wave_execution_report_path
 from src.adh_agents.programmes.coder.repo_lease import CoderRepoLeaseStore
-from src.adh_agents.programmes.coder.review import run_wave_review
 from src.adh_agents.programmes.coder.roles import is_coder_role
+from src.adh_agents.programmes.coder.verify_handoff import CoderVerifyHandoff
 from src.adh_agents.programmes.dev.impact_repos import resolve_repo_root
 from src.adh_agents.programmes.pm.validation_report import impact_map_path
 from src.adh_agents.runtime.agentic_decide import decide_catalogue_outcome
@@ -104,6 +102,7 @@ class CoderWaveProgramme(BaseBusinessService):
         prompts: PromptService,
         briefs: HermesBriefService,
         gates: GateOpener,
+        verify_handoff: CoderVerifyHandoff,
     ) -> None:
         super().__init__()
         self._store = store
@@ -120,6 +119,7 @@ class CoderWaveProgramme(BaseBusinessService):
         self._prompts = prompts
         self._briefs = briefs
         self._gates = gates
+        self._verify_handoff = verify_handoff
         self._settings = CoderAgentSettings.get_instance()
 
     async def start_programme(
@@ -242,8 +242,11 @@ class CoderWaveProgramme(BaseBusinessService):
         init = (baton.initiative or "").strip().upper()
         payload = baton.payload or {}
         repo = str(payload.get("repo") or "").strip()
+        stage_hint = str(payload.get("stage") or "").strip()
         raw_waves = payload.get("wave_ids")
         wave_ids: list[str] = [str(x) for x in raw_waves] if isinstance(raw_waves, list) else []
+        if not wave_ids and payload.get("wave_id"):
+            wave_ids = [str(payload.get("wave_id"))]
         raw_urls = payload.get("board_issue_urls")
         board_urls: list[str] = [str(x) for x in raw_urls] if isinstance(raw_urls, list) else []
         collab = (baton.ops_room or "").strip() or room or tenant.ops_room
@@ -255,6 +258,84 @@ class CoderWaveProgramme(BaseBusinessService):
                 summary="missing repo",
                 correlation_id=baton.correlation_id,
                 error="missing_repo",
+            )
+
+        # Verify → Coder return batons (collaboration / acceptance).
+        if stage_hint in {"verify_collab", "verify_accepted"}:
+            if not await self._batons.claim(baton, claimant=self.role_id, ttl=ttl):
+                return Rollup(
+                    baton_id=baton.id,
+                    role=self.role_id,
+                    status=BatonStatus.FAILED,
+                    summary="claim failed",
+                    correlation_id=baton.correlation_id,
+                    error="claim_failed",
+                )
+            await self._batons.mark_running(baton, ttl=ttl)
+            work_id = f"{init}:{repo}"
+            session = await self._store.load(tenant.slug, self.role_id, work_id)
+            if session is None:
+                session = AgentWorkSession(
+                    role_id=self.role_id,
+                    tenant_slug=tenant.slug,
+                    room=collab,
+                    work_id=work_id,
+                    programme=PROGRAMME_CODER,
+                    stage=(
+                        "loop-spec" if stage_hint == "verify_collab" else "wave-awaiting-closeout"
+                    ),
+                    awaiting=AWAITING_NONE,
+                    slots={
+                        "initiative": init,
+                        "repo": repo,
+                        "wave_ids": ",".join(wave_ids),
+                        "active_wave": (
+                            wave_ids[0] if wave_ids else str(payload.get("wave_id") or "")
+                        ),
+                        "coder_handle": baton.to_role,
+                    },
+                )
+            if stage_hint == "verify_collab":
+                session.slots["verify_findings"] = str(payload.get("findings") or "")
+                session.slots["verify_pending"] = ""
+                session.slots["collab_round"] = str(payload.get("collab_round") or "2")
+                session.stage = "loop-spec"
+                session.awaiting = AWAITING_NONE
+                session.open_brief = None
+                await self._store.save(session)
+                await self._poster.post_status(
+                    collab,
+                    (
+                        f"Coder collaboration from Verify for **{init}** "
+                        f"`{session.slots.get('active_wave')}` — findings applied → loop-spec."
+                    ),
+                    EventType.PROGRESS,
+                    {
+                        "status": "coder_verify_collab",
+                        "findings": session.slots.get("verify_findings"),
+                    },
+                    identity_handle=self.role_id,
+                )
+                await self._continue_wave(tenant, collab, session)
+            else:
+                session.slots["verify_pending"] = ""
+                session.slots["verify_accepted"] = "true"
+                session.stage = "wave-awaiting-closeout"
+                session.awaiting = AWAITING_NONE
+                session.open_brief = None
+                if payload.get("pr_url"):
+                    session.slots["wave_pr_url"] = str(payload.get("pr_url"))
+                if payload.get("pr_number"):
+                    session.slots["wave_pr_number"] = str(payload.get("pr_number"))
+                await self._store.save(session)
+                await self._continue_wave(tenant, collab, session)
+            done = await self._batons.mark_done(baton, ttl=ttl)
+            return Rollup(
+                baton_id=done.id,
+                role=self.role_id,
+                status=BatonStatus.DONE,
+                summary=f"coder_{stage_hint}:{repo}",
+                correlation_id=baton.correlation_id,
             )
 
         lease = await self._leases.try_acquire(
@@ -403,7 +484,9 @@ class CoderWaveProgramme(BaseBusinessService):
                 return False
             self._navigator.advance(session, "pass")
             await self._store.save(session)
-            return True
+            # Hand prove to Verify — do not open wave-acceptance GateOpener (1A).
+            await self._handoff_to_verify(tenant, room, session)
+            return False
 
         if stage == "wave-done-action":
             if not await self._run_board_status(tenant, room, session, status="done"):
@@ -413,7 +496,17 @@ class CoderWaveProgramme(BaseBusinessService):
             return True
 
         if stage == "wave-acceptance":
-            await self._open_wave_acceptance(tenant, room, session)
+            # Verify owns prove; if we land here without handoff, re-emit verify.wave.
+            if (session.slots.get("verify_pending") or "") == "true":
+                await self._poster.post_status(
+                    room,
+                    "Coder waiting on Verify prove (`verify.wave` pending).",
+                    EventType.PROGRESS,
+                    {"status": "coder_await_verify"},
+                    identity_handle=self.role_id,
+                )
+                return False
+            await self._handoff_to_verify(tenant, room, session)
             return False
 
         if stage == "wave-awaiting-closeout":
@@ -695,47 +788,38 @@ class CoderWaveProgramme(BaseBusinessService):
         )
         return True
 
-    async def _open_wave_acceptance(
+    async def _handoff_to_verify(
         self, tenant: TenantContext, room: str, session: AgentWorkSession
     ) -> None:
         init = session.slots.get("initiative") or ""
         repo = session.slots.get("repo") or ""
         wave = session.slots.get("active_wave") or ""
-        pr_url = session.slots.get("wave_pr_url") or ""
-        review = await run_wave_review(
-            self._prompts,
+        round_n = int(session.slots.get("collab_round") or "1")
+        await self._verify_handoff.emit_verify_wave(
+            tenant,
             initiative=init,
-            wave_id=wave,
+            engg_room=room,
             repo=repo,
-            purpose="wave-acceptance",
-            reply_tokens=[WAVE_ACCEPTED, ANOTHER_ROUND, HOLD],
-            tip_excerpt=pr_url or "(no PR url yet)",
-        )
-        brief = wave_acceptance_brief(
-            self._briefs,
-            initiative=init,
             wave_id=wave,
-            repo=repo,
-            pr_url=pr_url,
-            recommend=review.recommend,
-            bluf=review.bluf,
-            example=review.example,
-            locking=review.locking,
-            not_locking=review.not_locking,
-            revise_if=review.revise_if,
+            pr_url=session.slots.get("wave_pr_url") or "",
+            pr_number=session.slots.get("wave_pr_number") or "",
+            verify_command=session.slots.get("verify_command") or "make verify",
+            compose_dir=session.slots.get("compose_dir") or "",
+            coverage_packet=session.slots.get("coverage_packet") or "",
+            coder_handle=session.slots.get("coder_handle") or self.role_id,
+            round_n=round_n,
         )
-        coach = wave_acceptance_coach(
-            initiative=init,
-            wave_id=wave,
-            repo=repo,
-            pr_url=pr_url,
-            recommend=review.recommend,
-            bluf=review.bluf,
-            example=review.example,
-        )
-        god_token = await self._gates.open(session, brief=brief, coach=coach)
-        if god_token:
-            await self.after_judgment(tenant, room, session, god_token)
+        session.slots["verify_pending"] = "true"
+        session.stage = "wave-acceptance"
+        session.awaiting = AWAITING_NONE
+        session.open_brief = None
+        await self._store.save(session)
+
+    async def _open_wave_acceptance(
+        self, tenant: TenantContext, room: str, session: AgentWorkSession
+    ) -> None:
+        # Kept for resume/tests; prove path is Verify (ADR 0006).
+        await self._handoff_to_verify(tenant, room, session)
 
     async def _open_closeout_enter(
         self, tenant: TenantContext, room: str, session: AgentWorkSession

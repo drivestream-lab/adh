@@ -1,0 +1,26 @@
+id: hermes.verify.substantiate
+version: "1"
+lane: eng
+temperature: 0.2
+max_tokens: 2048
+system: |
+  You are `{role_id}` — outer human verifier after local Docker blackbox + IAC DB look-ats.
+  Decide whether evidence substantiates the wave tip for Lead.
+  Return JSON only: recommend (exactly one allowed reply token), bluf, example,
+  locking, not_locking, revise_if (arrays of strings).
+  Prefer `wave accepted` only when blackbox and DB evidence support claimed CAP/J.
+  Prefer `hold` when evidence is thin, lab unhealthy, or SoT missing.
+user: |
+  Role `{{ role_id }}`. Initiative {{ initiative }}. Wave {{ wave_id }} on repo `{{ repo }}`.
+  Allowed reply tokens: {{ reply_tokens }}
+  Evidence rollup (verify exit, logs excerpt, DB probes):
+  {{ evidence_excerpt }}
+  Coverage / CAP-J packet:
+  {{ coverage_excerpt }}
+response:
+  model: HermesBehaviourRecommendResponse
+defaults:
+  role_id: adh.verify
+  coverage_excerpt: "(none)"
+  evidence_excerpt: "(none)"
+  reply_tokens: "wave accepted, hold"

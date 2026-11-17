@@ -134,6 +134,28 @@ class CoderAgentSettings(AgentSettings):
     )
 
 
+class VerifyAgentSettings(AgentSettings):
+    """Verify wave agent — deploy tip + blackbox + IAC evidence (ADR 0006)."""
+
+    PREFIX: ClassVar[str] = "ADH_VERIFY"
+    role_id: str = Field(default="adh.verify")
+    progress_seconds: float = Field(default=90.0, ge=0.05)
+    max_collab_rounds: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="Max Verify↔Coder collaboration rounds (ADH_VERIFY_MAX_COLLAB_ROUNDS)",
+    )
+    lab_root_name: str = Field(
+        default="dev-infra-lab",
+        description="Sibling workspace dir for shared lab (under ORCH_WORKSPACE_ROOT)",
+    )
+    default_overlay_name: str = Field(
+        default="realworld-local",
+        description="Default product overlay dir when baton omits compose_dir",
+    )
+
+
 class AdhAutonomySettings(BaseSettings):
     """Process-wide autonomy mode (all role workers read the same env)."""
 

@@ -8,14 +8,17 @@ from src.adh_agents.agents.kb_agent import KbAgent
 from src.adh_agents.agents.pe_agent import PEAgent
 from src.adh_agents.agents.pm_agent import PMAgent
 from src.adh_agents.agents.read_agent import ReadAgent
+from src.adh_agents.agents.verify_agent import VerifyAgent
 from src.adh_agents.baton.redis_store import RedisBatonStore
 from src.adh_agents.catalogue.navigator import HermesNavigatorService
 from src.adh_agents.collaboration.brief_service import HermesBriefService
 from src.adh_agents.execution.dispatch_service import HermesDispatchService
 from src.adh_agents.programmes.coder.programme import CoderWaveProgramme
 from src.adh_agents.programmes.coder.repo_lease import CoderRepoLeaseStore
+from src.adh_agents.programmes.coder.verify_handoff import CoderVerifyHandoff
 from src.adh_agents.programmes.dev.coder_handoff import DevCoderHandoff
 from src.adh_agents.programmes.dev.programme import DevEnggProgramme
+from src.adh_agents.programmes.verify.programme import VerifyWaveProgramme
 from src.adh_agents.programmes.kb.enrich import KbEnrichProgramme
 from src.adh_agents.programmes.pe.engg_handoff import PeEnggHandoff
 from src.adh_agents.programmes.pe.review import PeReviewProgramme
@@ -74,7 +77,9 @@ class BusinessServicesModule(Module):
         binder.bind(DevCoderHandoff, to=DevCoderHandoff, scope=singleton)
         binder.bind(DevEnggProgramme, to=DevEnggProgramme, scope=singleton)
         binder.bind(CoderRepoLeaseStore, to=CoderRepoLeaseStore, scope=singleton)
+        binder.bind(CoderVerifyHandoff, to=CoderVerifyHandoff, scope=singleton)
         binder.bind(CoderWaveProgramme, to=CoderWaveProgramme, scope=singleton)
+        binder.bind(VerifyWaveProgramme, to=VerifyWaveProgramme, scope=singleton)
         binder.bind(PmHttpLanesService, to=PmHttpLanesService, scope=singleton)
         # Agents: bound for workers; only PM auto-inits with the API process.
         binder.bind(PMAgent, to=PMAgent, scope=singleton)
@@ -83,3 +88,4 @@ class BusinessServicesModule(Module):
         binder.bind(KbAgent, to=KbAgent, scope=singleton)
         binder.bind(DevAgent, to=DevAgent, scope=singleton)
         binder.bind(CoderAgent, to=CoderAgent, scope=singleton)
+        binder.bind(VerifyAgent, to=VerifyAgent, scope=singleton)

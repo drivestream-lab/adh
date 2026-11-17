@@ -127,7 +127,7 @@ Both required. See [ADR 0004](../adr/0004-hermes-behaviour-harness.md) + sole pl
 | PM | `adh.pm` | Requirements → draft PRD PR; product answers; PRD merge | Verify first on new OS; `hermes.pm.*` gold |
 | Dev | `adh.dev` | YAML `development` lane after PRD merge: spec → spec PR → review/plan → merge → board | E1 landed; behaviour packs wave B1 |
 | Coder | `adh.coder` / `adh.coder.<repo>` | Execute ready WorkManifest waves → code + draft wave PRs; **swarm per Affected repo**; after `wave-pr` emits `verify.wave` | Hired — [ADR 0005](../adr/0005-coder-hire.md); Pass-2 closeout after Verify accepts |
-| Verify | `adh.verify` | Deploy tip local Docker; run Coder `make verify`; IAC `.env`+schema analysis; GateOpener `wave-acceptance`; **collaboration** with Coder under round cap | Hiring now — [ADR 0006](../adr/0006-verify-hire.md) + [implementation plan § Verify](../plans/adh-agents-implementation-plan.md) |
+| Verify | `adh.verify` | Deploy tip on `dev-infra-lab` + project overlay; `make verify`; IAC DB analysis; GateOpener `wave-acceptance`; **collaboration** under `ADH_VERIFY_MAX_COLLAB_ROUNDS` | Hired on `feature/coder-hire` — [ADR 0006](../adr/0006-verify-hire.md); `make adh-verify` |
 | Read | `adh.read` | Walk one repo; Buzz rollup | Before / with PE fan-out |
 | PE | `adh.pe` | Product review: fan-out reads, ≤10 Q / ≤2 agent rounds, attest, ping PM | Behaviour packs wave B2 |
 | KB | `adh.kb` | Patch OKF `knowledge/` heads; feed next-hop `kb_excerpt` | After merge enrich; loop Mode A in B3 |

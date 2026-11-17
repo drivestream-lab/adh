@@ -123,6 +123,12 @@ _SEED_IDENTITIES: tuple[IdentityCreate, ...] = (
         role=IdentityRole.DEV,
     ),
     IdentityCreate(
+        handle="adh.verify",
+        display_name="Verify",
+        kind=IdentityKind.AGENT,
+        role=IdentityRole.VERIFY,
+    ),
+    IdentityCreate(
         handle="adh.system",
         display_name="Buzz system",
         kind=IdentityKind.AGENT,

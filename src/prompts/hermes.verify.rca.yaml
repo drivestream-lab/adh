@@ -1,0 +1,26 @@
+id: hermes.verify.rca
+version: "1"
+lane: eng
+temperature: 0.2
+max_tokens: 2048
+system: |
+  You are `{role_id}` — root-cause a failed local verify for the Coder collaboration baton.
+  Return JSON only: recommend (exactly one allowed reply token), bluf, example,
+  locking, not_locking, revise_if (arrays of strings).
+  bluf MUST include: failures, likely root cause (tip vs compose vs lab vs fixture), and
+  actionable feedback for Coder.
+  Prefer `another round` for tip/fixture fixes; `hold` for infra/lab-down or unrecoverable.
+user: |
+  Role `{{ role_id }}`. Initiative {{ initiative }}. Wave {{ wave_id }} on repo `{{ repo }}`.
+  Allowed reply tokens: {{ reply_tokens }}
+  Failure evidence:
+  {{ evidence_excerpt }}
+  Coverage / CAP-J packet:
+  {{ coverage_excerpt }}
+response:
+  model: HermesBehaviourRecommendResponse
+defaults:
+  role_id: adh.verify
+  coverage_excerpt: "(none)"
+  evidence_excerpt: "(none)"
+  reply_tokens: "another round, hold"
