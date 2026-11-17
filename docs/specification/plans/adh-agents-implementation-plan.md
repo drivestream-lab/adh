@@ -129,7 +129,59 @@ Coverage packet: `{id, human_title, fixture_path, covers, prove_status}` — val
 
 ### Coder out of scope
 
-Verify/qa/iac/sre/obs · codegraph MCP · Stratum tenant onboard · moving Dev fence past board-seed
+qa/iac/sre/obs · codegraph MCP · Stratum tenant onboard · moving Dev fence past board-seed  
+(**Verify** hired separately — ADR 0006 / section below; Coder stops prove at wave-pr → `verify.wave`)
+
+---
+
+## Delivery sequence (Lead) — two phases
+
+| Phase | Work | Gate |
+|-------|------|------|
+| **Phase 1 — Local infra** | ✅ **New** sibling `dev-infra-lab` (1A); `adh-iac-local` Buzz-only; `realworld-local` on `lab_local` (2A). Persist + Buzz health + RealWorld `make verify` proven. Push GitHub `drivestream-lab/dev-infra-lab` when ready. | Lab + both overlays up; volumes persist |
+| **Phase 2 — Coder fix + Verify hire** | Coder emits `verify.wave` after wave-pr; hire **`adh.verify`** (deploy/prove/IAC analysis/collaboration). Live prove on **real** lab only. | Phase 1 ready for live V4 |
+
+Verify / Coder live prove is **blocked** until Phase 1 is done. See cursor plan `verify_agent_hire_9c2d1bee` (two-phase).
+
+---
+
+## Verify hire (Phase 2 — ADR 0006)
+
+**Intent:** After Coder `wave-pr-action`, Verify deploys tip onto **dev-infra-lab + project IAC local**, runs Coder `make verify` / WM `verify_command`, discovers IAC `.env` creds + schema from generated files, connects and analyzes evidence, then GateOpener `wave-acceptance` — or **collaboration** (RCA → Coder `loop-spec` → re-verify) under `ADH_VERIFY_MAX_COLLAB_ROUNDS` (default 10). Not QA. **Phase 1 first.**
+
+### Locks V.1–V.16
+
+| # | Lock |
+|---|------|
+| V.1 | Buzz `adh.verify` + `make adh-verify` |
+| V.2 | Not QA; miss path = **collaboration** → Coder `loop-spec` |
+| V.3 | Verify never writes product/fixture/driver code |
+| V.4 | Coder ships verify ingress (`make verify` / `verify_command`); fail-closed when live applicable |
+| V.5 | Local Docker/IAC — Verify deploys tip; no prove via `docker exec` into app |
+| V.6 | Trigger = Coder ingress; ADH does not re-implement stack clients as primary path |
+| V.7 | Observe then substantiate — logs/DB/topics/HTTP; exit 0 alone insufficient when SoT declared |
+| V.8 | Waves without new live surface — confirm N/A or baseline smoke; no silent skip |
+| V.9 | Fail → Hermes RCA + collab baton (failures, root cause, feedback) |
+| V.10 | Collab iterates until green or `ADH_VERIFY_MAX_COLLAB_ROUNDS` (default 10); cap → hold |
+| V.11 | `wave-acceptance` GateOpener (pass + hold-at-cap only); human or god; no silent auto-ack |
+| V.12 | After wave-pr, Coder emits `verify.wave`; after fix, re-emits; Verify owns acceptance |
+| V.13 | C.19 named CAP/J packet; bare `CAP-01` fail-closed |
+| V.14 | Sole plan + ADR 0006; guinea pig INIT-REALWORLD-001; branch `feature/coder-hire` |
+| V.15 | Out of scope: `adh.qa`, cloud IAC day-1, Verify writing fixtures, auto-pass skill |
+| V.16 | **No faking.** **Phase 1** = `dev-infra-lab` + separate ADH / RealWorld local IAC. Verify (**Phase 2**) **assumes** that stack present. Missing/down → hold. Not an `adh.iac` agent unless Lead expands scope. |
+
+### File-level
+
+| Step | Scope |
+|------|--------|
+| **Phase 1** | `dev-infra-lab` + ADH IAC local (Buzz) + `realworld-local` retarget; volumes; docs |
+| V0 | ADR 0006 + this section + Team OS / as-built + `.env` cap |
+| V1–V3 | Verify spine / programme / hermes (Phase 2) |
+| V4 | Live INIT-REALWORLD-001 on real lab (after Phase 1) |
+
+### Out of scope
+
+QA · cloud IAC · `adh.iac` agent · Kafka/Flink in default lab up · inventing product stack clients · auto-merge · Phase 2 live before Phase 1 green
 
 ---
 

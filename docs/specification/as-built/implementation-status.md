@@ -36,6 +36,9 @@
 | C2 Coder walker | ✅ YAML wave-in-progress → signoff; skills; board status; wave Draft PR; dirty fail-fast; lease clip |
 | C3 Hermes coder | ✅ `hermes.coder.wave.review` + `decide.outcome`; GateOpener human+god; bare CAP rejected |
 | C4 live 001 | 🟨 `hire coder INIT-REALWORLD-001` resume wired — run live on engg floor next |
+| Phase 1 — `dev-infra-lab` | ✅ Sibling `dev-infra-lab` (`lab_local` + volumes); `adh-iac-local` Buzz-only; `realworld-local` on lab; persist + Buzz + RealWorld verify OK |
+| V0 Verify hire docs | ✅ [ADR 0006](../adr/0006-verify-hire.md); two-phase sequence in sole plan |
+| Phase 2 — Coder fix + Verify | 🟨 After Phase 1; V1–V4 on `feature/coder-hire` |
 
 
 ## Landed (0b)
@@ -56,6 +59,8 @@ make adh-pm    # PMAgent + control plane
 make adh-pe    # PEAgent claims pe.review
 make adh-read  # ReadAgent claims read.walk
 make adh-kb    # KbAgent claims kb.enrich
+make adh-coder # CoderAgent claims coder.wave
+make adh-verify # VerifyAgent claims verify.wave
 
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest tests/unit/ -q
 ```

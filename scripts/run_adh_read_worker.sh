@@ -67,7 +67,7 @@ if ! command -v "${ORCH_CURSOR_BIN}" >/dev/null 2>&1; then
 fi
 
 curl -sf "${ORCH_BUZZ_BASE_URL}/health" >/dev/null || {
-  echo "ERROR: Buzz not healthy at ${ORCH_BUZZ_BASE_URL}/health — start with make buzz-up in adh-iac-local" >&2
+  echo "ERROR: Buzz not healthy at ${ORCH_BUZZ_BASE_URL}/health — start shared lab (cd ../dev-infra-lab && make infra-up) then Buzz (cd ../adh-iac-local && make buzz-up)" >&2
   exit 1
 }
 
