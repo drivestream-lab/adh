@@ -78,6 +78,19 @@ class DevCoderHandoff(BaseBusinessService):
             )
             return []
 
+        # Purge-safe: ensure `#engg-*` exists before baton notices / members.
+        try:
+            ensured = await self._buzz.ensure_engg_room(task_id=init)
+            engg = ensured.slug
+        except Exception as exc:
+            await self._poster.post_status(
+                source_room or tenant.ops_room,
+                f"Coder handoff cannot ensure engg room for **{init}**: {exc}",
+                EventType.STALL,
+                identity_handle=self.role_id,
+            )
+            return []
+
         try:
             manifest_text = self._load_plan_text(tenant, plan_path=plan_path, initiative=init)
             manifest = parse_board_manifest(manifest_text)

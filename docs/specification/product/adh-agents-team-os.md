@@ -135,13 +135,21 @@ Both required. See [ADR 0004](../adr/0004-hermes-behaviour-harness.md) + sole pl
 
 ## Workers
 
+Host processes (terminal or Cursor background shell). Env from `.env`.  
+**No** `scripts/run_adh_*` / `monitor_*` wrappers — progress is Buzz
+(`still working`, GateOpener briefs, `traj` → `buzz_task_events`).
+
 ```text
-make adh-pm    → adh_pm_worker
-make adh-pe    → adh_pe_worker
-make adh-read  → adh_read_worker
-make adh-kb    → adh_kb_worker
-make adh-dev   → adh_dev_worker   # E1 engg think → board
+make adh-pm     → python -m src.adh_pm_worker
+make adh-pe     → python -m src.adh_pe_worker
+make adh-read   → python -m src.adh_read_worker
+make adh-kb     → python -m src.adh_kb_worker
+make adh-dev    → python -m src.adh_dev_worker
+make adh-coder  → python -m src.adh_coder_worker
+make adh-verify → python -m src.adh_verify_worker
 ```
+
+Lead / Hermes collaborate **only via Buzz** after workers are up.
 
 ## Collaboration loop
 

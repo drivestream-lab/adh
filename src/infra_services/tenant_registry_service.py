@@ -172,7 +172,11 @@ def _load_tenant(registry: TenantRegistryService, entry: TenantEntry) -> TenantC
     }
     raw_policy = governance.get("policy")
     policy: dict = raw_policy if isinstance(raw_policy, dict) else {}
-    branch = str(policy.get("integration_branch") or "develop").strip() or "develop"
+    branch = str(policy.get("integration_branch") or "").strip()
+    if not branch:
+        raise ValidationError(
+            f"{entry.slug} governance policy.integration_branch required " f"(no hardcoded default)"
+        )
     return TenantContext(
         slug=slug,
         org=org,

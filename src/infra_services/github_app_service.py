@@ -832,6 +832,51 @@ class GitHubAppService(BaseInfraService):
             remove=remove,
         )
 
+    async def list_issue_labels(self, token: str, repo: str, *, issue_number: int) -> list[str]:
+        """Return current label names on an issue/PR (App REST — never ``gh``)."""
+        if self._client is None:
+            raise RuntimeError("GitHub App service has not been initialized")
+        org = self._settings.github_org
+        api = self._settings.github_api.rstrip("/")
+        response = await self._request(
+            "GET",
+            f"{api}/repos/{org}/{repo}/issues/{issue_number}/labels",
+            headers=_token_headers(token),
+            params={"per_page": 100},
+        )
+        response.raise_for_status()
+        rows = response.json()
+        if not isinstance(rows, list):
+            return []
+        out: list[str] = []
+        for row in rows:
+            if isinstance(row, dict) and row.get("name"):
+                out.append(str(row["name"]))
+        return out
+
+    async def require_issue_labels(
+        self,
+        token: str,
+        repo: str,
+        *,
+        issue_number: int,
+        required: list[str],
+    ) -> None:
+        """Fail closed unless every required label is present on the issue/PR."""
+        need = [n.strip() for n in required if (n or "").strip()]
+        if not need:
+            return
+        have = {
+            n.strip().lower()
+            for n in await self.list_issue_labels(token, repo, issue_number=issue_number)
+        }
+        missing = [n for n in need if n.lower() not in have]
+        if missing:
+            raise ValidationError(
+                f"`{repo}`#{issue_number} missing required gate label(s) "
+                f"{missing} — refuse land without attestation (have={sorted(have)})"
+            )
+
     async def mark_ready_for_review(self, token: str, repo: str, *, pr_number: int) -> None:
         """Convert a draft PR to ready-for-review.
 
@@ -1356,8 +1401,10 @@ class GitHubAppService(BaseInfraService):
                 f"(tried {sorted(wanted)}; field_id={field_id or 'missing'})"
             )
 
+        # Only `$content` is used in the query body — GitHub rejects unused vars
+        # (``Variable $project is declared … but not used``). Filter by project in Python.
         item_query = (
-            "query($content: ID!, $project: ID!) {"
+            "query($content: ID!) {"
             " node(id: $content) {"
             "  ... on Issue {"
             "   projectItems(first: 20) {"
@@ -1378,7 +1425,7 @@ class GitHubAppService(BaseInfraService):
             headers={**_token_headers(token), "Content-Type": "application/json"},
             json={
                 "query": item_query,
-                "variables": {"content": content_node_id, "project": project_id},
+                "variables": {"content": content_node_id},
             },
         )
         item_resp.raise_for_status()

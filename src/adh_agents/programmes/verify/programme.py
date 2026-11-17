@@ -331,8 +331,29 @@ class VerifyWaveProgramme(BaseBusinessService):
         session.slots["evidence_excerpt"] = evidence[:8000]
         await self._store.save(session)
 
+        # Present evidence on Buzz before Hermes judges (human + god see the same rollup).
+        await self._poster.post_status(
+            collab,
+            (
+                f"Verify evidence for **{init}** `{wave}` on `{repo}`:\n"
+                f"- deploy overlay `{paths.overlay_root.name}`: ok\n"
+                f"- `{trigger.command}`: exit={trigger.exit_code} ok={trigger.ok}\n"
+                f"- db: {analysis.summary}\n"
+                f"```\n{(trigger.stdout or '')[-900:]}\n```"
+            ),
+            EventType.PROGRESS,
+            {
+                "status": "verify_evidence",
+                "trigger_ok": trigger.ok,
+                "db_ok": analysis.ok,
+                "exit_code": trigger.exit_code,
+            },
+            identity_handle=self.role_id,
+        )
+
         passed = bool(trigger.ok and analysis.ok)
         if passed:
+            # Hermes agent: substantiate evidence → recommend card for GateOpener.
             hermes = await run_substantiate(
                 self._prompts,
                 initiative=init,
@@ -341,6 +362,8 @@ class VerifyWaveProgramme(BaseBusinessService):
                 evidence_excerpt=evidence,
                 coverage_excerpt=session.slots.get("coverage_packet") or "",
             )
+            # Brief SSOT for Lead/god — recommend already normalized onto reply_tokens.
+            bluf = hermes.bluf or (f"Blackbox + DB green for **{init}** `{wave}` on `{repo}`.")
             brief = wave_acceptance_brief(
                 self._briefs,
                 initiative=init,
@@ -348,7 +371,7 @@ class VerifyWaveProgramme(BaseBusinessService):
                 repo=repo,
                 pr_url=session.slots.get("pr_url") or "",
                 recommend=hermes.recommend,
-                bluf=hermes.bluf,
+                bluf=bluf,
                 example=hermes.example,
                 locking=hermes.locking,
                 not_locking=hermes.not_locking,
@@ -360,9 +383,10 @@ class VerifyWaveProgramme(BaseBusinessService):
                 repo=repo,
                 pr_url=session.slots.get("pr_url") or "",
                 recommend=hermes.recommend,
-                bluf=hermes.bluf,
+                bluf=bluf,
                 example=hermes.example,
             )
+            # god → auto-plays brief.recommend (wave accepted); human → Lead posts it.
             god_token = await self._gates.open(session, brief=brief, coach=coach)
             if god_token:
                 await self.after_judgment(tenant, collab, session, god_token)

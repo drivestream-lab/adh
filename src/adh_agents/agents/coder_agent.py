@@ -10,14 +10,6 @@ from injector import inject
 from src.adh_agents.base import BaseHermesAgent
 from src.adh_agents.baton.models import Baton
 from src.adh_agents.baton.redis_store import RedisBatonStore
-from src.adh_agents.collaboration.human_replies import (
-    ANOTHER_ROUND,
-    ENTER_CLOSEOUT,
-    HOLD,
-    MERGE_WAVE_PR,
-    WAVE_ACCEPTED,
-    normalize_reply,
-)
 from src.adh_agents.programmes.coder.programme import CoderWaveProgramme
 from src.adh_agents.programmes.coder.repo_lease import CoderRepoLeaseStore
 from src.adh_agents.programmes.coder.roles import coder_role_prefix, is_coder_role
@@ -25,6 +17,7 @@ from src.adh_agents.programmes.dev.coder_handoff import DevCoderHandoff
 from src.adh_agents.programmes.dev.impact_repos import resolve_repo_root
 from src.adh_agents.programmes.dev.paths import implementation_plan_path
 from src.adh_agents.programmes.pm.lead_tokens import extract_initiative
+from src.adh_agents.programmes.pm.traj_coach import TrajCoachProgramme
 from src.adh_agents.runtime.autonomy import AutonomyPolicy
 from src.adh_agents.runtime.lead_commands import LeadCommand, match_lead_command
 from src.adh_agents.runtime.orchestrator import Orchestrator
@@ -37,6 +30,7 @@ from src.adh_agents.runtime.room_resolve import (
 from src.adh_agents.runtime.work_models import (
     AWAITING_AUTHORIZATION,
     AWAITING_JUDGMENT,
+    AWAITING_NONE,
 )
 from src.adh_agents.runtime.work_store import AgentWorkStore
 from src.adh_agents.settings import CoderAgentSettings
@@ -46,7 +40,8 @@ from src.infra_services.tenant_registry_service import TenantRegistryService
 from src.models.buzz_models import MessageKind, MessageRead
 
 _BATON_TYPE = "coder.wave"
-_GATE_TOKENS = [WAVE_ACCEPTED, MERGE_WAVE_PR, ENTER_CLOSEOUT, ANOTHER_ROUND, HOLD]
+# Mirror Dev stalled-skill resume — Coder YAML skill nodes only (not forge actions).
+_CODER_SKILL_STAGES = frozenset({"pre-implement", "loop-spec", "learning-extract", "ground-spec"})
 
 
 class CoderAgent(BaseHermesAgent):
@@ -62,6 +57,7 @@ class CoderAgent(BaseHermesAgent):
         programme: CoderWaveProgramme,
         leases: CoderRepoLeaseStore,
         coder_handoff: DevCoderHandoff,
+        traj_coach: TrajCoachProgramme,
         work_store: AgentWorkStore,
         presence: PresenceService,
         autonomy: AutonomyPolicy,
@@ -73,6 +69,7 @@ class CoderAgent(BaseHermesAgent):
         self._programme = programme
         self._leases = leases
         self._coder_handoff = coder_handoff
+        self._traj_coach = traj_coach
         self._work_store = work_store
         self._autonomy = autonomy
         self._coder_settings = settings
@@ -120,6 +117,7 @@ class CoderAgent(BaseHermesAgent):
                 self.logger.exception("Coder pending baton loop failed")
 
     async def _god_resume_open_gates(self) -> None:
+        """God resume — same shape as DevAgent._god_resume_open_gates."""
         if not self._autonomy.is_god:
             return
         for tenant in self._tenants.active():
@@ -130,6 +128,8 @@ class CoderAgent(BaseHermesAgent):
                 continue
             for session in active:
                 room = session.room or tenant.ops_room
+                # Navigator may set awaiting before GateOpener posts a brief —
+                # re-enter the spine so the coach opens (then god auto-takes).
                 if (
                     session.awaiting in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION)
                     and session.open_brief is None
@@ -139,7 +139,30 @@ class CoderAgent(BaseHermesAgent):
                     except Exception:
                         self.logger.exception(
                             "god Coder spine re-open failed",
-                            initiative=session.slots.get("initiative"),
+                            tenant=tenant.slug,
+                            initiative=session.slots.get("initiative") or session.initiative,
+                        )
+                    continue
+                # Skill-stage stall left awaiting=none — re-enter so a fixed
+                # verifier / re-run can progress (Dev stalled-skill pattern).
+                stage = (session.stage or "").strip()
+                if (
+                    session.awaiting == AWAITING_NONE
+                    and session.open_brief is None
+                    and stage in _CODER_SKILL_STAGES
+                    and not any(
+                        k.startswith(f"skill:{stage}:") and v == "ok"
+                        for k, v in (session.slots or {}).items()
+                    )
+                ):
+                    try:
+                        await self._programme.start_programme(tenant, room, session)
+                    except Exception:
+                        self.logger.exception(
+                            "god Coder stalled-skill resume failed",
+                            tenant=tenant.slug,
+                            initiative=session.slots.get("initiative") or session.initiative,
+                            stage=stage,
                         )
                     continue
                 if session.awaiting not in (AWAITING_JUDGMENT, AWAITING_AUTHORIZATION):
@@ -162,13 +185,18 @@ class CoderAgent(BaseHermesAgent):
                         purpose=(brief.purpose or brief.node_id or "coder-gate"),
                     )
                     if not ok:
-                        self.logger.warning("god Coder resume skipped", reason=reason)
+                        self.logger.warning(
+                            "god Coder resume skipped",
+                            reason=reason,
+                            initiative=session.slots.get("initiative") or session.initiative,
+                        )
                         continue
                     await self._programme.after_judgment(tenant, room, session, token)
                 except Exception:
                     self.logger.exception(
                         "god Coder resume failed",
-                        initiative=session.slots.get("initiative"),
+                        tenant=tenant.slug,
+                        initiative=session.slots.get("initiative") or session.initiative,
                     )
 
     async def _catch_up_pending_batons(self) -> None:
@@ -180,14 +208,25 @@ class CoderAgent(BaseHermesAgent):
                 to_role_prefix=coder_role_prefix(),
                 baton_type=_BATON_TYPE,
             )
+            # Verify→Coder returns must bypass clip_ready: the wave repo already
+            # holds a lease from hire / loop-spec, and clip_ready skips any held
+            # key — otherwise verify_accepted stays pending forever.
+            returns: list[Baton] = []
             repos: list[str] = []
             by_repo: dict[str, Baton] = {}
             for baton in pending:
-                repo = str((baton.payload or {}).get("repo") or "").strip()
+                payload = baton.payload or {}
+                stage = str(payload.get("stage") or "").strip()
+                repo = str(payload.get("repo") or "").strip()
+                if stage in {"verify_accepted", "verify_collab"}:
+                    returns.append(baton)
+                    continue
                 if not repo or repo in by_repo:
                     continue
                 by_repo[repo] = baton
                 repos.append(repo)
+            for baton in returns:
+                await self._programme.handle_baton(baton, room=baton.ops_room or tenant.ops_room)
             allowed = await self._leases.clip_ready(
                 repos,
                 tenant=tenant.slug,
@@ -226,7 +265,23 @@ class CoderAgent(BaseHermesAgent):
         if not body:
             return
 
-        cmd = match_lead_command(body, allowed=[LeadCommand.HIRE_CODER, LeadCommand.RESUME])
+        cmd = match_lead_command(
+            body, allowed=[LeadCommand.HIRE_CODER, LeadCommand.RESUME, LeadCommand.TRAJ]
+        )
+        if cmd == LeadCommand.TRAJ:
+            init = extract_initiative(body, tenant.init_prefix)
+            if not init:
+                active = await self._work_store.list_active(tenant.slug, self.role_id)
+                for s in active:
+                    if (s.room or "") == room:
+                        init = (s.slots.get("initiative") or s.initiative or "").strip()
+                        if init:
+                            break
+            await self._traj_coach.handle_lead(
+                tenant, room, body=body, task_id=(init or "").upper() or None
+            )
+            return
+
         if cmd == LeadCommand.HIRE_CODER:
             init = extract_initiative(body, tenant.init_prefix)
             if not init:
@@ -248,7 +303,7 @@ class CoderAgent(BaseHermesAgent):
             await self._orchestrator.handle_lead_message(tenant, room, message)
             return
 
-        # Open-gate tokens (human mode) — same brief god would auto-play.
+        # Open gates (incl. dynamic wave-pickup tokens) — same path as Dev/PM.
         active = await self._work_store.list_active(tenant.slug, self.role_id)
         open_gates = [
             s
@@ -257,18 +312,9 @@ class CoderAgent(BaseHermesAgent):
             and s.open_brief is not None
             and (not s.room or s.room == room)
         ]
-        if open_gates and normalize_reply(body, _GATE_TOKENS) is not None:
-            session = open_gates[0]
-            await self.ack_received(
-                room,
-                lead_body=body,
-                source_message_id=str(message.id) if message.id else None,
-            )
-            await self._programme.after_judgment(tenant, room, session, body)
-            return
-
         if open_gates:
             await self._orchestrator.handle_lead_message(tenant, room, message)
+            return
 
     async def _hire_coder(self, tenant, room: str, *, initiative: str) -> None:
         """C4 resume — re-emit ready-repo batons for a board-seeded INIT (e.g. 001)."""

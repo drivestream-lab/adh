@@ -116,6 +116,7 @@ def test_forge_acl_coder_prefix() -> None:
     assert forge_allowed("adh.coder.realworld-api", "update_board_status")
     assert forge_allowed("adh.coder", "prd_merge")
     assert forge_allowed("adh.coder", "land_pull_request")
+    assert forge_allowed("adh.coder", "apply_labels")
     assert not forge_allowed("adh.coder", "create_board_tickets")
 
 
@@ -275,7 +276,7 @@ async def test_coder_programme_claim_smoke() -> None:
     programme._settings = MagicMock(baton_ttl_seconds=60, max_parallel_coders=3)
     programme.role_id = "adh.coder"
     programme.logger = MagicMock()
-    programme._continue_wave = AsyncMock()  # type: ignore[method-assign]
+    programme._open_wave_pickup_gate = AsyncMock()  # type: ignore[method-assign]
 
     rollup = await programme.handle_baton(baton, room="engg-init-x-1")
     assert rollup.status == BatonStatus.DONE
@@ -283,7 +284,7 @@ async def test_coder_programme_claim_smoke() -> None:
     work_store.save.assert_awaited()
     poster.post_status.assert_awaited()
     leases.try_acquire.assert_awaited()
-    programme._continue_wave.assert_awaited()
+    programme._open_wave_pickup_gate.assert_awaited()
 
     loaded = await store.get(
         tenant="realworld", idempotency_key="coder.wave:realworld:INIT-X-1:api:seed"

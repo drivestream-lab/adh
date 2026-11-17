@@ -109,18 +109,25 @@ async def push_local_paths(
     relative_paths: list[str],
     commit_message: str,
     from_branch: str,
+    reset_branch: bool = True,
 ) -> list[str]:
     """Push existing files from a code checkout via Contents API.
 
     ``from_branch`` is the integration tip (``develop``) — never GitHub default
     ``main`` for product Spec lanes.
+
+    ``reset_branch=True`` (default) recreates ``branch`` from ``from_branch`` —
+    use for first Spec/wave draft open. Incremental YAML ``commit_workspace``
+    hops pass ``reset_branch=False`` so prior tip commits survive.
     """
     app = app_for_repo(workspace, repo)
     short = repo.rsplit("/", 1)[-1]
     base = (from_branch or "develop").strip() or "develop"
     token, _ = await github.installation_token(app, write=True, repositories=[short])
-    # Force Spec head onto current develop tip before the first Contents put.
-    await github.ensure_branch_from(token, short, branch, from_branch=base, reset=True)
+    # Spec/wave draft open: force head onto current develop tip before first put.
+    await github.ensure_branch_from(
+        token, short, branch, from_branch=base, reset=bool(reset_branch)
+    )
     pushed: list[str] = []
     for rel in list(dict.fromkeys(p for p in relative_paths if p)):
         local = repo_root / rel
@@ -304,9 +311,17 @@ async def land_spec_pr(
     if await forge._github.is_pull_merged(token, short, pr_number=pr_number):
         from src.configs.orchestrator_settings import OrchestratorSettings
 
+        # Fail closed: a merged Spec PR without ``spec-lgtm`` is not a successful land —
+        # refuse to treat it as done (forces Gate 2 remediation before board/coding).
+        await forge._github.require_issue_labels(
+            token,
+            short,
+            issue_number=pr_number,
+            required=list(_SPEC_LGTM_ADD),
+        )
         org = OrchestratorSettings.get_instance().github_org
         logger.info(
-            "spec-merge skip — already merged",
+            "spec-merge skip — already merged with Gate 2 labels",
             repo=short,
             pr=pr_number,
             initiative=initiative,

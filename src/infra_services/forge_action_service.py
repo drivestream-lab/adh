@@ -238,6 +238,16 @@ class ForgeActionService(BaseInfraService):
                 add=list(gate_label_add or []),
                 remove=list(gate_label_remove or []),
             )
+        # Fail closed: never merge until required gate labels are actually on the PR.
+        # (Projection can 404/no-op; attestation without verify was how Spec PRs landed
+        # without ``spec-lgtm``.)
+        if gate_label_add:
+            await self._github.require_issue_labels(
+                token,
+                repo,
+                issue_number=pr_number,
+                required=list(gate_label_add),
+            )
         sha = await self._github.merge_pull_request(
             token,
             repo,

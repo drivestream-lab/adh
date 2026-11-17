@@ -61,12 +61,15 @@ async def test_land_spec_pr_projects_spec_lgtm(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
-async def test_land_spec_pr_skips_already_merged(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_land_spec_pr_skips_already_merged_when_spec_lgtm_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     forge = MagicMock()
     forge.land_pull_request = AsyncMock()
     forge._github = MagicMock()
     forge._github.installation_token = AsyncMock(return_value=("tok", {}))
     forge._github.is_pull_merged = AsyncMock(return_value=True)
+    forge._github.require_issue_labels = AsyncMock()
     writer = _app(1)
     reviewer = _app(2)
     workspace = MagicMock()
@@ -81,6 +84,41 @@ async def test_land_spec_pr_skips_already_merged(monkeypatch: pytest.MonkeyPatch
         initiative="INIT-REALWORLD-003",
     )
     assert result.detail == "already-merged"
+    forge.land_pull_request.assert_not_awaited()
+    forge._github.require_issue_labels.assert_awaited_once()
+    await_args = forge._github.require_issue_labels.await_args
+    assert await_args is not None
+    assert await_args.kwargs["required"] == ["spec-lgtm"]
+
+
+@pytest.mark.asyncio
+async def test_land_spec_pr_already_merged_without_spec_lgtm_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.exceptions.app_exceptions import ValidationError
+
+    forge = MagicMock()
+    forge.land_pull_request = AsyncMock()
+    forge._github = MagicMock()
+    forge._github.installation_token = AsyncMock(return_value=("tok", {}))
+    forge._github.is_pull_merged = AsyncMock(return_value=True)
+    forge._github.require_issue_labels = AsyncMock(
+        side_effect=ValidationError("missing required gate label(s) ['spec-lgtm']")
+    )
+    writer = _app(1)
+    reviewer = _app(2)
+    workspace = MagicMock()
+    workspace.app_role = MagicMock(return_value=reviewer)
+    monkeypatch.setattr(forge_ops, "app_for_repo", lambda _w, _r: writer)
+
+    with pytest.raises(ValidationError, match="spec-lgtm"):
+        await forge_ops.land_spec_pr(
+            forge=forge,
+            workspace=workspace,
+            repo="realworld-api",
+            pr_number=3,
+            initiative="INIT-REALWORLD-001",
+        )
     forge.land_pull_request.assert_not_awaited()
 
 
@@ -211,6 +249,7 @@ async def test_land_pull_request_applies_gate_labels_with_approve() -> None:
     github.pull_head_sha = AsyncMock(return_value="abc")
     github.create_pull_review = AsyncMock(return_value="https://review")
     github.replace_issue_labels = AsyncMock()
+    github.require_issue_labels = AsyncMock()
 
     svc = ForgeActionService(github=github)
     svc._initialized = True
@@ -231,4 +270,38 @@ async def test_land_pull_request_applies_gate_labels_with_approve() -> None:
     call = github.replace_issue_labels.await_args
     assert call.kwargs["add"] == ["spec-lgtm"]
     assert call.kwargs["remove"] == ["spec-pending"]
+    github.require_issue_labels.assert_awaited_once()
+    assert github.require_issue_labels.await_args.kwargs["required"] == ["spec-lgtm"]
     github.merge_pull_request.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_land_pull_request_refuses_merge_without_verified_labels() -> None:
+    from src.exceptions.app_exceptions import ValidationError
+    from src.infra_services.forge_action_service import ForgeActionService
+
+    github = MagicMock()
+    github.installation_token = AsyncMock(return_value=("tok", {}))
+    github.mark_ready_for_review = AsyncMock()
+    github.merge_pull_request = AsyncMock(return_value="merge-sha")
+    github.pull_head_sha = AsyncMock(return_value="abc")
+    github.create_pull_review = AsyncMock(return_value="https://review")
+    github.replace_issue_labels = AsyncMock()
+    github.require_issue_labels = AsyncMock(
+        side_effect=ValidationError("missing required gate label(s) ['spec-lgtm']")
+    )
+
+    svc = ForgeActionService(github=github)
+    svc._initialized = True
+
+    with pytest.raises(ValidationError, match="spec-lgtm"):
+        await svc.land_pull_request(
+            app=_app(1),
+            repo="realworld-api",
+            pr_number=3,
+            commit_title="docs: merge",
+            pre_approve_app=_app(2),
+            gate_label_add=["spec-lgtm"],
+            gate_label_remove=["spec-pending"],
+        )
+    github.merge_pull_request.assert_not_awaited()

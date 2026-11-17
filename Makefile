@@ -33,26 +33,28 @@ test:
 run:
 	.venv/bin/python -m src.main
 
+# Host workers: load `.env`, run in a terminal (or Cursor background shell).
+# Progress / trajectory live on Buzz — no monitor_* / run_adh_* wrapper scripts.
 adh-pm:
-	@bash scripts/run_adh_pm_worker.sh
+	.venv/bin/python -u -m src.adh_pm_worker
 
 adh-pe:
-	@bash scripts/run_adh_pe_worker.sh
+	.venv/bin/python -u -m src.adh_pe_worker
 
 adh-read:
-	@bash scripts/run_adh_read_worker.sh
+	.venv/bin/python -u -m src.adh_read_worker
 
 adh-kb:
-	@bash scripts/run_adh_kb_worker.sh
+	.venv/bin/python -u -m src.adh_kb_worker
 
 adh-dev:
-	@bash scripts/run_adh_dev_worker.sh
+	.venv/bin/python -u -m src.adh_dev_worker
 
 adh-coder:
-	@bash scripts/run_adh_coder_worker.sh
+	.venv/bin/python -u -m src.adh_coder_worker
 
 adh-verify:
-	@bash scripts/run_adh_verify_worker.sh
+	.venv/bin/python -u -m src.adh_verify_worker
 
 desktop-dev:
 	cd apps/buzz-desktop && npm install && npm run dev

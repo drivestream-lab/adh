@@ -26,6 +26,7 @@ _DEFAULT_ACL: dict[str, FrozenSet[str]] = {
         }
     ),
     # Coder wave lane — board move + wave draft PR (+ push) after board-seed.
+    # apply_labels: project wave-accepted after Verify (Pass-2 learning-extract gate).
     "adh.coder": frozenset(
         {
             "update_board_status",
@@ -35,6 +36,7 @@ _DEFAULT_ACL: dict[str, FrozenSet[str]] = {
             "close_pull_request",
             "land_pull_request",
             "prd_merge",
+            "apply_labels",
         }
     ),
     "adh.qa": frozenset({"comment_pr", "set_check"}),

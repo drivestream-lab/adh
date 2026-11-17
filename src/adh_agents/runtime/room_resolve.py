@@ -70,12 +70,16 @@ async def engg_collaboration_room(
     initiative: str | None,
     fallback: str | None = None,
 ) -> str:
-    """Dev programme floor — `#engg-<id>`, never hub / task home."""
+    """Dev/Coder programme floor — `#engg-<id>`, never hub / task home.
+
+    Idempotently **creates** the room (purge-safe). Slug-only was a footgun after
+    datastore wipe: batons posted to a missing ``engg-*`` and Coder stalled.
+    """
     init = (initiative or "").strip().upper()
     if not init or init.startswith("__"):
         return fallback or tenant.ops_room
-    _ = buzz  # reserved for future task-linked lookups
-    return engg_room_slug_for(init)
+    room = await buzz.ensure_engg_room(task_id=init)
+    return room.slug
 
 
 async def resolve_tenant_for_room(

@@ -55,11 +55,12 @@
 ## Commands
 
 ```bash
-make adh-pm    # PMAgent + control plane
-make adh-pe    # PEAgent claims pe.review
-make adh-read  # ReadAgent claims read.walk
-make adh-kb    # KbAgent claims kb.enrich
-make adh-coder # CoderAgent claims coder.wave
+# Terminal / Cursor background shell (`.env` loaded by worker). Progress on Buzz.
+make adh-pm     # PMAgent + control plane
+make adh-pe     # PEAgent claims pe.review
+make adh-read   # ReadAgent claims read.walk
+make adh-kb     # KbAgent claims kb.enrich
+make adh-coder  # CoderAgent claims coder.wave
 make adh-verify # VerifyAgent claims verify.wave (lab + overlay required)
 
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest tests/unit/ -q

@@ -58,7 +58,8 @@ class TenantContext(BaseCreateModel):
     org: str = Field(..., min_length=2, max_length=128)
     meta_repo: str = Field(..., min_length=2, max_length=128)
     meta_root: str = Field(..., min_length=1, max_length=512)
-    integration_branch: str = Field(default="develop", min_length=1, max_length=128)
+    # SSOT: governance policy.integration_branch (registry refuses empty; no branch-name default).
+    integration_branch: str = Field(default="", max_length=128)
     ops_room: str = Field(default="", max_length=128)
     memory_room: str = Field(default="", max_length=128)
     repos: dict[str, str] = Field(default_factory=dict)

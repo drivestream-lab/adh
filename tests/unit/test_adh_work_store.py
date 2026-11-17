@@ -121,3 +121,27 @@ async def test_clear_one_and_unbound() -> None:
     # unbound may have been cleared when INIT was saved
     await store.clear("t", "adh.pm")
     assert await store.list_active("t", "adh.pm") == []
+
+
+@pytest.mark.asyncio
+async def test_coder_repo_scoped_work_id_not_collapsed() -> None:
+    redis = _FakeRedis()
+    store = AgentWorkStore(redis)  # type: ignore[arg-type]
+    await store.save(
+        AgentWorkSession(
+            tenant_slug="realworld",
+            role_id="adh.coder",
+            room="engg",
+            work_id="INIT-REALWORLD-001:realworld-api",
+            initiative="INIT-REALWORLD-001",
+            stage="wave-acceptance",
+            slots={"board_issue_urls": "https://github.com/o/r/issues/8"},
+        )
+    )
+    key = work_key("realworld", "adh.coder", "INIT-REALWORLD-001:realworld-api")
+    assert key in redis.data
+    assert work_key("realworld", "adh.coder", "INIT-REALWORLD-001") not in redis.data
+    loaded = await store.load("realworld", "adh.coder", "INIT-REALWORLD-001:realworld-api")
+    assert loaded is not None
+    assert loaded.work_id == "INIT-REALWORLD-001:REALWORLD-API"
+    assert loaded.slots.get("board_issue_urls", "").endswith("/issues/8")

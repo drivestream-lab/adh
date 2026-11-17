@@ -1,8 +1,8 @@
-"""Coder GateOpener coaches — wave-acceptance + wave-signoff (human + god)."""
+"""Coder GateOpener coaches — wave-pickup + acceptance + signoff (human + god)."""
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 from src.adh_agents.collaboration.brief_service import HermesBriefService
 from src.adh_agents.collaboration.gate_coach import TokenAction
@@ -15,6 +15,82 @@ from src.adh_agents.collaboration.human_replies import (
 )
 from src.adh_agents.runtime.gate_opener import CoachSpec
 from src.models.hermes.intent_models import JudgmentRequest
+
+
+def wave_pickup_brief(
+    briefs: HermesBriefService,
+    *,
+    initiative: str,
+    repo: str,
+    ready_waves: Sequence[str],
+    recommend: str,
+    bluf: str = "",
+    evidence: str = "",
+    example: str = "",
+) -> JudgmentRequest:
+    waves = [w.strip() for w in ready_waves if (w or "").strip()]
+    tokens = list(waves) + [HOLD]
+    rec = (recommend or "").strip() or (waves[0] if waves else HOLD)
+    why = bluf or (
+        f"Pick the next ready wave for **{initiative}** on `{repo}` "
+        "(WorkManifest ready-set ∩ board tickets)."
+    )
+    if evidence:
+        why = f"{why}\n\nBoard / WM:\n{evidence}"
+    return briefs.build_brief(
+        purpose="wave-pickup",
+        node_id="wave-pickup",
+        question=f"Which ready wave should Coder pick up for **{initiative}** (`{repo}`)?",
+        recommend=rec,
+        recommend_why=why,
+        bluf=why,
+        example=example or (f"reply `{rec}`" if rec else f"reply `{HOLD}`"),
+        locking=["Ready-set wave (`depends_on` satisfied)", "Matching board ticket URL"],
+        not_locking=["Waves whose parents are not Done", "Missing board tickets"],
+        revise_if=["Wrong wave vs unfinished coding", "Board ticket missing — reseed"],
+        reply_tokens=tokens,
+        artefact_path="",
+        card_kind="wave-pickup",
+    )
+
+
+def wave_pickup_coach(
+    *,
+    initiative: str,
+    repo: str,
+    ready_waves: Sequence[str],
+    recommend: str,
+    bluf: str = "",
+    evidence: str = "",
+    example: str = "",
+) -> CoachSpec:
+    waves = [w.strip() for w in ready_waves if (w or "").strip()]
+    rec = (recommend or "").strip() or (waves[0] if waves else HOLD)
+    tokens = [
+        TokenAction(w, f"start YAML wave-in-progress for `{w}` on `{repo}`") for w in waves
+    ] + [TokenAction(HOLD, "park — do not start a wave yet")]
+    return CoachSpec(
+        i_did=(
+            f"Mapped WorkManifest + board tickets for **{initiative}** on `{repo}` "
+            f"(ready: {', '.join(waves) or 'none'})."
+        ),
+        recommend=rec,
+        recommend_why=bluf
+        or "Same GateOpener path as Dev — Hermes recommends; god auto-plays; human replies.",
+        evidence=evidence or f"ready={','.join(waves)}",
+        outside_adh="Confirm board columns on GitHub if ticket state looks wrong.",
+        example=example or (f"reply `{rec}`" if rec else f"reply `{HOLD}`"),
+        tokens=tokens,
+        hop="wave-pickup",
+        payload={
+            "status": "wave_pickup",
+            "initiative": initiative,
+            "repo": repo,
+            "ready_waves": list(waves),
+            "recommend": rec,
+        },
+        identity_handle="adh.coder",
+    )
 
 
 def wave_acceptance_brief(

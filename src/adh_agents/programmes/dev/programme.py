@@ -80,6 +80,7 @@ from src.adh_agents.surface.buzz_poster import HermesBuzzPoster
 from src.business_services.base_business_service import BaseBusinessService
 from src.business_services.buzz_service import BuzzService
 from src.adh_agents.programmes.kb.heads import load_kb_excerpt
+from src.configs.hermes_settings import HermesSettings
 from src.infra_services.forge_action_service import ForgeActionService
 from src.infra_services.github_app_service import GitHubAppService
 from src.infra_services.pm_workspace_service import PmWorkspaceService, prd_path
@@ -708,15 +709,20 @@ class DevEnggProgramme(BaseBusinessService):
             if stage == "spec-draft"
             else f"`{targets[0].repo}` (primary of {len(repos)})"
         )
+        progress_s = int(HermesSettings.get_instance().progress_seconds)
         await self._poster.post_status(
             room,
-            f"Dev running YAML skill `{stage}` for **{init}** on {scope}…",
+            (
+                f"Dev running YAML skill `{stage}` for **{init}** on {scope} "
+                f"(progress every {progress_s}s)…"
+            ),
             EventType.PROGRESS,
             {
                 "status": "dev_skill_start",
                 "node": stage,
                 "initiative": init,
                 "repos": [t.repo for t in targets],
+                "progress_seconds": progress_s,
             },
             identity_handle=self.role_id,
         )
