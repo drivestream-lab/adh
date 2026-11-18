@@ -23,6 +23,7 @@ _APPROVE_ATTESTATION = "approve_attestation"
 _PRD_MERGE = "prd_merge"
 _READY_FOR_REVIEW = "ready_for_review"
 _CREATE_BOARD_TICKETS = "create_board_tickets"
+_UPDATE_BOARD_STATUS = "update_board_status"
 _ISSUE_WRITE_PERMS = {
     "issues": "write",
     "metadata": "read",
@@ -237,6 +238,16 @@ class ForgeActionService(BaseInfraService):
                 add=list(gate_label_add or []),
                 remove=list(gate_label_remove or []),
             )
+        # Fail closed: never merge until required gate labels are actually on the PR.
+        # (Projection can 404/no-op; attestation without verify was how Spec PRs landed
+        # without ``spec-lgtm``.)
+        if gate_label_add:
+            await self._github.require_issue_labels(
+                token,
+                repo,
+                issue_number=pr_number,
+                required=list(gate_label_add),
+            )
         sha = await self._github.merge_pull_request(
             token,
             repo,
@@ -280,6 +291,61 @@ class ForgeActionService(BaseInfraService):
         org = OrchestratorSettings.get_instance().github_org
         url = f"https://github.com/{org}/{repo}/pull/{pr_number}"
         return ForgeActionResult(action="close_pr", repo=repo, pr_number=pr_number, url=url)
+
+    async def update_board_status(
+        self,
+        *,
+        apps: list[AppRole],
+        org: str,
+        board_name: str,
+        issue_repo: str,
+        issue_number: int,
+        status: str,
+    ) -> ForgeActionResult:
+        """Move a board ticket Status column (Projects V2). Fail-closed."""
+        if not apps:
+            raise ValidationError("update_board_status requires ≥1 AppRole candidate")
+        repo = (issue_repo or "").strip().rsplit("/", 1)[-1]
+        if not repo or int(issue_number) <= 0:
+            raise ValidationError("update_board_status requires issue_repo + issue_number")
+        status_token = (status or "").strip()
+        if not status_token:
+            raise ValidationError("update_board_status requires status")
+
+        _, issue_token = await self._mint_issues_token(apps, repo)
+        content_node_id = await self._github.get_issue_node_id(
+            issue_token, repo, number=int(issue_number)
+        )
+        proj_token = await self._mint_org_projects_token(apps, repo)
+        if not proj_token:
+            raise ValidationError(
+                "no GitHub App installation grants organization_projects:write — "
+                "cannot update_board_status"
+            )
+        project_id, project_number, board_url = await self._github.resolve_org_project(
+            proj_token, org=org, name=board_name
+        )
+        item_id = await self._github.set_project_item_status(
+            proj_token,
+            project_id=project_id,
+            content_node_id=content_node_id,
+            status=status_token,
+        )
+        logger.info(
+            "Forge update_board_status finished",
+            action=_UPDATE_BOARD_STATUS,
+            repo=repo,
+            issue=issue_number,
+            status=status_token,
+            project=project_number,
+            item=item_id,
+        )
+        return ForgeActionResult(
+            action=_UPDATE_BOARD_STATUS,
+            repo=repo,
+            url=board_url or "",
+            detail=f"status={status_token}; item={item_id}; board=#{project_number}",
+        )
 
     async def create_board_tickets(
         self,

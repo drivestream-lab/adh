@@ -1,5 +1,5 @@
-"""Dev engg-think programmes (E1)."""
+"""Dev engg-think programmes (E1).
 
-from src.adh_agents.programmes.dev.programme import DevEnggProgramme
-
-__all__ = ["DevEnggProgramme"]
+Import ``DevEnggProgramme`` from ``programmes.dev.programme`` directly
+(package init stays lazy to avoid circular imports with Coder handoff).
+"""

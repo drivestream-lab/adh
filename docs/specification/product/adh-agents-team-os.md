@@ -126,7 +126,8 @@ Both required. See [ADR 0004](../adr/0004-hermes-behaviour-harness.md) + sole pl
 |------|---------|------|----------------|
 | PM | `adh.pm` | Requirements → draft PRD PR; product answers; PRD merge | Verify first on new OS; `hermes.pm.*` gold |
 | Dev | `adh.dev` | YAML `development` lane after PRD merge: spec → spec PR → review/plan → merge → board | E1 landed; behaviour packs wave B1 |
-| Coder | `adh.coder` / `adh.coder.<repo>` | Execute ready WorkManifest waves → code + draft wave PRs; **swarm per Affected repo** | Hiring now — [ADR 0005](../adr/0005-coder-hire.md) + [implementation plan § Coder](../plans/adh-agents-implementation-plan.md); after Dev `board-seeded` |
+| Coder | `adh.coder` / `adh.coder.<repo>` | Execute ready WorkManifest waves → code + draft wave PRs; **swarm per Affected repo**; after `wave-pr` emits `verify.wave` | Hired — [ADR 0005](../adr/0005-coder-hire.md); Pass-2 closeout after Verify accepts |
+| Verify | `adh.verify` | Deploy tip on `dev-infra-lab` + project overlay; `make verify`; IAC DB analysis; GateOpener `wave-acceptance`; **collaboration** under `ADH_VERIFY_MAX_COLLAB_ROUNDS` | Hired on `feature/coder-hire` — [ADR 0006](../adr/0006-verify-hire.md); `make adh-verify` |
 | Read | `adh.read` | Walk one repo; Buzz rollup | Before / with PE fan-out |
 | PE | `adh.pe` | Product review: fan-out reads, ≤10 Q / ≤2 agent rounds, attest, ping PM | Behaviour packs wave B2 |
 | KB | `adh.kb` | Patch OKF `knowledge/` heads; feed next-hop `kb_excerpt` | After merge enrich; loop Mode A in B3 |
@@ -134,13 +135,21 @@ Both required. See [ADR 0004](../adr/0004-hermes-behaviour-harness.md) + sole pl
 
 ## Workers
 
+Host processes (terminal or Cursor background shell). Env from `.env`.  
+**No** `scripts/run_adh_*` / `monitor_*` wrappers — progress is Buzz
+(`still working`, GateOpener briefs, `traj` → `buzz_task_events`).
+
 ```text
-make adh-pm    → adh_pm_worker
-make adh-pe    → adh_pe_worker
-make adh-read  → adh_read_worker
-make adh-kb    → adh_kb_worker
-make adh-dev   → adh_dev_worker   # E1 engg think → board
+make adh-pm     → python -m src.adh_pm_worker
+make adh-pe     → python -m src.adh_pe_worker
+make adh-read   → python -m src.adh_read_worker
+make adh-kb     → python -m src.adh_kb_worker
+make adh-dev    → python -m src.adh_dev_worker
+make adh-coder  → python -m src.adh_coder_worker
+make adh-verify → python -m src.adh_verify_worker
 ```
+
+Lead / Hermes collaborate **only via Buzz** after workers are up.
 
 ## Collaboration loop
 
@@ -247,4 +256,4 @@ See [`../references/adh-kb-heads.md`](../references/adh-kb-heads.md).
 **ADR:** [0002](../adr/0002-adh-agents-team-os.md) · **As-built:** [`../as-built/implementation-status.md`](../as-built/implementation-status.md)
 
 Enabler = `BaseHermesAgent`; control plane = Orchestrator in `adh_agents/runtime`.  
-**Next:** Hire **`adh.coder`** (ADR 0005) — YAML wave-* after Dev board-seed; verify on board-seeded RealWorld INIT.
+**Next:** Hire **`adh.verify`** (ADR 0006) on `feature/coder-hire` — deploy/prove after Coder wave-pr; collaboration loop; live INIT-REALWORLD-001.

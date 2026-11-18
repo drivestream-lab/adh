@@ -31,7 +31,14 @@
 | ADR 0003 platform extract/decide | ✅ labeled-line extract; phrase-list Lead cmds + agentic hole; Dev wired |
 | B0–B3 Hermes behaviour harness | 🟨 [ADR 0004](../adr/0004-hermes-behaviour-harness.md) Accepted; packs + PromptService runners; Dev live **003/004** done earlier; **B2 PE live** ✅ artefact replay Gate-1 + impact.challenge on Impact-Maps → `/tmp/adh-hermes-pe-b2-live/` (003 god / 004 human; recommend ∈ tokens) |
 | Stratum Hermes dry-run (no onboard) | ✅ Fixtures `tests/fixtures/hermes/stratum/`; L1/L2 `test_hermes_stratum_dryrun.py`; L3 `python -m tests.verify.hermes_stratum_dryrun [--live]` (#40) |
-| C0 Coder hire docs | 🟨 [ADR 0005](../adr/0005-coder-hire.md) + sole [implementation plan § Coder](../plans/adh-agents-implementation-plan.md) — wave-* after board-seed |
+| C0 Coder hire docs | ✅ [ADR 0005](../adr/0005-coder-hire.md) **Accepted**; locks C.1–C.19 in sole plan; guinea pig **INIT-001**; default parallel **3**; branch `feature/coder-hire` |
+| C1 Coder spine | ✅ `CoderAgent` + `make adh-coder` + Dev `coder.wave` → `adh.coder.<repo>`; “hire later” removed |
+| C2 Coder walker | ✅ YAML wave-in-progress → signoff; skills; board status; wave Draft PR; dirty fail-fast; lease clip |
+| C3 Hermes coder | ✅ `hermes.coder.wave.review` + `decide.outcome`; GateOpener human+god; bare CAP rejected |
+| C4 live 001 | 🟨 `hire coder INIT-REALWORLD-001` resume wired — run live on engg floor next |
+| Phase 1 — `dev-infra-lab` | ✅ Sibling `dev-infra-lab` (`lab_local` + volumes); `adh-iac-local` Buzz-only; `realworld-local` on lab; persist + Buzz + RealWorld verify OK |
+| V0 Verify hire docs | ✅ [ADR 0006](../adr/0006-verify-hire.md); two-phase sequence in sole plan |
+| Phase 2 — Coder fix + Verify | ✅ Coder → `verify.wave` after wave-pr; `VerifyAgent` + `make adh-verify`; collab cap; units green — live 001 next |
 
 
 ## Landed (0b)
@@ -48,10 +55,13 @@
 ## Commands
 
 ```bash
-make adh-pm    # PMAgent + control plane
-make adh-pe    # PEAgent claims pe.review
-make adh-read  # ReadAgent claims read.walk
-make adh-kb    # KbAgent claims kb.enrich
+# Terminal / Cursor background shell (`.env` loaded by worker). Progress on Buzz.
+make adh-pm     # PMAgent + control plane
+make adh-pe     # PEAgent claims pe.review
+make adh-read   # ReadAgent claims read.walk
+make adh-kb     # KbAgent claims kb.enrich
+make adh-coder  # CoderAgent claims coder.wave
+make adh-verify # VerifyAgent claims verify.wave (lab + overlay required)
 
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest tests/unit/ -q
 ```

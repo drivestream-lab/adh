@@ -12,7 +12,7 @@
    - **Control plane** (`adh_agents/runtime`): Orchestrator, work sessions, ask-back, resume, stop, catalogue bind, runner registry.
    - **Agent** (process): Buzz identity, listen, baton I/O, forge ACL — **embeds** the control plane.
    - **Programme**: role work registered on the plane (`start` / `after_judgment` / `resume`).
-4. **One OS process per role** — `make adh-pm` / `adh-pe` / `adh-read` / `adh-kb` → `adh_*_worker`. Every role worker **embeds** Orchestrator (role-scoped work keys); ops messages are handled only when they match that role’s open work, registered programmes, or inbound batons.
+4. **One OS process per role** — terminal / Cursor background: `make adh-pm` (etc.) → `python -m src.adh_*_worker` (`.env` only; **no** `scripts/run_adh_*` / monitor wrappers). Progress and collaboration are **Buzz-only**. Every role worker **embeds** Orchestrator (role-scoped work keys); ops messages are handled only when they match that role’s open work, registered programmes, or inbound batons.
 5. **Work sessions in Redis:** `adh:agent:work:{tenant}:{role}:{work_id}` (+ per-role index). TTL covers Lead think-time. Parallel work units + ask-back are OS attributes, not PM-only.
 6. **Baton transport:** Buzz = talk/trigger; Redis = claim/idempotency (`adh:baton:{tenant}:{key}`).
 7. **Hire order / verify gate:** Prove **PM** on the new OS first (guinea pig), then hand off via `pe.review` to **PE** (fan-out **read**), then PM merge glue, then **kb**.

@@ -25,6 +25,7 @@ async def decide_catalogue_outcome(
     allowed_outcomes: Sequence[str],
     evidence: str,
     kb_excerpt: str = "",
+    template_id: str = "",
 ) -> str:
     """Prompt pack → extract ``outcome`` ∈ allowed. Fail closed to failed/blocked if listed."""
     allowed = [o.strip() for o in allowed_outcomes if (o or "").strip()]
@@ -33,8 +34,9 @@ async def decide_catalogue_outcome(
 
     hermes = HermesSettings.get_instance()
     model = (hermes.eng_model or hermes.pm_model or hermes.model or "qwen").strip()
+    pack = (template_id or "").strip() or _OUTCOME
     run = await prompts.complete(
-        _OUTCOME,
+        pack,
         {
             "role_id": role_id,
             "node_id": node_id,
@@ -42,6 +44,8 @@ async def decide_catalogue_outcome(
             "allowed_outcomes": ", ".join(f"`{o}`" for o in allowed),
             "evidence": (evidence or "")[:12000] or "(none)",
             "kb_excerpt": (kb_excerpt or "").strip()[:6000] or "(none)",
+            "repo": "",
+            "wave_id": "",
         },
         model=model,
     )

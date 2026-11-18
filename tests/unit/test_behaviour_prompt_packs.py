@@ -16,6 +16,8 @@ REQUIRED = (
     "hermes.pe.impact.challenge",
     "hermes.kb.learning.harvest",
     "hermes.kb.head.fill",
+    "hermes.coder.wave.review",
+    "hermes.coder.decide.outcome",
 )
 
 

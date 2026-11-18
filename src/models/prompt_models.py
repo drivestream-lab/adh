@@ -813,6 +813,80 @@ class HermesBehaviourOutcomeResponse(BaseCreateModel):
     why: str = ""
 
 
+class HermesCoderCoverageItem(BaseCreateModel):
+    """Named CAP/J coverage packet row (C.18 / C.19) — bare CAP-01 rejected."""
+
+    id: str = ""
+    human_title: str = ""
+    fixture_path: str = ""
+    covers: str = ""
+    prove_status: str = ""
+
+    @model_validator(mode="after")
+    def _named_cap(self) -> "HermesCoderCoverageItem":
+        cid = (self.id or "").strip()
+        title = (self.human_title or "").strip()
+        if cid and not title:
+            raise ValueError(f"coverage {cid!r} needs human_title (bare CAP/J rejected)")
+        # Bare letter+digits only (e.g. CAP-01) without slug — fail closed when titled empty already
+        # handled; also reject id that looks like CAP-NN with no human title path.
+        if cid.upper().startswith("CAP-") and len(cid.split("-")) == 2 and not title:
+            raise ValueError(f"bare coverage id {cid!r} rejected — use cap-nn-slug + human_title")
+        return self
+
+
+class HermesCoderMdcFinding(BaseCreateModel):
+    """MDC review finding — P0/P1 must fix; P2 defer+why."""
+
+    severity: str = ""
+    note: str = ""
+    defer_why: str = ""
+
+    @field_validator("severity", mode="before")
+    @classmethod
+    def _sev(cls, value: Any) -> str:
+        raw = str(value or "").strip().upper()
+        if raw in {"P0", "P1", "P2"}:
+            return raw
+        return raw
+
+
+class HermesCoderWaveReviewResponse(BaseCreateModel):
+    """Outer Hermes brief over inner tip (C.18) — human awaits; god plays recommend."""
+
+    recommend: str = ""
+    bluf: str = ""
+    example: str = ""
+    locking: list[str] = Field(default_factory=list)
+    not_locking: list[str] = Field(default_factory=list)
+    revise_if: list[str] = Field(default_factory=list)
+    mdc_findings: list[HermesCoderMdcFinding] = Field(default_factory=list)
+    coverage: list[HermesCoderCoverageItem] = Field(default_factory=list)
+
+    @field_validator("locking", "not_locking", "revise_if", mode="before")
+    @classmethod
+    def _coerce_str_lists(cls, value: Any) -> list[str]:
+        return coerce_string_list(value)
+
+    @model_validator(mode="after")
+    def _coverage_named(self) -> "HermesCoderWaveReviewResponse":
+        for row in self.coverage:
+            cid = (row.id or "").strip()
+            title = (row.human_title or "").strip()
+            if cid and not title:
+                raise ValueError(f"coverage {cid!r} missing human_title")
+            # Reject bare CAP-01 / J-02 style without slug when human_title empty already.
+            parts = cid.replace("_", "-").split("-")
+            if (
+                len(parts) == 2
+                and parts[0].upper() in {"CAP", "J", "CTR"}
+                and parts[1].isdigit()
+                and not title
+            ):
+                raise ValueError(f"bare {cid!r} rejected — need human_title + slug id")
+        return self
+
+
 class HermesKbLearningHarvestResponse(BaseCreateModel):
     """Learning harvest bullets for OKF head footnotes (Mode A)."""
 
@@ -845,6 +919,7 @@ RESPONSE_MODELS: dict[str, type[BaseCreateModel]] = {
     "HermesEngGradeResponse": HermesEngGradeResponse,
     "HermesBehaviourRecommendResponse": HermesBehaviourRecommendResponse,
     "HermesBehaviourOutcomeResponse": HermesBehaviourOutcomeResponse,
+    "HermesCoderWaveReviewResponse": HermesCoderWaveReviewResponse,
     "HermesKbLearningHarvestResponse": HermesKbLearningHarvestResponse,
     "HermesKbHeadFillResponse": HermesKbHeadFillResponse,
 }

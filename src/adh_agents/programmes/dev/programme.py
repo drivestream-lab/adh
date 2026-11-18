@@ -30,6 +30,7 @@ from src.adh_agents.programmes.dev.board_seed import (
     board_seed_preconditions,
     mark_board_seeded,
 )
+from src.adh_agents.programmes.dev.coder_handoff import DevCoderHandoff
 from src.adh_agents.programmes.dev.board_verify import verify_board_seed_output
 from src.adh_agents.programmes.dev.debate import DebateResult, run_dev_debate
 from src.adh_agents.programmes.dev.entry import resolve_dev_entry
@@ -79,6 +80,7 @@ from src.adh_agents.surface.buzz_poster import HermesBuzzPoster
 from src.business_services.base_business_service import BaseBusinessService
 from src.business_services.buzz_service import BuzzService
 from src.adh_agents.programmes.kb.heads import load_kb_excerpt
+from src.configs.hermes_settings import HermesSettings
 from src.infra_services.forge_action_service import ForgeActionService
 from src.infra_services.github_app_service import GitHubAppService
 from src.infra_services.pm_workspace_service import PmWorkspaceService, prd_path
@@ -149,6 +151,7 @@ class DevEnggProgramme(BaseBusinessService):
         catalogue: WorkflowCatalogueService,
         forge: ForgeActionService,
         github: GitHubAppService,
+        coder_handoff: DevCoderHandoff,
     ) -> None:
         super().__init__()
         self._store = store
@@ -165,6 +168,7 @@ class DevEnggProgramme(BaseBusinessService):
         self._catalogue = catalogue
         self._forge = forge
         self._github = github
+        self._coder_handoff = coder_handoff
         self._settings = DevAgentSettings.get_instance()
 
     async def start_programme(
@@ -705,15 +709,20 @@ class DevEnggProgramme(BaseBusinessService):
             if stage == "spec-draft"
             else f"`{targets[0].repo}` (primary of {len(repos)})"
         )
+        progress_s = int(HermesSettings.get_instance().progress_seconds)
         await self._poster.post_status(
             room,
-            f"Dev running YAML skill `{stage}` for **{init}** on {scope}…",
+            (
+                f"Dev running YAML skill `{stage}` for **{init}** on {scope} "
+                f"(progress every {progress_s}s)…"
+            ),
             EventType.PROGRESS,
             {
                 "status": "dev_skill_start",
                 "node": stage,
                 "initiative": init,
                 "repos": [t.repo for t in targets],
+                "progress_seconds": progress_s,
             },
             identity_handle=self.role_id,
         )
@@ -1444,7 +1453,7 @@ class DevEnggProgramme(BaseBusinessService):
             (
                 f"**{init}** board tickets seeded — Dev YAML E1 fence complete "
                 f"(`{_E1_TERMINAL}`). Issues: {urls_line}. "
-                f"Coder hire is later. Reply `{RESEED_BOARD}` to reseed tickets, "
+                f"Handing ready repos to Coder… Reply `{RESEED_BOARD}` to reseed tickets, "
                 f"or `{REVISE_ENGG}` to reopen think."
             ),
             EventType.DONE,
@@ -1454,6 +1463,15 @@ class DevEnggProgramme(BaseBusinessService):
                 "issue_urls": list(proof.issue_urls),
             },
             identity_handle=self.role_id,
+        )
+        await self._coder_handoff.handoff_to_coder(
+            tenant,
+            initiative=init,
+            engg_room=room,
+            plan_path=plan_file,
+            board_seed_marker=session.slots.get("board_seed_marker") or "",
+            board_issue_urls=list(proof.issue_urls),
+            source_room=room,
         )
 
     # ── helpers ────────────────────────────────────────────────────────

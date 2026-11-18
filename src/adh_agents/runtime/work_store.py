@@ -37,10 +37,19 @@ def works_index_key(tenant: str, role_id: str) -> str:
 
 
 def _work_id_part(session: AgentWorkSession) -> str:
-    init = session.initiative
-    if init and init.strip():
-        return init.strip().upper()
-    return _normalize_work_id(session.work_id or UNBOUND_WORK_ID)
+    """Prefer explicit ``work_id`` (e.g. coder ``INIT:repo``, verify ``verify:…``).
+
+    Falling back to ``initiative`` alone collapsed multi-repo coder sessions onto
+    the INIT key, so Verify→Coder return batons created an orphan ``INIT:repo``
+    session without board ticket URLs — wave-done never moved the board.
+    """
+    wid = _normalize_work_id(session.work_id or UNBOUND_WORK_ID)
+    if wid != UNBOUND_WORK_ID:
+        return wid
+    init = (session.initiative or "").strip()
+    if init:
+        return init.upper()
+    return UNBOUND_WORK_ID
 
 
 class AgentWorkStore(BaseBusinessService):

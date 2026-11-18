@@ -24,6 +24,7 @@ class IdentityRole(str, Enum):
     READ = "read"
     KB = "kb"
     DEV = "dev"
+    VERIFY = "verify"
     ORCHESTRATOR = "orchestrator"
     SYSTEM = "system"
 
